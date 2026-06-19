@@ -1,24 +1,58 @@
+# Dependencias de Node.js
+node_modules/
+.pnpm-store/
+.npm/
+
 # Logs
-logs
+logs/
 *.log
 npm-debug.log*
+pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# Build outputs de frontend
+dist/
+dist-ssr/
 *.local
 
-# Editor directories and files
+# Build outputs de Tauri (backend en Rust)
+src-tauri/target/
+src-tauri/gen/
+src-tauri/.cargo-ok
+src-tauri/dev/
+
+# Archivos de entorno
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+*.pdb
+
+# IDE y editores
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
+.idea/
+*.swp
+*.swo
+*~
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+
+# Archivos de cobertura de pruebas
+coverage/
+*.lcov
+
+# Archivos temporales
+tmp/
+temp/
+*.tmp
