@@ -1,51 +1,35 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+// App — single source of routing. Nested routes use the Layout's
+// <Outlet /> so Sidebar + PlayerBar persist across navigation.
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+import { Route, Routes } from "react-router-dom";
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+import { Layout } from "./components/layout/Layout";
+import { AlbumDetailView } from "./components/views/AlbumDetailView";
+import { AlbumsTab } from "./components/views/AlbumsTab";
+import { ArtistDetailView } from "./components/views/ArtistDetailView";
+import { ArtistsTab } from "./components/views/ArtistsTab";
+import { HomeView } from "./components/views/HomeView";
+import { LibraryView } from "./components/views/LibraryView";
+import { QueueView } from "./components/views/QueueView";
+import { SearchView } from "./components/views/SearchView";
+import { TracksTab } from "./components/views/TracksTab";
 
+export default function App() {
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+    <Routes>
+      <Route element={<Layout />}>
+        <Route index element={<HomeView />} />
+        <Route path="library" element={<LibraryView />}>
+          <Route index element={<AlbumsTab />} />
+          <Route path="artists" element={<ArtistsTab />} />
+          <Route path="tracks" element={<TracksTab />} />
+          <Route path="album/:id" element={<AlbumDetailView />} />
+          <Route path="artist/:id" element={<ArtistDetailView />} />
+        </Route>
+        <Route path="queue" element={<QueueView />} />
+        <Route path="search" element={<SearchView />} />
+        <Route path="*" element={<HomeView />} />
+      </Route>
+    </Routes>
   );
 }
-
-export default App;

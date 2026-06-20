@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    @apply h-full w-full;
+  }
+
+  body {
+    @apply bg-bg text-fg font-sans antialiased;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center rounded-md px-3 py-1.5
+           text-sm font-medium transition-colors;
+  }
+
+  .btn-primary {
+    @apply btn bg-accent text-black hover:bg-accent-hover;
+  }
+
+  .btn-ghost {
+    @apply btn text-fg-subtle hover:bg-bg-raised hover:text-fg;
+  }
+
+  .card {
+    @apply rounded-lg bg-bg-raised p-4 shadow-sm;
+  }
+}
