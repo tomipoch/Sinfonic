@@ -10,6 +10,7 @@
 pub mod entities;
 pub mod error;
 pub mod ids;
+pub mod playback;
 pub mod queue;
 pub mod route;
 pub mod settings;
@@ -19,12 +20,15 @@ pub use entities::{
     Album, AlbumDetail, Artist, ArtistDetail, FolderDetail, FolderEntry, FolderEntryKind, Genre,
     GenreDetail, MusicFolder, Playlist, PlaylistDetail, Track,
 };
-pub use error::DomainError;
+pub use error::{DomainError, DomainResult};
 pub use ids::{
     AlbumId, ArtistId, FolderId, GenreId, MusicFolderId, PlaylistId, QueueEntryId, ServerId,
     SmartPlaylistId, TrackId,
 };
-pub use queue::{QueueEngine, QueueEntry, QueueEntryOrigin, QueueReplacement, QueueSnapshot, RepeatMode};
+pub use playback::PlaybackState;
+pub use queue::{
+    QueueEngine, QueueEntry, QueueEntryOrigin, QueueReplacement, QueueSnapshot, RepeatMode,
+};
 pub use route::Route;
 pub use settings::AppSettings;
 pub use source::{ImageBytes, ImageKind, PagedRequest, PagedResponse, SearchResults, StreamDescriptor};
