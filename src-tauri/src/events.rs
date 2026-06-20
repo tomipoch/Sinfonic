@@ -5,7 +5,7 @@
 //! emits `"playback-state-changed"`. One enum, one `as_str()`.
 
 use serde::{Deserialize, Serialize};
-use sinfonic_domain::RepeatMode;
+use sinfonic_domain::{PlaybackState, QueueEngine, RepeatMode};
 
 /// Names of every event the backend can emit.
 ///
@@ -33,6 +33,10 @@ impl EventName {
 }
 
 /// Payload for `playback-state-changed`.
+///
+/// Merges the runtime `PlaybackState` with the queue's repeat/shuffle
+/// mode so the UI gets a single snapshot without juggling two event
+/// sources.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlaybackStatePayload {
@@ -56,6 +60,20 @@ impl PlaybackStatePayload {
         Self {
             is_playing: false,
             ..Self::default()
+        }
+    }
+
+    /// Builds the payload from the live state + queue. Use this in
+    /// commands so the wire format has one constructor.
+    pub fn from_state(playback: &PlaybackState, queue: &QueueEngine) -> Self {
+        Self {
+            is_playing: playback.is_playing,
+            position_seconds: playback.position_seconds,
+            duration_seconds: playback.duration_seconds,
+            volume: playback.volume,
+            muted: playback.muted,
+            repeat: queue.repeat(),
+            shuffle: queue.shuffle_enabled(),
         }
     }
 }
