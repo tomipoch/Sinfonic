@@ -18,7 +18,7 @@ pub mod source;
 
 pub use entities::{
     Album, AlbumDetail, Artist, ArtistDetail, FolderDetail, FolderEntry, FolderEntryKind, Genre,
-    GenreDetail, MusicFolder, Playlist, PlaylistDetail, Track,
+    GenreDetail, ImageRef, MusicFolder, Playlist, PlaylistDetail, Track,
 };
 pub use error::{DomainError, DomainResult};
 pub use ids::{
