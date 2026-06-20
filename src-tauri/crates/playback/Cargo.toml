@@ -1,0 +1,15 @@
+[package]
+name = "sinfonic-playback"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Audio playback engine (rodio + dsyneq + symphonia)"
+
+[dependencies]
+sinfonic-domain = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

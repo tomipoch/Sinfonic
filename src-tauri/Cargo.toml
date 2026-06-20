@@ -1,25 +1,96 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["tomipoch"]
+license = "MIT"
+repository = "https://github.com/tomipoch/Sinfonic"
+rust-version = "1.77"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+
+# Async
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# HTTP
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+url = "2"
+
+# Hashing (Subsonic auth)
+md5 = "0.7"
+hex = "0.4"
+
+# SQLite
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Secrets
+keyring = "3"
+
+# Tauri
+tauri = { version = "2", features = [] }
+tauri-build = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+
+# Local workspace crates
+sinfonic-domain = { path = "crates/domain" }
+sinfonic-source = { path = "crates/source" }
+sinfonic-source-jellyfin = { path = "crates/source-jellyfin" }
+sinfonic-source-subsonic = { path = "crates/source-subsonic" }
+sinfonic-source-local = { path = "crates/source-local" }
+sinfonic-playback = { path = "crates/playback" }
+sinfonic-library = { path = "crates/library" }
+sinfonic-secrets = { path = "crates/secrets" }
+
+# ─────────────────────────────────────────────────────────────
+# Tauri app package (root)
+# ─────────────────────────────────────────────────────────────
+
 [package]
 name = "sinfonic"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Sinfonic - cross-platform desktop music client"
 
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+# The `_lib` suffix avoids Windows bin/lib name conflict (cargo#8519)
 name = "sinfonic_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "sinfonic"
+path = "src/main.rs"
+
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { workspace = true }
 
 [dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+tauri = { workspace = true }
+tauri-plugin-opener = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
 
+# Local workspace members
+sinfonic-domain = { workspace = true }
+sinfonic-source = { workspace = true }
+sinfonic-source-jellyfin = { workspace = true }
+sinfonic-source-subsonic = { workspace = true }
+sinfonic-source-local = { workspace = true }
+sinfonic-playback = { workspace = true }
+sinfonic-library = { workspace = true }
+sinfonic-secrets = { workspace = true }

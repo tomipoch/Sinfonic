@@ -1,0 +1,15 @@
+[package]
+name = "sinfonic-library"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "SQLite library cache + FTS5 search"
+
+[dependencies]
+sinfonic-domain = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
