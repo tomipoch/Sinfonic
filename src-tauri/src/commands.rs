@@ -5,20 +5,17 @@
 //! `Serialize` impl on each error type. This is the pattern recommended
 //! by the tauri-v2 skill and keeps the IPC boundary trivial.
 //!
-//! # Phase 1 status
+//! # Phase status
 //!
-//! Queue mutations (`queue_add`, `queue_play_next`, `queue_clear`,
-//! `queue_remove`, `queue_jump_to`, `queue_move`, `play_track`,
-//! `next`, `previous`, `set_repeat`, `set_shuffle`, `set_volume`,
-//! `set_muted`, `pause`, `resume`, `stop`, `seek`) operate on the
-//! in-memory `AppState` only. They return real data and emit the
-//! correct events, but no audio actually plays — the real rodio
-//! player lands in Phase 4.
-//!
-//! Library reads (`get_albums`, `get_artists`, `get_tracks`,
-//! `search`) and provider flows (`jellyfin_discover`,
-//! `jellyfin_login`) still return `Err("not implemented")` until
-//! Phases 2 and 3 land.
+//! - Phase 1: the queue + playback commands operate on the
+//!   in-memory `AppState` and emit real events. Audio is still
+//!   stubbed (Phase 4 wires rodio).
+//! - Phase 2: library reads (`get_albums`, `get_artists`,
+//!   `get_tracks`, `search`) are wired against the real SQLite
+//!   cache. They return real data. The default `server_id` is
+//!   "server-1" until Phase 3 (Jellyfin auth) supplies the real
+//!   one.
+//! - Phase 3: Jellyfin provider + login flow.
 
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
@@ -37,6 +34,16 @@ use sinfonic_domain::{
 
 type SharedState<'a> = State<'a, Arc<Mutex<AppState>>>;
 
+/// The default `ServerId` used by library reads until Phase 3
+/// supplies the real one. Single-server installs never see a
+/// different value; multi-server installs will get a list and
+/// the UI will pick one.
+const DEFAULT_SERVER_ID: &str = "server-local";
+
+fn default_server_id() -> ServerId {
+    ServerId::new(DEFAULT_SERVER_ID)
+}
+
 // ─── Greet (kept from the original scaffold) ────────────────────
 
 #[tauri::command]
@@ -50,30 +57,39 @@ pub fn greet(name: String) -> String {
 pub async fn get_albums(
     offset: usize,
     limit: usize,
-    _state: SharedState<'_>,
+    state: SharedState<'_>,
 ) -> Result<PagedResponse<Album>, String> {
-    let _ = (offset, limit);
-    Err("not implemented in skeleton".into())
+    let guard = state.lock().await;
+    guard
+        .library
+        .list_albums(&default_server_id(), offset, limit)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_artists(
     offset: usize,
     limit: usize,
-    _state: SharedState<'_>,
+    state: SharedState<'_>,
 ) -> Result<PagedResponse<Artist>, String> {
-    let _ = (offset, limit);
-    Err("not implemented in skeleton".into())
+    let guard = state.lock().await;
+    guard
+        .library
+        .list_artists(&default_server_id(), offset, limit)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_tracks(
     offset: usize,
     limit: usize,
-    _state: SharedState<'_>,
+    state: SharedState<'_>,
 ) -> Result<PagedResponse<Track>, String> {
-    let _ = (offset, limit);
-    Err("not implemented in skeleton".into())
+    let guard = state.lock().await;
+    guard
+        .library
+        .list_tracks(&default_server_id(), offset, limit)
+        .map_err(|e| e.to_string())
 }
 
 // ─── Playback (Phase 1: in-memory only) ─────────────────────────
@@ -395,9 +411,17 @@ pub async fn set_muted(
 // ─── Search (Phase 2) ───────────────────────────────────────────
 
 #[tauri::command]
-pub async fn search(query: String) -> Result<SearchResults, String> {
-    let _ = query;
-    Ok(SearchResults::default())
+pub async fn search(
+    query: String,
+    limit: Option<usize>,
+    state: SharedState<'_>,
+) -> Result<SearchResults, String> {
+    let limit = limit.unwrap_or(20);
+    let guard = state.lock().await;
+    guard
+        .library
+        .search(&default_server_id(), &query, limit)
+        .map_err(|e| e.to_string())
 }
 
 // ─── Jellyfin provider (Phase 3) ────────────────────────────────

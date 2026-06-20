@@ -4,7 +4,7 @@
 //! exercises the wiring of the three layers without going through
 //! Tauri's IPC plumbing.
 
-use sinfonic_domain::{AlbumId, ArtistId, PlaybackState, RepeatMode, ServerId, Track, TrackId};
+use sinfonic_domain::{Album, AlbumId, ArtistId, PlaybackState, RepeatMode, ServerId, Track, TrackId};
 use sinfonic_lib::AppState;
 
 fn track(id: &str, title: &str, dur: u32) -> Track {
@@ -77,4 +77,36 @@ fn add_then_next_then_previous_walks_the_queue() {
     assert_eq!(s.queue.current().unwrap().title, "B");
     s.queue.previous_track();
     assert_eq!(s.queue.current().unwrap().id, first);
+}
+
+#[test]
+fn app_state_holds_a_library_cache() {
+    let s = AppState::new();
+    // The default constructor wires an in-memory store; reads
+    // return empty pages, never error.
+    let page = s.library.list_albums(&ServerId::fake(1), 0, 10).unwrap();
+    assert!(page.items.is_empty());
+    assert_eq!(page.total, 0);
+}
+
+#[test]
+fn app_state_library_round_trip() {
+    let s = AppState::new();
+    let server = ServerId::fake(1);
+    let album = Album {
+        id: AlbumId::new("a-1"),
+        title: "OK Computer".into(),
+        artist: "Radiohead".into(),
+        artist_id: None,
+        year: Some(1997),
+        track_count: 12,
+        duration_seconds: 3540,
+        favorite: false,
+        image_ref: None,
+        genres: vec![],
+    };
+    s.library.replace_albums(&server, &[album]).unwrap();
+    let page = s.library.list_albums(&server, 0, 10).unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].title, "OK Computer");
 }

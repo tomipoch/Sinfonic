@@ -31,7 +31,29 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let state = AppState::new();
+            // Resolve the app's per-user data directory and open
+            // the library cache there. If the path is unavailable
+            // (e.g. a misconfigured mobile sandbox), fall back to
+            // the in-memory cache so the app still boots.
+            let state = match app.path().app_data_dir() {
+                Ok(dir) => {
+                    if let Err(e) = std::fs::create_dir_all(&dir) {
+                        eprintln!("sinfonic: could not create {dir:?}: {e}");
+                        AppState::new()
+                    } else {
+                        let db = dir.join("library.sqlite");
+                        AppState::with_library_path(&db)
+                            .unwrap_or_else(|e| {
+                                eprintln!("sinfonic: open({db:?}) failed: {e}, falling back to memory");
+                                AppState::new()
+                            })
+                    }
+                }
+                Err(e) => {
+                    eprintln!("sinfonic: app_data_dir unavailable: {e}, using in-memory cache");
+                    AppState::new()
+                }
+            };
             app.manage(Arc::new(Mutex::new(state)));
             Ok(())
         })

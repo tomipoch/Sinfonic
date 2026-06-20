@@ -57,8 +57,8 @@ export const setMuted = (muted: boolean) =>
 
 // ─── Search ─────────────────────────────────────────────────────
 
-export const search = (query: string) =>
-  invoke<SearchResults>("search", { query });
+export const search = (query: string, limit = 20) =>
+  invoke<SearchResults>("search", { query, limit });
 
 // ─── Jellyfin provider ──────────────────────────────────────────
 
