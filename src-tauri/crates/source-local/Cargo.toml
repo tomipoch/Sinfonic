@@ -1,0 +1,17 @@
+[package]
+name = "sinfonic-source-local"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Local-files MusicProvider implementation (v0.3)"
+
+[dependencies]
+sinfonic-domain = { workspace = true }
+sinfonic-source = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
