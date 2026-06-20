@@ -1,20 +1,1032 @@
-//! `Store` — the only public type other crates depend on.
+//! The `Store` is the only public type other crates depend on.
 //!
-//! Phase 0: struct + builder. Phase 2 implements `open` (runs migrations),
-//! `begin_sync`/`complete_sync`, and the upsert-with-delta API.
+//! It owns an `r2d2` connection pool against a single SQLite file
+//! (or `:memory:`). Every public method grabs a pooled connection,
+//! runs the query, and returns the connection when done. The pool
+//! is configured with the schema's PRAGMAs (`journal_mode=WAL`,
+//! `foreign_keys=ON`, `busy_timeout=5s`) so every read inherits them.
+//!
+//! All data is scoped by `server_id` so multiple providers can
+//! coexist in one database. An entity id is meaningless without its
+//! server.
+//!
+//! Sync strategy: callers push batches via `replace_albums`,
+//! `replace_artists`, `replace_tracks`, `replace_playlist`. The
+//! "replace" variants diff against the existing rows for that
+//! server + kind and apply the new set in a single transaction.
 
 use std::path::Path;
 
-pub struct Store;
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::Transaction;
+use sinfonic_domain::{
+    Album, AlbumId, Artist, ArtistId, PagedResponse, Playlist, PlaylistId, ServerId, Track, TrackId,
+};
+
+use crate::error::{LibraryError, LibraryResult};
+use crate::rows;
+use crate::schema::{init_connection, run_migrations};
+use crate::search;
+
+/// Connection pool type alias.
+pub type ConnectionPool = Pool<SqliteConnectionManager>;
+
+/// Thread-safe handle to the library cache.
+#[derive(Clone)]
+pub struct Store {
+    pool: ConnectionPool,
+}
 
 impl Store {
-    /// Open or create the database at `path`, running all migrations.
-    pub fn open(_path: impl AsRef<Path>) -> Result<Self, String> {
-        Err("library store not implemented in skeleton".into())
+    /// Open (or create) the database at `path`, running all pending
+    /// migrations.
+    pub fn open(path: impl AsRef<Path>) -> LibraryResult<Self> {
+        let manager = SqliteConnectionManager::file(path.as_ref()).with_init(init_connection);
+        let pool = Pool::builder().max_size(8).build(manager)?;
+        {
+            let conn = pool.get()?;
+            run_migrations(&conn)?;
+        }
+        Ok(Self { pool })
     }
 
-    /// In-memory store for tests.
-    pub fn open_memory() -> Result<Self, String> {
-        Err("library store not implemented in skeleton".into())
+    /// Open an in-memory database. `max_size=1` so all queries see
+    /// the same data; with `:memory:` each pooled connection would
+    /// otherwise be its own database.
+    pub fn open_memory() -> LibraryResult<Self> {
+        let manager = SqliteConnectionManager::memory().with_init(init_connection);
+        let pool = Pool::builder().max_size(1).build(manager)?;
+        let conn = pool.get()?;
+        run_migrations(&conn)?;
+        Ok(Self { pool })
+    }
+
+    /// Borrow a connection from the pool. Public so integration
+    /// tests can run ad-hoc queries.
+    pub fn connection(&self) -> LibraryResult<r2d2::PooledConnection<SqliteConnectionManager>> {
+        Ok(self.pool.get()?)
+    }
+
+    // ─── Server registration ─────────────────────────────────────
+
+    /// Upsert a server row. Used by the auth flow once login
+    /// succeeds.
+    pub fn upsert_server(
+        &self,
+        server_id: &ServerId,
+        kind: &str,
+        name: &str,
+        base_url: &str,
+    ) -> LibraryResult<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            "INSERT INTO servers (server_id, kind, name, base_url) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(server_id) DO UPDATE SET
+                 kind = excluded.kind,
+                 name = excluded.name,
+                 base_url = excluded.base_url",
+            rusqlite::params![server_id.as_str(), kind, name, base_url],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_server(&self, server_id: &ServerId) -> LibraryResult<()> {
+        let conn = self.connection()?;
+        conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        let tx = conn.unchecked_transaction()?;
+        for table in [
+            "playlist_tracks",
+            "playlists",
+            "tracks",
+            "album_genres",
+            "albums",
+            "artists",
+            "genres",
+        ] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE server_id = ?1"),
+                rusqlite::params![server_id.as_str()],
+            )?;
+        }
+        tx.execute(
+            "DELETE FROM library_fts WHERE server_id = ?1",
+            rusqlite::params![server_id.as_str()],
+        )?;
+        tx.execute(
+            "DELETE FROM servers WHERE server_id = ?1",
+            rusqlite::params![server_id.as_str()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    // ─── Albums ──────────────────────────────────────────────────
+
+    /// Replace every album for a server with `albums`, in a single
+    /// transaction. The diff is computed inside the transaction so
+    /// orphans are removed atomically with the new rows.
+    pub fn replace_albums(&self, server_id: &ServerId, albums: &[Album]) -> LibraryResult<()> {
+        let mut conn = self.connection()?;
+        conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        let tx = conn.transaction()?;
+
+        let existing = collect_ids(&tx, "albums", "album_id", server_id.as_str())?;
+        let new_ids: Vec<String> = albums.iter().map(|a| a.id.as_str().to_string()).collect();
+        for id in existing.iter().filter(|id| !new_ids.contains(id)) {
+            tx.execute(
+                "DELETE FROM albums WHERE server_id = ?1 AND album_id = ?2",
+                rusqlite::params![server_id.as_str(), id],
+            )?;
+            tx.execute(
+                "DELETE FROM library_fts WHERE server_id = ?1 AND kind = 'album' AND entity_id = ?2",
+                rusqlite::params![server_id.as_str(), id],
+            )?;
+        }
+
+        for album in albums {
+            upsert_album(&tx, server_id, album)?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn upsert_album(&self, server_id: &ServerId, album: &Album) -> LibraryResult<()> {
+        let mut conn = self.connection()?;
+        conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        let tx = conn.transaction()?;
+        upsert_album(&tx, server_id, album)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn list_albums(
+        &self,
+        server_id: &ServerId,
+        offset: usize,
+        limit: usize,
+    ) -> LibraryResult<PagedResponse<Album>> {
+        let conn = self.connection()?;
+        let total: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM albums WHERE server_id = ?1",
+            rusqlite::params![server_id.as_str()],
+            |r| r.get(0),
+        )?;
+        let mut stmt = conn.prepare(
+            "SELECT album_id, title, artist, artist_id, year, track_count,
+                    duration_seconds, favorite, image_kind, image_tag
+             FROM albums
+             WHERE server_id = ?1
+             ORDER BY title COLLATE NOCASE
+             LIMIT ?2 OFFSET ?3",
+        )?;
+        let items = stmt
+            .query_map(
+                rusqlite::params![server_id.as_str(), limit as i64, offset as i64],
+                rows::row_to_album,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(PagedResponse::new(items, total as usize))
+    }
+
+    pub fn get_album(
+        &self,
+        server_id: &ServerId,
+        album_id: &AlbumId,
+    ) -> LibraryResult<Option<Album>> {
+        let conn = self.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT album_id, title, artist, artist_id, year, track_count,
+                    duration_seconds, favorite, image_kind, image_tag
+             FROM albums
+             WHERE server_id = ?1 AND album_id = ?2",
+        )?;
+        let mut rows_iter = stmt.query_map(
+            rusqlite::params![server_id.as_str(), album_id.as_str()],
+            rows::row_to_album,
+        )?;
+        match rows_iter.next() {
+            Some(r) => Ok(Some(r?)),
+            None => Ok(None),
+        }
+    }
+
+    // ─── Artists ─────────────────────────────────────────────────
+
+    pub fn replace_artists(&self, server_id: &ServerId, artists: &[Artist]) -> LibraryResult<()> {
+        let mut conn = self.connection()?;
+        conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        let tx = conn.transaction()?;
+
+        let existing = collect_ids(&tx, "artists", "artist_id", server_id.as_str())?;
+        let new_ids: Vec<String> = artists.iter().map(|a| a.id.as_str().to_string()).collect();
+        for id in existing.iter().filter(|id| !new_ids.contains(id)) {
+            tx.execute(
+                "DELETE FROM artists WHERE server_id = ?1 AND artist_id = ?2",
+                rusqlite::params![server_id.as_str(), id],
+            )?;
+            tx.execute(
+                "DELETE FROM library_fts WHERE server_id = ?1 AND kind = 'artist' AND entity_id = ?2",
+                rusqlite::params![server_id.as_str(), id],
+            )?;
+        }
+
+        for artist in artists {
+            upsert_artist(&tx, server_id, artist)?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn upsert_artist(&self, server_id: &ServerId, artist: &Artist) -> LibraryResult<()> {
+        let mut conn = self.connection()?;
+        conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        let tx = conn.transaction()?;
+        upsert_artist(&tx, server_id, artist)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn list_artists(
+        &self,
+        server_id: &ServerId,
+        offset: usize,
+        limit: usize,
+    ) -> LibraryResult<PagedResponse<Artist>> {
+        let conn = self.connection()?;
+        let total: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM artists WHERE server_id = ?1",
+            rusqlite::params![server_id.as_str()],
+            |r| r.get(0),
+        )?;
+        let mut stmt = conn.prepare(
+            "SELECT artist_id, name, album_count, track_count, favorite, image_kind, image_tag
+             FROM artists
+             WHERE server_id = ?1
+             ORDER BY name COLLATE NOCASE
+             LIMIT ?2 OFFSET ?3",
+        )?;
+        let items = stmt
+            .query_map(
+                rusqlite::params![server_id.as_str(), limit as i64, offset as i64],
+                rows::row_to_artist,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(PagedResponse::new(items, total as usize))
+    }
+
+    // ─── Tracks ──────────────────────────────────────────────────
+
+    pub fn replace_tracks(&self, server_id: &ServerId, tracks: &[Track]) -> LibraryResult<()> {
+        let mut conn = self.connection()?;
+        conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        let tx = conn.transaction()?;
+
+        let existing = collect_ids(&tx, "tracks", "track_id", server_id.as_str())?;
+        let new_ids: Vec<String> = tracks.iter().map(|t| t.id.as_str().to_string()).collect();
+        for id in existing.iter().filter(|id| !new_ids.contains(id)) {
+            tx.execute(
+                "DELETE FROM tracks WHERE server_id = ?1 AND track_id = ?2",
+                rusqlite::params![server_id.as_str(), id],
+            )?;
+            tx.execute(
+                "DELETE FROM library_fts WHERE server_id = ?1 AND kind = 'track' AND entity_id = ?2",
+                rusqlite::params![server_id.as_str(), id],
+            )?;
+        }
+
+        for track in tracks {
+            upsert_track(&tx, server_id, track)?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn upsert_track(&self, server_id: &ServerId, track: &Track) -> LibraryResult<()> {
+        let mut conn = self.connection()?;
+        conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        let tx = conn.transaction()?;
+        upsert_track(&tx, server_id, track)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn list_tracks(
+        &self,
+        server_id: &ServerId,
+        offset: usize,
+        limit: usize,
+    ) -> LibraryResult<PagedResponse<Track>> {
+        let conn = self.connection()?;
+        let total: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM tracks WHERE server_id = ?1",
+            rusqlite::params![server_id.as_str()],
+            |r| r.get(0),
+        )?;
+        let mut stmt = conn.prepare(
+            "SELECT track_id, album_id, title, artist, artist_id, album,
+                    duration_seconds, track_number, disc_number, favorite,
+                    image_kind, image_tag
+             FROM tracks
+             WHERE server_id = ?1
+             ORDER BY title COLLATE NOCASE
+             LIMIT ?2 OFFSET ?3",
+        )?;
+        let items = stmt
+            .query_map(
+                rusqlite::params![server_id.as_str(), limit as i64, offset as i64],
+                rows::row_to_track,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(PagedResponse::new(items, total as usize))
+    }
+
+    pub fn list_album_tracks(
+        &self,
+        server_id: &ServerId,
+        album_id: &AlbumId,
+    ) -> LibraryResult<Vec<Track>> {
+        let conn = self.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT track_id, album_id, title, artist, artist_id, album,
+                    duration_seconds, track_number, disc_number, favorite,
+                    image_kind, image_tag
+             FROM tracks
+             WHERE server_id = ?1 AND album_id = ?2
+             ORDER BY disc_number, track_number",
+        )?;
+        let items = stmt
+            .query_map(
+                rusqlite::params![server_id.as_str(), album_id.as_str()],
+                rows::row_to_track,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(items)
+    }
+
+    // ─── Playlists ───────────────────────────────────────────────
+
+    /// Replace a playlist (metadata + track list) atomically.
+    pub fn replace_playlist(
+        &self,
+        server_id: &ServerId,
+        playlist: &Playlist,
+        track_ids: &[TrackId],
+    ) -> LibraryResult<()> {
+        let mut conn = self.connection()?;
+        conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        let tx = conn.transaction()?;
+
+        tx.execute(
+            "INSERT INTO playlists (server_id, playlist_id, name, track_count, duration_seconds, owner, public)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(server_id, playlist_id) DO UPDATE SET
+                 name = excluded.name,
+                 track_count = excluded.track_count,
+                 duration_seconds = excluded.duration_seconds,
+                 owner = excluded.owner,
+                 public = excluded.public",
+            rusqlite::params![
+                server_id.as_str(),
+                playlist.id.as_str(),
+                playlist.name,
+                playlist.track_count as i64,
+                playlist.duration_seconds as i64,
+                playlist.owner,
+                playlist.public as i64,
+            ],
+        )?;
+
+        tx.execute(
+            "DELETE FROM playlist_tracks WHERE server_id = ?1 AND playlist_id = ?2",
+            rusqlite::params![server_id.as_str(), playlist.id.as_str()],
+        )?;
+        for (position, track_id) in track_ids.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO playlist_tracks (server_id, playlist_id, position, track_id) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    server_id.as_str(),
+                    playlist.id.as_str(),
+                    position as i64,
+                    track_id.as_str(),
+                ],
+            )?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn list_playlists(&self, server_id: &ServerId) -> LibraryResult<Vec<Playlist>> {
+        let conn = self.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT playlist_id, name, track_count, duration_seconds, owner, public
+             FROM playlists
+             WHERE server_id = ?1
+             ORDER BY name COLLATE NOCASE",
+        )?;
+        let items = stmt
+            .query_map(rusqlite::params![server_id.as_str()], |row| {
+                let id: String = row.get("playlist_id")?;
+                Ok(Playlist {
+                    id: PlaylistId::new(id),
+                    name: row.get("name")?,
+                    track_count: row.get("track_count")?,
+                    duration_seconds: row.get("duration_seconds")?,
+                    owner: row.get("owner")?,
+                    public: row.get::<_, i64>("public")? != 0,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(items)
+    }
+
+    pub fn list_playlist_tracks(
+        &self,
+        server_id: &ServerId,
+        playlist_id: &PlaylistId,
+    ) -> LibraryResult<Vec<TrackId>> {
+        let conn = self.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT track_id FROM playlist_tracks
+             WHERE server_id = ?1 AND playlist_id = ?2
+             ORDER BY position",
+        )?;
+        let items = stmt
+            .query_map(
+                rusqlite::params![server_id.as_str(), playlist_id.as_str()],
+                |row| {
+                    let s: String = row.get(0)?;
+                    Ok(TrackId::new(s))
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(items)
+    }
+
+    // ─── Search ──────────────────────────────────────────────────
+
+    /// Search across the FTS5 index. Returns the first `limit`
+    /// matches of each kind (album, track, artist) ranked by FTS5
+    /// `bm25` score (lower is better).
+    pub fn search(
+        &self,
+        server_id: &ServerId,
+        query: &str,
+        limit: usize,
+    ) -> LibraryResult<sinfonic_domain::SearchResults> {
+        let conn = self.connection()?;
+        search::search(&conn, server_id, query, limit)
+    }
+
+    // ─── Stats ───────────────────────────────────────────────────
+
+    /// Returns `(albums, artists, tracks, playlists)` for a server.
+    pub fn server_counts(&self, server_id: &ServerId) -> LibraryResult<(i64, i64, i64, i64)> {
+        let conn = self.connection()?;
+        let albums: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM albums WHERE server_id = ?1",
+            rusqlite::params![server_id.as_str()],
+            |r| r.get(0),
+        )?;
+        let artists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM artists WHERE server_id = ?1",
+            rusqlite::params![server_id.as_str()],
+            |r| r.get(0),
+        )?;
+        let tracks: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM tracks WHERE server_id = ?1",
+            rusqlite::params![server_id.as_str()],
+            |r| r.get(0),
+        )?;
+        let playlists: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM playlists WHERE server_id = ?1",
+            rusqlite::params![server_id.as_str()],
+            |r| r.get(0),
+        )?;
+        Ok((albums, artists, tracks, playlists))
+    }
+}
+
+// ─── Private helpers ────────────────────────────────────────────
+
+fn collect_ids(
+    tx: &Transaction<'_>,
+    table: &'static str,
+    id_column: &'static str,
+    server_id: &str,
+) -> LibraryResult<Vec<String>> {
+    if !matches!(table, "albums" | "artists" | "tracks") {
+        return Err(LibraryError::Validation(format!("unknown table {table}")));
+    }
+    let sql = format!("SELECT {id_column} FROM {table} WHERE server_id = ?1");
+    let mut stmt = tx.prepare(&sql)?;
+    let rows = stmt
+        .query_map(rusqlite::params![server_id], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+fn upsert_album(tx: &Transaction<'_>, server_id: &ServerId, album: &Album) -> LibraryResult<()> {
+    let (image_kind, image_tag) = image_columns(album.image_ref.as_ref());
+    let artist_id_str: Option<String> = album.artist_id.as_ref().map(|a| a.as_str().to_string());
+
+    tx.execute(
+        "INSERT INTO albums (server_id, album_id, title, artist, artist_id, year, track_count,
+                             duration_seconds, favorite, image_kind, image_tag)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         ON CONFLICT(server_id, album_id) DO UPDATE SET
+             title = excluded.title,
+             artist = excluded.artist,
+             artist_id = excluded.artist_id,
+             year = excluded.year,
+             track_count = excluded.track_count,
+             duration_seconds = excluded.duration_seconds,
+             favorite = excluded.favorite,
+             image_kind = excluded.image_kind,
+             image_tag = excluded.image_tag",
+        rusqlite::params![
+            server_id.as_str(),
+            album.id.as_str(),
+            album.title,
+            album.artist,
+            artist_id_str,
+            album.year.map(|y| y as i64),
+            album.track_count as i64,
+            album.duration_seconds as i64,
+            album.favorite as i64,
+            image_kind,
+            image_tag,
+        ],
+    )?;
+
+    tx.execute(
+        "DELETE FROM album_genres WHERE server_id = ?1 AND album_id = ?2",
+        rusqlite::params![server_id.as_str(), album.id.as_str()],
+    )?;
+    for genre in &album.genres {
+        tx.execute(
+            "INSERT OR IGNORE INTO album_genres (server_id, album_id, genre) VALUES (?1, ?2, ?3)",
+            rusqlite::params![server_id.as_str(), album.id.as_str(), genre],
+        )?;
+    }
+
+    tx.execute(
+        "DELETE FROM library_fts WHERE server_id = ?1 AND kind = 'album' AND entity_id = ?2",
+        rusqlite::params![server_id.as_str(), album.id.as_str()],
+    )?;
+    tx.execute(
+        "INSERT INTO library_fts (kind, server_id, entity_id, title, subtitle) VALUES ('album', ?1, ?2, ?3, ?4)",
+        rusqlite::params![server_id.as_str(), album.id.as_str(), album.title, album.artist],
+    )?;
+
+    Ok(())
+}
+
+fn upsert_artist(tx: &Transaction<'_>, server_id: &ServerId, artist: &Artist) -> LibraryResult<()> {
+    let (image_kind, image_tag) = image_columns(artist.image_ref.as_ref());
+
+    tx.execute(
+        "INSERT INTO artists (server_id, artist_id, name, album_count, track_count, favorite, image_kind, image_tag)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(server_id, artist_id) DO UPDATE SET
+             name = excluded.name,
+             album_count = excluded.album_count,
+             track_count = excluded.track_count,
+             favorite = excluded.favorite,
+             image_kind = excluded.image_kind,
+             image_tag = excluded.image_tag",
+        rusqlite::params![
+            server_id.as_str(),
+            artist.id.as_str(),
+            artist.name,
+            artist.album_count as i64,
+            artist.track_count as i64,
+            artist.favorite as i64,
+            image_kind,
+            image_tag,
+        ],
+    )?;
+
+    tx.execute(
+        "DELETE FROM library_fts WHERE server_id = ?1 AND kind = 'artist' AND entity_id = ?2",
+        rusqlite::params![server_id.as_str(), artist.id.as_str()],
+    )?;
+    tx.execute(
+        "INSERT INTO library_fts (kind, server_id, entity_id, title, subtitle) VALUES ('artist', ?1, ?2, ?3, '')",
+        rusqlite::params![server_id.as_str(), artist.id.as_str(), artist.name],
+    )?;
+    Ok(())
+}
+
+fn upsert_track(tx: &Transaction<'_>, server_id: &ServerId, track: &Track) -> LibraryResult<()> {
+    let (image_kind, image_tag) = image_columns(track.image_ref.as_ref());
+    let artist_id_str: Option<String> = track.artist_id.as_ref().map(|a| a.as_str().to_string());
+    let subtitle = format!("{} — {}", track.artist, track.album);
+
+    tx.execute(
+        "INSERT INTO tracks (server_id, track_id, album_id, title, artist, artist_id, album,
+                             duration_seconds, track_number, disc_number, favorite, image_kind, image_tag)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+         ON CONFLICT(server_id, track_id) DO UPDATE SET
+             album_id = excluded.album_id,
+             title = excluded.title,
+             artist = excluded.artist,
+             artist_id = excluded.artist_id,
+             album = excluded.album,
+             duration_seconds = excluded.duration_seconds,
+             track_number = excluded.track_number,
+             disc_number = excluded.disc_number,
+             favorite = excluded.favorite,
+             image_kind = excluded.image_kind,
+             image_tag = excluded.image_tag",
+        rusqlite::params![
+            server_id.as_str(),
+            track.id.as_str(),
+            track.album_id.as_str(),
+            track.title,
+            track.artist,
+            artist_id_str,
+            track.album,
+            track.duration_seconds as i64,
+            track.track_number as i64,
+            track.disc_number as i64,
+            track.favorite as i64,
+            image_kind,
+            image_tag,
+        ],
+    )?;
+
+    tx.execute(
+        "DELETE FROM library_fts WHERE server_id = ?1 AND kind = 'track' AND entity_id = ?2",
+        rusqlite::params![server_id.as_str(), track.id.as_str()],
+    )?;
+    tx.execute(
+        "INSERT INTO library_fts (kind, server_id, entity_id, title, subtitle) VALUES ('track', ?1, ?2, ?3, ?4)",
+        rusqlite::params![server_id.as_str(), track.id.as_str(), track.title, subtitle],
+    )?;
+    Ok(())
+}
+
+fn image_columns(
+    image_ref: Option<&sinfonic_domain::ImageRef>,
+) -> (Option<String>, Option<String>) {
+    match image_ref {
+        Some(ir) => (Some(ir.kind.clone()), ir.tag.clone()),
+        None => (None, None),
+    }
+}
+
+#[allow(dead_code)]
+fn _ensure_compiles(_: ArtistId) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sinfonic_domain::{Album, AlbumId, Artist, ArtistId, Playlist, PlaylistId, ServerId, Track, TrackId};
+
+    fn server() -> ServerId {
+        ServerId::new("server-1")
+    }
+
+    fn album(id: &str, title: &str, artist: &str) -> Album {
+        Album {
+            id: AlbumId::new(id),
+            title: title.into(),
+            artist: artist.into(),
+            artist_id: None,
+            year: Some(2000),
+            track_count: 10,
+            duration_seconds: 3000,
+            favorite: false,
+            image_ref: None,
+            genres: vec!["Rock".into(), "Indie".into()],
+        }
+    }
+
+    fn track(id: &str, title: &str, album_id: &str, track_number: u16) -> Track {
+        Track {
+            id: TrackId::new(id),
+            album_id: AlbumId::new(album_id),
+            title: title.into(),
+            artist: "Artist 1".into(),
+            artist_id: None,
+            album: "Album 1".into(),
+            duration_seconds: 200,
+            track_number,
+            disc_number: 1,
+            favorite: false,
+            image_ref: None,
+        }
+    }
+
+    fn artist(id: &str, name: &str) -> Artist {
+        Artist {
+            id: ArtistId::new(id),
+            name: name.into(),
+            album_count: 0,
+            track_count: 0,
+            favorite: false,
+            image_ref: None,
+        }
+    }
+
+    fn playlist(id: &str, name: &str, track_ids: Vec<&str>) -> (Playlist, Vec<TrackId>) {
+        (
+            Playlist {
+                id: PlaylistId::new(id),
+                name: name.into(),
+                track_count: track_ids.len() as u32,
+                duration_seconds: 0,
+                owner: Some("me".into()),
+                public: false,
+            },
+            track_ids.into_iter().map(TrackId::new).collect(),
+        )
+    }
+
+    #[test]
+    fn open_memory_creates_fresh_db() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        let page = store.list_albums(&s, 0, 10).unwrap();
+        assert!(page.items.is_empty());
+        assert_eq!(page.total, 0);
+    }
+
+    #[test]
+    fn replace_albums_then_list_returns_paged() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        let albums: Vec<Album> = (0..15)
+            .map(|i| album(&format!("a-{i}"), &format!("Album {i}"), "X"))
+            .collect();
+        store.replace_albums(&s, &albums).unwrap();
+        let p1 = store.list_albums(&s, 0, 10).unwrap();
+        assert_eq!(p1.items.len(), 10);
+        assert_eq!(p1.total, 15);
+        let p2 = store.list_albums(&s, 10, 10).unwrap();
+        assert_eq!(p2.items.len(), 5);
+    }
+
+    #[test]
+    fn replace_albums_removes_orphans() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        store
+            .replace_albums(&s, &[album("a-1", "A", "X"), album("a-2", "B", "X")])
+            .unwrap();
+        assert_eq!(store.list_albums(&s, 0, 10).unwrap().total, 2);
+        // New set drops a-2; FTS5 row and the album row should be gone.
+        store.replace_albums(&s, &[album("a-1", "A v2", "X")]).unwrap();
+        let page = store.list_albums(&s, 0, 10).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].title, "A v2");
+    }
+
+    #[test]
+    fn album_genres_are_replaced_on_each_upsert() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        store
+            .upsert_album(&s, &album("a-1", "A", "X"))
+            .unwrap();
+        {
+            let conn = store.connection().unwrap();
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM album_genres WHERE server_id = ?1 AND album_id = 'a-1'",
+                    rusqlite::params![s.as_str()],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 2);
+        }
+        let mut a = album("a-1", "A", "X");
+        a.genres = vec!["Jazz".into()];
+        store.upsert_album(&s, &a).unwrap();
+        let conn = store.connection().unwrap();
+        let names: Vec<String> = conn
+            .prepare(
+                "SELECT genre FROM album_genres WHERE server_id = ?1 AND album_id = 'a-1'",
+            )
+            .unwrap()
+            .query_map(rusqlite::params![s.as_str()], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(names, vec!["Jazz".to_string()]);
+    }
+
+    #[test]
+    fn replace_tracks_orders_by_title() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        store.replace_albums(&s, &[album("a-1", "A", "X")]).unwrap();
+        store
+            .replace_tracks(
+                &s,
+                &[
+                    track("t-1", "Charlie", "a-1", 1),
+                    track("t-2", "Alpha", "a-1", 2),
+                    track("t-3", "Bravo", "a-1", 3),
+                ],
+            )
+            .unwrap();
+        let page = store.list_tracks(&s, 0, 10).unwrap();
+        let titles: Vec<String> = page.items.iter().map(|t| t.title.clone()).collect();
+        assert_eq!(titles, vec!["Alpha", "Bravo", "Charlie"]);
+    }
+
+    #[test]
+    fn list_album_tracks_orders_by_disc_then_track_number() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        store.replace_albums(&s, &[album("a-1", "A", "X")]).unwrap();
+        store
+            .replace_tracks(
+                &s,
+                &[
+                    Track {
+                        track_number: 3,
+                        ..track("t-1", "C", "a-1", 3)
+                    },
+                    Track {
+                        track_number: 1,
+                        ..track("t-2", "A", "a-1", 1)
+                    },
+                    Track {
+                        disc_number: 2,
+                        track_number: 1,
+                        ..track("t-3", "B-D2", "a-1", 1)
+                    },
+                ],
+            )
+            .unwrap();
+        let titles: Vec<String> = store
+            .list_album_tracks(&s, &AlbumId::new("a-1"))
+            .unwrap()
+            .into_iter()
+            .map(|t| t.title)
+            .collect();
+        assert_eq!(titles, vec!["A", "C", "B-D2"]);
+    }
+
+    #[test]
+    fn replace_playlist_then_list_tracks_returns_ordered_ids() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        let (p, tracks) = playlist("p-1", "My Mix", vec!["t-3", "t-1", "t-2"]);
+        store.replace_playlist(&s, &p, &tracks).unwrap();
+        let listed = store.list_playlist_tracks(&s, &PlaylistId::new("p-1")).unwrap();
+        assert_eq!(
+            listed.iter().map(|t| t.as_str()).collect::<Vec<_>>(),
+            vec!["t-3", "t-1", "t-2"]
+        );
+        let playlists = store.list_playlists(&s).unwrap();
+        assert_eq!(playlists.len(), 1);
+        assert_eq!(playlists[0].name, "My Mix");
+        assert_eq!(playlists[0].owner.as_deref(), Some("me"));
+    }
+
+    #[test]
+    fn replace_playlist_overwrites_track_list() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        let (p, mut tracks) = playlist("p-1", "My Mix", vec!["t-1", "t-2"]);
+        store.replace_playlist(&s, &p, &tracks).unwrap();
+        tracks = vec![TrackId::new("t-3")];
+        store.replace_playlist(&s, &p, &tracks).unwrap();
+        let listed = store.list_playlist_tracks(&s, &PlaylistId::new("p-1")).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].as_str(), "t-3");
+    }
+
+    #[test]
+    fn upsert_album_rejects_when_artist_missing() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        // Album's artist_id references an artist that does not
+        // exist. Deferred FKs only reorder checks; the target
+        // still has to exist at commit time.
+        let mut a = album("a-1", "A", "X");
+        a.artist_id = Some(ArtistId::new("missing"));
+        let err = store.upsert_album(&s, &a).unwrap_err();
+        assert!(matches!(err, LibraryError::Sqlite(_)));
+    }
+
+    #[test]
+    fn upsert_track_rejects_when_album_missing() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        let mut t = track("t-1", "T", "missing", 1);
+        t.album_id = AlbumId::new("missing-album");
+        let err = store.upsert_track(&s, &t).unwrap_err();
+        assert!(matches!(err, LibraryError::Sqlite(_)));
+    }
+
+    #[test]
+    fn replace_albums_then_artists_in_separate_calls() {
+        // The realistic sync flow: replace_albums is called, then
+        // replace_artists later. The deferred FK lets each call
+        // succeed on its own as long as the second call's targets
+        // exist.
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        store.replace_albums(&s, &[album("a-1", "A", "X")]).unwrap();
+        store
+            .replace_artists(&s, &[artist("artist-1", "X")])
+            .unwrap();
+        let (a, ar, _) = (store.server_counts(&s).unwrap().0, store.server_counts(&s).unwrap().1, 0);
+        assert_eq!((a, ar), (1, 1));
+    }
+
+    #[test]
+    fn replace_artists_removes_stale() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        store
+            .replace_artists(&s, &[artist("ar-1", "A"), artist("ar-2", "B")])
+            .unwrap();
+        store.replace_artists(&s, &[artist("ar-1", "A v2")]).unwrap();
+        let page = store.list_artists(&s, 0, 10).unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].name, "A v2");
+    }
+
+    #[test]
+    fn server_counts_reports_each_table() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        store.replace_albums(&s, &[album("a-1", "A", "X")]).unwrap();
+        store.replace_artists(&s, &[artist("ar-1", "X")]).unwrap();
+        store.replace_tracks(&s, &[track("t-1", "T", "a-1", 1)]).unwrap();
+        let (a, ar, t, p) = store.server_counts(&s).unwrap();
+        assert_eq!((a, ar, t, p), (1, 1, 1, 0));
+    }
+
+    #[test]
+    fn server_scoped_isolation() {
+        let store = Store::open_memory().unwrap();
+        let s1 = ServerId::new("s1");
+        let s2 = ServerId::new("s2");
+        store
+            .replace_albums(&s1, &[album("shared", "A from s1", "X")])
+            .unwrap();
+        store
+            .replace_albums(&s2, &[album("shared", "A from s2", "Y")])
+            .unwrap();
+        let p1 = store.list_albums(&s1, 0, 10).unwrap();
+        let p2 = store.list_albums(&s2, 0, 10).unwrap();
+        assert_eq!(p1.items[0].artist, "X");
+        assert_eq!(p2.items[0].artist, "Y");
+    }
+
+    #[test]
+    fn delete_server_clears_everything() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        store.replace_albums(&s, &[album("a-1", "A", "X")]).unwrap();
+        store.replace_artists(&s, &[artist("ar-1", "X")]).unwrap();
+        store.replace_tracks(&s, &[track("t-1", "T", "a-1", 1)]).unwrap();
+        let (p, _) = playlist("p-1", "Mix", vec!["t-1"]);
+        store.replace_playlist(&s, &p, &p_tracks(vec!["t-1"])).unwrap();
+        store.delete_server(&s).unwrap();
+        let (a, ar, t, p_count) = store.server_counts(&s).unwrap();
+        assert_eq!((a, ar, t, p_count), (0, 0, 0, 0));
+    }
+
+    fn p_tracks(ids: Vec<&str>) -> Vec<TrackId> {
+        ids.into_iter().map(TrackId::new).collect()
+    }
+
+    #[test]
+    fn get_album_returns_some_when_present() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        store.replace_albums(&s, &[album("a-1", "A", "X")]).unwrap();
+        let a = store.get_album(&s, &AlbumId::new("a-1")).unwrap();
+        assert!(a.is_some());
+        assert_eq!(a.unwrap().title, "A");
+        let missing = store.get_album(&s, &AlbumId::new("nope")).unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn open_creates_db_file_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        let store = Store::open(&path).unwrap();
+        store
+            .replace_albums(&server(), &[album("a-1", "A", "X")])
+            .unwrap();
+        drop(store);
+        // Reopen and verify the data is still there.
+        let store2 = Store::open(&path).unwrap();
+        let page = store2.list_albums(&server(), 0, 10).unwrap();
+        assert_eq!(page.total, 1);
     }
 }
