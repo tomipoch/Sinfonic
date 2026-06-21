@@ -38,6 +38,7 @@ use crate::events::{
     EventName, LibrarySyncStatusPayload, PlaybackStatePayload, QueueSnapshotPayload,
     TrackChangedPayload,
 };
+use crate::lastfm;
 use crate::state::AppState;
 use sinfonic_domain::{
     Album, AlbumDetail, AlbumId, Artist, ImageKind, PagedResponse, QueueEntryId, QueueSnapshot,
@@ -1064,6 +1065,90 @@ fn guess_image_content_type(bytes: &[u8]) -> &'static str {
     } else {
         "application/octet-stream"
     }
+}
+
+// ─── Last.fm (Phase 7) ─────────────────────────────────────────
+
+/// Hash the password to md5 hex and exchange credentials for a
+/// session key via `auth.getMobileSession`. Persists the api key +
+/// secret pair AND the session key in the OS keyring so the next
+/// launch can `resume` without re-prompting.
+#[tauri::command]
+pub async fn lastfm_connect(
+    api_key: String,
+    api_secret: String,
+    username: String,
+    password: String,
+    state: SharedState<'_>,
+) -> Result<lastfm::LastFmStatus, String> {
+    let creds = lastfm::StoredCredentials {
+        api_key: api_key.clone(),
+        api_secret: api_secret.clone(),
+    };
+    let guard = state.lock().await;
+    let session = lastfm::authenticate_and_store(
+        guard.secrets.as_ref(),
+        &creds,
+        &username,
+        &password,
+        guard.lastfm.as_ref(),
+    )
+    .await?;
+    let _ = session;
+    Ok(lastfm::LastFmStatus {
+        configured: true,
+        authenticated: true,
+        username: Some(username),
+    })
+}
+
+/// Drop the in-memory Last.fm client and remove both entries from
+/// the keyring. The next `lastfm_status` call will report
+/// `configured=false`.
+#[tauri::command]
+pub async fn lastfm_disconnect(state: SharedState<'_>) -> Result<lastfm::LastFmStatus, String> {
+    {
+        let guard = state.lock().await;
+        let mut slot = guard.lastfm.lock().await;
+        slot.take();
+    }
+    {
+        let guard = state.lock().await;
+        lastfm::clear_secrets(guard.secrets.as_ref()).await?;
+    }
+    Ok(lastfm::LastFmStatus {
+        configured: false,
+        authenticated: false,
+        username: None,
+    })
+}
+
+/// Cheap status read used by the Settings UI on mount. Does not
+/// trigger any network traffic.
+#[tauri::command]
+pub async fn lastfm_status(
+    state: SharedState<'_>,
+) -> Result<lastfm::LastFmStatus, String> {
+    let guard = state.lock().await;
+    let configured = lastfm::load_credentials(guard.secrets.as_ref())
+        .await
+        .map(|c| c.is_some())
+        .unwrap_or(false);
+    let authenticated = guard.lastfm.lock().await.is_some();
+    Ok(lastfm::LastFmStatus {
+        configured,
+        authenticated,
+        username: None,
+    })
+}
+
+/// Re-attach a previously-persisted session key, if any. Called by
+/// `lib.rs` once at startup so scrobbling resumes without a
+/// re-prompt.
+pub async fn try_resume_lastfm(state: &AppState) {
+    let secrets = state.secrets.clone();
+    let slot = state.lastfm.clone();
+    let _ = lastfm::try_resume(secrets.as_ref(), slot.as_ref()).await;
 }
 
 // ─── Internal event helpers ─────────────────────────────────────

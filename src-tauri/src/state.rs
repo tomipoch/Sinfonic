@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use sinfonic_domain::{PlaybackState, QueueEngine, ServerId};
+use sinfonic_lastfm::LastFmClient;
 use sinfonic_library::{AlbumArtCache, Store};
 use sinfonic_playback::AudioPlayer;
 use sinfonic_secrets::KeyringStore;
@@ -59,6 +60,10 @@ pub struct AppState {
     /// that need it short-circuit to a provider-direct fetch in that
     /// case so the UI still works.
     pub album_art: Option<Arc<AlbumArtCache>>,
+    /// In-memory Last.fm client. Present only after `lastfm_connect`
+    /// succeeds; the session key is persisted in the OS keyring so
+    /// the next launch can `resume` it without re-prompting.
+    pub lastfm: Arc<Mutex<Option<LastFmClient>>>,
 }
 
 impl Default for AppState {
@@ -75,6 +80,7 @@ impl Default for AppState {
             secrets: Arc::new(secrets),
             device_id: default_device_id(),
             album_art: None,
+            lastfm: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -97,6 +103,7 @@ impl AppState {
             secrets: Arc::new(KeyringStore::new("sinfonic")),
             device_id: default_device_id(),
             album_art: None,
+            lastfm: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -119,6 +126,7 @@ impl AppState {
             secrets: Arc::new(KeyringStore::new("sinfonic")),
             device_id: default_device_id(),
             album_art: Some(Arc::new(album_art)),
+            lastfm: Arc::new(Mutex::new(None)),
         })
     }
 

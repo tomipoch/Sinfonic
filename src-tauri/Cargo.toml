@@ -90,6 +90,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
+md5 = { workspace = true }
+hex = { workspace = true }
+parking_lot = { workspace = true }
 
 # Local workspace members
 sinfonic-domain = { workspace = true }

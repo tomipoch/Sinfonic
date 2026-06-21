@@ -24,6 +24,7 @@ use tokio::sync::Mutex;
 
 mod commands;
 mod events;
+mod lastfm;
 mod state;
 
 pub use events::{
@@ -106,7 +107,18 @@ pub fn run() {
                 }
             });
 
-            app.manage(Arc::new(Mutex::new(state)));
+            // Resume a previously-persisted Last.fm session, if any.
+            // We spawn on the tokio runtime because the Tauri setup
+            // closure is sync; network errors are swallowed (we just
+            // stay disconnected until the user re-enters credentials).
+            let state_for_resume = Arc::new(Mutex::new(state));
+            let resume_handle = state_for_resume.clone();
+            tauri::async_runtime::spawn(async move {
+                let state_ref = resume_handle.lock().await;
+                commands::try_resume_lastfm(&state_ref).await;
+            });
+
+            app.manage(state_for_resume);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -152,6 +164,10 @@ pub fn run() {
             commands::provider_sync_library,
             // Album art (Phase 7)
             commands::provider_image_bytes,
+            // Last.fm (Phase 7)
+            commands::lastfm_connect,
+            commands::lastfm_disconnect,
+            commands::lastfm_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
