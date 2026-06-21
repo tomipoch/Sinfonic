@@ -21,11 +21,13 @@
 //!     contentless FTS5 virtual table populated alongside every
 //!     insert.
 
+pub mod album_art;
 pub mod error;
 pub mod rows;
 pub mod schema;
 pub mod search;
 pub mod store;
 
+pub use album_art::{AlbumArtCache, CachedImage, CachedImageMeta, ImageCacheKey};
 pub use error::{LibraryError, LibraryResult};
 pub use store::Store;

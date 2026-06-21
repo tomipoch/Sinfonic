@@ -23,6 +23,9 @@ pub enum LibraryError {
 
     #[error("invalid input: {0}")]
     Validation(String),
+
+    #[error("io error: {0}")]
+    Io(String),
 }
 
 pub type LibraryResult<T> = Result<T, LibraryError>;
