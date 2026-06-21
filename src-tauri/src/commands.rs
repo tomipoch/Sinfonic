@@ -14,7 +14,7 @@
 //!   cache. They return real data. The default `server_id` is
 //!   `"server-local"` until a Jellyfin login provides the real one.
 //! - Phase 3: Jellyfin provider + login flow. Library reads now
-//!   prefer the active Jellyfin `ServerId` if a session is
+//!   prefer the active provider's `ServerId` if a session is
 //!   connected, falling back to the placeholder otherwise.
 //! - Phase 4: `play_track` resolves the track's stream URI from the
 //!   active provider and pipes it through `AudioPlayer` (rodio +
@@ -22,6 +22,11 @@
 //!   `set_volume`, `set_muted`, `set_eq_band`, `reset_eq` all drive
 //!   the AudioPlayer too. `get_playback_state` reflects the rodio
 //!   sink's position.
+//! - Phase 5: the active provider is stored as `Arc<dyn MusicProvider>`,
+//!   so Jellyfin and Subsonic share a single `provider_sync_library`
+//!   command. `jellyfin_login` and `subsonic_login` build their
+//!   respective providers and the dispatcher just calls
+//!   `provider.albums(...).await`.
 
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
@@ -40,22 +45,23 @@ use sinfonic_domain::{
 };
 use sinfonic_secrets::SecretStore;
 use sinfonic_source::MusicProvider;
-use sinfonic_source_jellyfin::auth::{login as jellyfin_login_inner, LoginRequest};
+use sinfonic_source_jellyfin::auth::{login as jellyfin_login_inner, LoginRequest as JellyfinAuthRequest};
+use sinfonic_source_subsonic::auth::{login as subsonic_login_inner, LoginRequest as SubsonicAuthRequest};
 
 type SharedState<'a> = State<'a, Arc<Mutex<AppState>>>;
 
-/// Placeholder `ServerId` used when no Jellyfin session is active.
-/// Library reads return empty pages in that state instead of erroring
-/// — the UI surfaces a "connect a server" hint.
+/// Placeholder `ServerId` used when no provider is active. Library
+/// reads return empty pages in that state instead of erroring — the
+/// UI surfaces a "connect a server" hint.
 const DEFAULT_SERVER_ID: &str = "server-local";
 
 fn default_server_id() -> ServerId {
     ServerId::new(DEFAULT_SERVER_ID)
 }
 
-/// Return the `ServerId` of the active Jellyfin provider if one is
-/// connected, otherwise the placeholder. Used by library reads so
-/// they automatically follow the active session.
+/// Return the `ServerId` of the active provider if one is connected,
+/// otherwise the placeholder. Used by library reads so they
+/// automatically follow the active session.
 async fn active_server_id(state: &SharedState<'_>) -> ServerId {
     let guard = state.lock().await;
     let provider_guard = guard.provider.lock().await;
@@ -551,7 +557,7 @@ pub async fn search(
         .map_err(|e| e.to_string())
 }
 
-// ─── Jellyfin provider (Phase 3) ────────────────────────────────
+// ─── Provider commands (Phase 3 + Phase 5) ──────────────────────
 
 /// Wire-format mirror of `sinfonic_source_jellyfin::discovery::DiscoveredJellyfinServer`.
 /// Kept here so the frontend never imports the crate directly.
@@ -577,9 +583,17 @@ pub struct JellyfinLoginRequest {
     pub password: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SubsonicLoginRequest {
+    pub base_url: String,
+    pub username: String,
+    pub password: String,
+}
+
 /// Discover Jellyfin servers on the local network. Listens on UDP
 /// 7359 for ~1.5s and falls back to a localhost probe if nothing
-/// answers.
+/// answers. Subsonic has no equivalent discovery; users enter the
+/// URL manually.
 #[tauri::command]
 pub async fn jellyfin_discover() -> Result<Vec<DiscoveredServer>, String> {
     use sinfonic_source_jellyfin::discovery;
@@ -608,7 +622,7 @@ pub async fn jellyfin_login(
         (guard.device_id.clone(), guard.secrets.clone())
     };
 
-    let login_request = LoginRequest {
+    let login_request = JellyfinAuthRequest {
         base_url: request.base_url.clone(),
         username: request.username.clone(),
         password: request.password.clone(),
@@ -627,8 +641,9 @@ pub async fn jellyfin_login(
         .await
         .map_err(|e| format!("save token: {e}"))?;
 
-    // Upsert the server row so `servers` knows about it before we
-    // hand the provider to the library cache.
+    // Build the provider and refresh the server display name. The
+    // server name is what we show in the UI; if the refresh fails
+    // we fall back to the base URL.
     let provider = sinfonic_source_jellyfin::JellyfinProvider::new(success.session.clone())
         .map_err(|e| format!("build provider: {e}"))?;
     let server_name = provider
@@ -642,6 +657,7 @@ pub async fn jellyfin_login(
             .library
             .upsert_server(&success.server_id, "jellyfin", &server_name, &request.base_url)
             .map_err(|e| format!("upsert server: {e}"))?;
+        let provider: Arc<dyn MusicProvider> = Arc::new(provider);
         *guard.provider.lock().await = Some(provider);
     }
 
@@ -653,12 +669,74 @@ pub async fn jellyfin_login(
     })
 }
 
-/// Clear the active Jellyfin provider and remove its token from the
-/// keyring. Library data is left in place so the user can log back in
-/// without a full re-sync. Audio playback is stopped — the stream URL
-/// the rodio sink is consuming will no longer resolve after logout.
+/// Log in to a Subsonic/Navidrome/Airsonic server. Performs a `ping`
+/// with a freshly-minted salt + md5 token to validate the
+/// credentials, persists the password in the keyring (it must be
+/// re-hashed on every request, so we keep the raw password around),
+/// upserts the server row, and installs the provider.
 #[tauri::command]
-pub async fn jellyfin_logout(state: SharedState<'_>) -> Result<(), String> {
+pub async fn subsonic_login(
+    request: SubsonicLoginRequest,
+    state: SharedState<'_>,
+) -> Result<ConnectedServer, String> {
+    let secrets = {
+        let guard = state.lock().await;
+        guard.secrets.clone()
+    };
+
+    let login_request = SubsonicAuthRequest {
+        base_url: request.base_url.clone(),
+        username: request.username.clone(),
+        password: request.password.clone(),
+    };
+
+    let success = subsonic_login_inner(login_request)
+        .await
+        .map_err(|e| format!("login failed: {e}"))?;
+
+    // Subsonic re-hashes the password on every request, so we have
+    // to store the raw password in the keyring. Different namespace
+    // (per-server-id) avoids collisions with the Jellyfin token
+    // (which has the same SecretKey variant).
+    secrets
+        .save_token(success.server_id.clone(), request.password.clone())
+        .await
+        .map_err(|e| format!("save password: {e}"))?;
+
+    let provider = sinfonic_source_subsonic::SubsonicProvider::new(success.session.clone())
+        .map_err(|e| format!("build provider: {e}"))?;
+
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .upsert_server(
+                &success.server_id,
+                "subsonic",
+                &success.server_name,
+                &request.base_url,
+            )
+            .map_err(|e| format!("upsert server: {e}"))?;
+        let provider: Arc<dyn MusicProvider> = Arc::new(provider);
+        *guard.provider.lock().await = Some(provider);
+    }
+
+    Ok(ConnectedServer {
+        server_id: success.server_id.to_string(),
+        kind: "subsonic".into(),
+        name: success.server_name,
+        base_url: request.base_url,
+    })
+}
+
+/// Clear the active provider and remove its token from the keyring.
+/// Library data is left in place so the user can log back in
+/// without a full re-sync. Audio playback is stopped — the stream
+/// URL the rodio sink is consuming will no longer resolve after
+/// logout. The kind doesn't matter: we always clear whatever
+/// provider is currently active.
+#[tauri::command]
+pub async fn provider_logout(state: SharedState<'_>) -> Result<(), String> {
     let (server_id_opt, secrets) = {
         let mut guard = state.lock().await;
         let server_id = guard
@@ -680,9 +758,10 @@ pub async fn jellyfin_logout(state: SharedState<'_>) -> Result<(), String> {
 
 /// Trigger a sync: fetch the first page of albums / artists / tracks
 /// from the active provider and pipe them into the SQLite cache.
-/// Subsequent reads serve from the cache.
+/// Subsequent reads serve from the cache. Generic over the
+/// `MusicProvider` trait — works for both Jellyfin and Subsonic.
 #[tauri::command]
-pub async fn jellyfin_sync_library(
+pub async fn provider_sync_library(
     state: SharedState<'_>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
@@ -705,7 +784,7 @@ pub async fn jellyfin_sync_library(
             .await
             .as_ref()
             .cloned()
-            .ok_or_else(|| "no active Jellyfin session".to_string())?;
+            .ok_or_else(|| "no active provider session".to_string())?;
         (provider, guard.library.clone())
     };
 
@@ -748,7 +827,7 @@ pub async fn jellyfin_sync_library(
 /// Return the list of servers the user has configured (rows in the
 /// `servers` table). The active server — if any — is the first entry.
 #[tauri::command]
-pub async fn jellyfin_servers(
+pub async fn provider_servers(
     state: SharedState<'_>,
 ) -> Result<Vec<ConnectedServer>, String> {
     let guard = state.lock().await;
@@ -773,7 +852,7 @@ pub async fn jellyfin_servers(
 /// Surface the active server id (or `null` if none). Used by the
 /// frontend to keep the Zustand store in sync.
 #[tauri::command]
-pub async fn jellyfin_active_server(
+pub async fn provider_active_server(
     state: SharedState<'_>,
 ) -> Result<Option<String>, String> {
     let guard = state.lock().await;
