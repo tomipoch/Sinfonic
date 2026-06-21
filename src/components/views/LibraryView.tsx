@@ -1,8 +1,12 @@
-// Phase 0 placeholder. Real library view (Albums grid / Artists list /
-// Tracks table tabs) lands in Phase 7.
+// Library shell — tabs + outlet. Each tab owns its loading / empty
+// states. The library cache is fetched once when the active server
+// changes (see `useLibraryAutoLoad`).
 
 import { NavLink, Outlet } from "react-router-dom";
+
 import { cn } from "../../lib/cn";
+import { useLibraryAutoLoad } from "../../hooks/useLibraryAutoLoad";
+import { useServerStore } from "../../stores/serverStore";
 
 const tabs: ReadonlyArray<{ to: string; label: string; end?: boolean }> = [
   { to: "/library", label: "Albums", end: true },
@@ -11,6 +15,9 @@ const tabs: ReadonlyArray<{ to: string; label: string; end?: boolean }> = [
 ];
 
 export function LibraryView() {
+  useLibraryAutoLoad();
+  const activeServerId = useServerStore((s) => s.activeServerId);
+
   return (
     <section className="p-6">
       <h1 className="mb-4 text-2xl font-semibold">Library</h1>
@@ -33,10 +40,13 @@ export function LibraryView() {
           </NavLink>
         ))}
       </div>
-      <Outlet />
-      <p className="text-fg-muted text-sm">
-        Library is empty — connect a server to populate it.
-      </p>
+      {activeServerId ? (
+        <Outlet />
+      ) : (
+        <p className="text-fg-subtle text-sm">
+          Connect a server in Settings to populate the library.
+        </p>
+      )}
     </section>
   );
 }

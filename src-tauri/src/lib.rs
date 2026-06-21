@@ -114,6 +114,8 @@ pub fn run() {
             commands::get_albums,
             commands::get_artists,
             commands::get_tracks,
+            commands::get_album_detail,
+            commands::play_album,
             // Playback (Phase 1 + Phase 4 audio)
             commands::get_playback_state,
             commands::get_queue,

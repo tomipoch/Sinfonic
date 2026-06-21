@@ -96,6 +96,13 @@ export interface QueueSnapshot {
   shuffleSeed: number;
 }
 
+export interface QueueSnapshotPayload {
+  entries: QueueEntry[];
+  currentIndex: number | null;
+  repeat: RepeatMode;
+  shuffle: boolean;
+}
+
 export interface PlaybackStatePayload {
   isPlaying: boolean;
   positionSeconds: number;

@@ -20,6 +20,11 @@ import type {
   Track,
 } from "../types/domain";
 
+interface AlbumDetail {
+  album: Album;
+  tracks: Track[];
+}
+
 // ─── Library ────────────────────────────────────────────────────
 
 export const getAlbums = (offset = 0, limit = 50) =>
@@ -31,6 +36,9 @@ export const getArtists = (offset = 0, limit = 50) =>
 export const getTracks = (offset = 0, limit = 50) =>
   invoke<PagedResponse<Track>>("get_tracks", { offset, limit });
 
+export const getAlbumDetail = (albumId: string) =>
+  invoke<AlbumDetail | null>("get_album_detail", { albumId });
+
 // ─── Playback ───────────────────────────────────────────────────
 
 export const getPlaybackState = () =>
@@ -41,6 +49,9 @@ export const getQueue = () => invoke<QueueSnapshot>("get_queue");
 export const playTrack = (track: Track) =>
   invoke<string>("play_track", { track });
 
+export const playAlbum = (tracks: Track[]) =>
+  invoke<void>("play_album", { tracks });
+
 export const pause = () => invoke<void>("pause");
 export const resume = () => invoke<void>("resume");
 export const stop = () => invoke<void>("stop");
@@ -49,6 +60,29 @@ export const previous = () => invoke<void>("previous");
 
 export const seek = (positionSeconds: number) =>
   invoke<void>("seek", { positionSeconds });
+
+// ─── Queue mutations ───────────────────────────────────────────
+
+export const queueRemove = (entryId: string) =>
+  invoke<boolean>("queue_remove", { entryId });
+
+export const queueJumpTo = (entryId: string) =>
+  invoke<boolean>("queue_jump_to", { entryId });
+
+export const queueMove = (entryId: string, targetIndex: number) =>
+  invoke<void>("queue_move", { entryId, targetIndex });
+
+export const queueClear = () => invoke<void>("queue_clear");
+
+// ─── Repeat / shuffle ───────────────────────────────────────────
+
+export const setRepeat = (repeat: "off" | "one" | "all") =>
+  invoke<void>("set_repeat", { repeat });
+
+export const setShuffle = (enabled: boolean) =>
+  invoke<void>("set_shuffle", { enabled });
+
+// ─── Volume ─────────────────────────────────────────────────────
 
 export const setVolume = (volume: number) =>
   invoke<void>("set_volume", { volume });
