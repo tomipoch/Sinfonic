@@ -3,7 +3,9 @@
 //
 // `PlaybackEventsBridge` mounts the global Tauri event listeners
 // once at the root so playback state stays in sync with the
-// backend regardless of which view is active.
+// backend regardless of which view is active. `AlbumArtPrewarm`
+// fires `provider_image_bytes` for the first 24 albums after the
+// library loads so the visible grid paints without per-cell lag.
 
 import { Route, Routes } from "react-router-dom";
 
@@ -18,6 +20,7 @@ import { QueueView } from "./components/views/QueueView";
 import { SearchView } from "./components/views/SearchView";
 import { SettingsView } from "./components/views/SettingsView";
 import { TracksTab } from "./components/views/TracksTab";
+import { useAlbumArtPrewarm } from "./hooks/useAlbumArtPrewarm";
 import { usePlaybackEvents } from "./hooks/usePlaybackEvents";
 
 function PlaybackEventsBridge(): null {
@@ -25,10 +28,16 @@ function PlaybackEventsBridge(): null {
   return null;
 }
 
+function AlbumArtPrewarm(): null {
+  useAlbumArtPrewarm();
+  return null;
+}
+
 export default function App() {
   return (
     <>
       <PlaybackEventsBridge />
+      <AlbumArtPrewarm />
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<HomeView />} />
