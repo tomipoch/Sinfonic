@@ -39,40 +39,42 @@
 - Fallback silencioso para entornos sin dispositivo de audio (CI)
 - 14 tests de playback (biquad + eq + stream + player headless)
 
-**Total tests: 108**
+### Fase 5 — Subsonic / Navidrome provider
+- `sinfonic-source-subsonic`: `MusicProvider` completo (albums, artists, tracks, search, playlists, stream, scrobble, lyrics)
+- Auth salt+md5 firmada en cada request (`SubsonicSession::sign()` regenera salt+token por llamada)
+- Mapeo Subsonic DTO → `sinfonic_domain::*` (prefijo `track-`/`album-`/`artist-`/`playlist-`)
+- `AppState.provider: Arc<Mutex<Option<Arc<dyn MusicProvider>>>>` con switch transparente Jellyfin ↔ Subsonic
+- Comandos `subsonic_login` + `provider_logout/sync_library/servers/active_server` (renombrados desde `jellyfin_*`)
+- `SettingsView`: toggle Jellyfin/Subsonic con placeholders distintos (8096 vs 4533) + helper text + sección de discovery sólo para Jellyfin
+- `serverStore`: `LoginRequest` discriminated union por `kind`; dispatch a `jellyfinLogin`/`subsonicLogin`
+- 7 tests unit + 14 tests integration con `wiremock`
+
+**Total tests: 129**
 
 ---
 
 ## 🔜 Siguiente
 
-Las dos ramas más naturales son:
-
-### Fase 5 — Provider Subsonic (paridad con Jellyfin)
-- Implementar `MusicProvider` para Subsonic API (Navidrome / Funkwhale / Airsonic)
-- Auth: username + token (salt + md5)
-- Endpoints: `ping`, `getLicense`, `getMusicFolders`, `getArtists`, `getAlbum`, `getAlbumList2`, `search3`, `stream`, `scrobble`
-- Selector de provider en `SettingsView`
-- Tests con `wiremock` + auth salt-md5
-- **Por qué primero:** completa la historia multi-source y desbloquea servidores auto-hospedados sin Jellyfin.
-
-### Fase 5 (alternativa) — Local-files provider
-- Scan recursivo de un directorio configurable (default `~/Music`)
-- Parse de metadatos con `lofty` (MP3/FLAC/OGG/Opus/MP4)
-- Persistencia en la misma tabla SQLite que Fase 2 (server-scope = `local`)
-- **Por qué:** más simple, no requiere servidor externo, ideal para testing.
-
-### Fase 6 — UI real (LibraryView / AlbumDetailView / MiniPlayer)
-- Reemplazar `EmptyView` con `LibraryView` browse de albums/artists/tracks
-- `AlbumDetailView` con lista de tracks y botón play-album
-- MiniPlayer con seek bar, volumen, mute, EQ panel
-- Búsqueda global en el sidebar
+### Fase 6 — UI real (LibraryView / AlbumDetailView / MiniPlayer / QueueView)
+- Reemplazar placeholders `AlbumsTab` / `ArtistsTab` / `TracksTab` / `AlbumDetailView` / `ArtistDetailView` con vistas reales
+- Conectar `useTauriEvent` a `playback-state-changed` / `track-changed` / `queue-changed` para hidratar stores
+- `PlayerBar`: transport (play/pause/prev/next) + volumen + mute + seek bar + posición
+- `QueueView`: lista de queue entries con remove/jump-to/clear
+- Búsqueda global (SearchView) con resultados por sección (albums/tracks/artists/playlists)
+- Sin imágenes todavía (placeholders de gradiente) — el caché de carátulas llega en Fase 7
 
 ### Fase 7 — Album art + scrobble polish
-- Caché local de carátulas (LRU + filesystem)
-- `last_fm_scrobble` opcional
+- Caché local de carátulas (LRU + filesystem + comando `provider_image_bytes`)
+- `last_fm_scrobble` opcional (config + credenciales en keyring)
+- EQ panel en `PlayerBar` (sliders 60 Hz … 16 kHz)
+
+### Fase 8 — Local-files provider
+- Scan recursivo de `~/Music` con `lofty` (MP3/FLAC/OGG/Opus/MP4)
+- Persistencia en la misma tabla SQLite que Fase 2 (server-scope = `local`)
+- Stream `file://` URI al `AudioPlayer` sin cambios en playback
 
 ---
 
 **Estado actual:**
-- `develop` HEAD: `c682b2c`
-- 108 tests · clippy clean · pnpm build clean
+- `develop` HEAD: `5ed3e82` (Phase 5 merged)
+- 129 tests · clippy clean · pnpm build clean
