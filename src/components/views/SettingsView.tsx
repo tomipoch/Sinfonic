@@ -1,10 +1,11 @@
-// Settings — manage Jellyfin server connections and trigger library
-// sync. Phase 3 ships the Jellyfin path; Subsonic and local will
-// follow in later phases.
+// Settings — manage server connections (Jellyfin and Subsonic) and
+// trigger library sync. Phase 3 added the Jellyfin path; Phase 5
+// adds Subsonic with the same form layout but no discovery (the
+// Subsonic protocol has no UDP broadcast equivalent).
 
 import { useEffect, useState } from "react";
 
-import { useServerStore } from "../../stores/serverStore";
+import { useServerStore, type ServerKind } from "../../stores/serverStore";
 
 export function SettingsView() {
   const servers = useServerStore((s) => s.servers);
@@ -20,6 +21,7 @@ export function SettingsView() {
   const syncLibrary = useServerStore((s) => s.syncLibrary);
   const clearError = useServerStore((s) => s.clearError);
 
+  const [kind, setKind] = useState<Exclude<ServerKind, "local">>("jellyfin");
   const [baseUrl, setBaseUrl] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -45,7 +47,12 @@ export function SettingsView() {
     setBusy(true);
     clearError();
     try {
-      await login({ baseUrl: baseUrl.trim(), username, password });
+      await login({
+        kind,
+        baseUrl: baseUrl.trim(),
+        username,
+        password,
+      });
       setPassword("");
     } catch {
       // Error already on the store.
@@ -72,6 +79,8 @@ export function SettingsView() {
     }
   };
 
+  const activeServer = servers.find((s) => s.id === activeServerId);
+
   return (
     <section className="mx-auto flex max-w-3xl flex-col gap-6 p-6">
       <header>
@@ -85,8 +94,13 @@ export function SettingsView() {
         <div className="rounded-md border border-bg-raised bg-bg-subtle p-4">
           <div className="text-sm text-fg-subtle">Connected</div>
           <div className="mt-1 text-base font-medium text-fg">
-            {servers.find((s) => s.id === activeServerId)?.name ?? activeServerId}
+            {activeServer?.name ?? activeServerId}
           </div>
+          {activeServer?.baseUrl && (
+            <div className="mt-1 text-xs text-fg-subtle">
+              {activeServer.baseUrl}
+            </div>
+          )}
           <div className="mt-3 flex gap-2">
             <button
               type="button"
@@ -116,7 +130,31 @@ export function SettingsView() {
           onSubmit={onLogin}
           className="flex flex-col gap-3 rounded-md border border-bg-raised bg-bg-subtle p-4"
         >
-          <h2 className="text-lg font-medium">Connect to Jellyfin</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-medium">Connect to</h2>
+            <div className="flex gap-1 rounded-md border border-bg-raised bg-bg p-0.5">
+              <button
+                type="button"
+                onClick={() => setKind("jellyfin")}
+                className={`rounded px-3 py-1 text-sm ${kind === "jellyfin" ? "bg-accent text-fg" : "text-fg-subtle"}`}
+              >
+                Jellyfin
+              </button>
+              <button
+                type="button"
+                onClick={() => setKind("subsonic")}
+                className={`rounded px-3 py-1 text-sm ${kind === "subsonic" ? "bg-accent text-fg" : "text-fg-subtle"}`}
+              >
+                Subsonic
+              </button>
+            </div>
+          </div>
+
+          <p className="text-xs text-fg-subtle">
+            {kind === "jellyfin"
+              ? "Jellyfin supports both auto-discovery on the local network and manual entry."
+              : "Subsonic / Navidrome / Funkwhale — manual entry only. Salt and token are computed per request, so your password never leaves the device."}
+          </p>
 
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-fg-subtle">Server URL</span>
@@ -124,7 +162,11 @@ export function SettingsView() {
               type="url"
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.currentTarget.value)}
-              placeholder="http://192.168.1.10:8096"
+              placeholder={
+                kind === "jellyfin"
+                  ? "http://192.168.1.10:8096"
+                  : "http://192.168.1.10:4533"
+              }
               required
               className="rounded-md border border-bg-raised bg-bg px-3 py-2 text-sm text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none"
             />
@@ -168,45 +210,47 @@ export function SettingsView() {
         </form>
       )}
 
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-medium">Discovery</h2>
-          <button
-            type="button"
-            onClick={onDiscover}
-            disabled={discovering}
-            className="btn-secondary"
-          >
-            {discovering ? "Scanning…" : "Scan local network"}
-          </button>
-        </div>
-        {discovered.length === 0 ? (
-          <p className="text-sm text-fg-subtle">
-            No servers found. Make sure your Jellyfin server is on the same network.
-          </p>
-        ) : (
-          <ul className="divide-y divide-bg-raised rounded-md border border-bg-raised">
-            {discovered.map((d) => (
-              <li
-                key={d.serverId}
-                className="flex items-center justify-between gap-3 px-3 py-2"
-              >
-                <div>
-                  <div className="text-sm font-medium text-fg">{d.name}</div>
-                  <div className="text-xs text-fg-subtle">{d.baseUrl}</div>
-                </div>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => setBaseUrl(d.baseUrl)}
+      {kind === "jellyfin" && (
+        <section className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-medium">Discovery</h2>
+            <button
+              type="button"
+              onClick={onDiscover}
+              disabled={discovering}
+              className="btn-secondary"
+            >
+              {discovering ? "Scanning…" : "Scan local network"}
+            </button>
+          </div>
+          {discovered.length === 0 ? (
+            <p className="text-sm text-fg-subtle">
+              No servers found. Make sure your Jellyfin server is on the same network.
+            </p>
+          ) : (
+            <ul className="divide-y divide-bg-raised rounded-md border border-bg-raised">
+              {discovered.map((d) => (
+                <li
+                  key={d.serverId}
+                  className="flex items-center justify-between gap-3 px-3 py-2"
                 >
-                  Use this URL
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+                  <div>
+                    <div className="text-sm font-medium text-fg">{d.name}</div>
+                    <div className="text-xs text-fg-subtle">{d.baseUrl}</div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => setBaseUrl(d.baseUrl)}
+                  >
+                    Use this URL
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
 
       <section className="flex flex-col gap-2">
         <h2 className="text-lg font-medium">Saved servers</h2>

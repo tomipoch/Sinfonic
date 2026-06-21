@@ -15,8 +15,15 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, default-features = false, features = ["json", "rustls-tls"] }
 url = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+futures = { workspace = true }
+log = "0.4"
 md5 = { workspace = true }
 hex = { workspace = true }
+rand = "0.8"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+wiremock = "0.6"

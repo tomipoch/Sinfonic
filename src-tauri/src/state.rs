@@ -11,7 +11,7 @@ use sinfonic_domain::{PlaybackState, QueueEngine, ServerId};
 use sinfonic_library::Store;
 use sinfonic_playback::AudioPlayer;
 use sinfonic_secrets::KeyringStore;
-use sinfonic_source_jellyfin::JellyfinProvider;
+use sinfonic_source::MusicProvider;
 use tokio::sync::Mutex;
 
 /// The single bag of state shared across all Tauri commands.
@@ -21,12 +21,12 @@ use tokio::sync::Mutex;
 /// playing, where the playhead is, volume). `AudioPlayer` owns the
 /// rodio audio engine — its cached state shadows `PlaybackState` but
 /// it's the source of truth for `position_seconds`. `Store` owns the
-/// on-disk SQLite cache of the library. `provider` holds the optional
-/// active Jellyfin session — set by `jellyfin_login`, cleared by
-/// `jellyfin_logout`. Keeping them separate follows the layering:
-/// queue is a content concern, playback is a runtime concern,
-/// library is a persistence concern, provider is an external-service
-/// concern.
+/// on-disk SQLite cache of the library. `provider` holds the
+/// optional active music provider (Jellyfin, Subsonic, …) — set by
+/// the corresponding login command, cleared by `provider_logout`.
+/// Keeping them separate follows the layering: queue is a content
+/// concern, playback is a runtime concern, library is a persistence
+/// concern, provider is an external-service concern.
 #[derive(Clone)]
 pub struct AppState {
     /// The current playback queue.
@@ -41,9 +41,12 @@ pub struct AppState {
     /// The SQLite library cache. Shared by clone, so cloning the
     /// handle is cheap (just a pool clone).
     pub library: Store,
-    /// Active Jellyfin provider (only when a server is connected).
-    /// `None` means the user has not logged in yet.
-    pub provider: Arc<Mutex<Option<JellyfinProvider>>>,
+    /// Active music provider (only when a server is connected).
+    /// `None` means the user has not logged in yet. The provider is
+    /// stored as `Arc<dyn MusicProvider>` so we can swap Jellyfin,
+    /// Subsonic, or any future implementation without changing
+    /// command code.
+    pub provider: Arc<Mutex<Option<Arc<dyn MusicProvider>>>>,
     /// OS keyring wrapper. Cloned handles share the same backend.
     pub secrets: Arc<KeyringStore>,
     /// Stable device id sent in the Jellyfin auth header. Generated

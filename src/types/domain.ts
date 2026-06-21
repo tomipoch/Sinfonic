@@ -137,6 +137,12 @@ export interface JellyfinLoginRequest {
   password: string;
 }
 
+export interface SubsonicLoginRequest {
+  baseUrl: string;
+  username: string;
+  password: string;
+}
+
 export type LibrarySyncState = "started" | "complete" | "failed";
 
 export interface LibrarySyncStatus {

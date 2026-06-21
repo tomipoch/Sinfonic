@@ -139,13 +139,14 @@ pub fn run() {
             commands::reset_eq,
             // Search (Phase 2)
             commands::search,
-            // Jellyfin (Phase 3)
+            // Provider (Phase 3 + Phase 5)
             commands::jellyfin_discover,
             commands::jellyfin_login,
-            commands::jellyfin_logout,
-            commands::jellyfin_servers,
-            commands::jellyfin_active_server,
-            commands::jellyfin_sync_library,
+            commands::subsonic_login,
+            commands::provider_logout,
+            commands::provider_servers,
+            commands::provider_active_server,
+            commands::provider_sync_library,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
