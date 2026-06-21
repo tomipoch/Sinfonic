@@ -61,6 +61,29 @@ export const previous = () => invoke<void>("previous");
 export const seek = (positionSeconds: number) =>
   invoke<void>("seek", { positionSeconds });
 
+// ─── Queue mutations ───────────────────────────────────────────
+
+export const queueRemove = (entryId: string) =>
+  invoke<boolean>("queue_remove", { entryId });
+
+export const queueJumpTo = (entryId: string) =>
+  invoke<boolean>("queue_jump_to", { entryId });
+
+export const queueMove = (entryId: string, targetIndex: number) =>
+  invoke<void>("queue_move", { entryId, targetIndex });
+
+export const queueClear = () => invoke<void>("queue_clear");
+
+// ─── Repeat / shuffle ───────────────────────────────────────────
+
+export const setRepeat = (repeat: "off" | "one" | "all") =>
+  invoke<void>("set_repeat", { repeat });
+
+export const setShuffle = (enabled: boolean) =>
+  invoke<void>("set_shuffle", { enabled });
+
+// ─── Volume ─────────────────────────────────────────────────────
+
 export const setVolume = (volume: number) =>
   invoke<void>("set_volume", { volume });
 
