@@ -38,8 +38,8 @@ export const getPlaybackState = () =>
 
 export const getQueue = () => invoke<QueueSnapshot>("get_queue");
 
-export const playTrack = (trackId: string) =>
-  invoke<void>("play_track", { trackId });
+export const playTrack = (track: Track) =>
+  invoke<string>("play_track", { track });
 
 export const pause = () => invoke<void>("pause");
 export const resume = () => invoke<void>("resume");
@@ -55,6 +55,11 @@ export const setVolume = (volume: number) =>
 
 export const setMuted = (muted: boolean) =>
   invoke<void>("set_muted", { muted });
+
+export const setEqBand = (hz: number, gainDb: number) =>
+  invoke<void>("set_eq_band", { band: { hz, gainDb } });
+
+export const resetEq = () => invoke<void>("reset_eq");
 
 // ─── Search ─────────────────────────────────────────────────────
 

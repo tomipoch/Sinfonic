@@ -8,8 +8,7 @@
 //! # Phase status
 //!
 //! - Phase 1: the queue + playback commands operate on the
-//!   in-memory `AppState` and emit real events. Audio is still
-//!   stubbed (Phase 4 wires rodio).
+//!   in-memory `AppState` and emit real events.
 //! - Phase 2: library reads (`get_albums`, `get_artists`,
 //!   `get_tracks`, `search`) are wired against the real SQLite
 //!   cache. They return real data. The default `server_id` is
@@ -17,6 +16,12 @@
 //! - Phase 3: Jellyfin provider + login flow. Library reads now
 //!   prefer the active Jellyfin `ServerId` if a session is
 //!   connected, falling back to the placeholder otherwise.
+//! - Phase 4: `play_track` resolves the track's stream URI from the
+//!   active provider and pipes it through `AudioPlayer` (rodio +
+//!   Symphonia + 10-band EQ). `pause`, `resume`, `seek`,
+//!   `set_volume`, `set_muted`, `set_eq_band`, `reset_eq` all drive
+//!   the AudioPlayer too. `get_playback_state` reflects the rodio
+//!   sink's position.
 
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
@@ -120,7 +125,21 @@ pub async fn get_playback_state(
     state: SharedState<'_>,
 ) -> Result<PlaybackStatePayload, String> {
     let guard = state.lock().await;
-    Ok(PlaybackStatePayload::from_state(&guard.playback, &guard.queue))
+    // The rodio AudioPlayer is the source of truth for
+    // position / is-playing / volume — but we layer our domain
+    // PlaybackState on top so the queue + repeat + shuffle fields
+    // come from the right places.
+    let cached = guard.player.cached_state();
+    let payload = PlaybackStatePayload {
+        is_playing: cached.is_playing,
+        position_seconds: cached.position_seconds,
+        duration_seconds: cached.duration_seconds,
+        volume: cached.volume,
+        muted: cached.muted,
+        repeat: guard.queue.repeat(),
+        shuffle: guard.queue.shuffle_enabled(),
+    };
+    Ok(payload)
 }
 
 #[tauri::command]
@@ -135,19 +154,58 @@ pub async fn play_track(
     app: tauri::AppHandle,
     state: SharedState<'_>,
 ) -> Result<QueueEntryId, String> {
-    let ids = {
+    let id = {
         let mut guard = state.lock().await;
-        guard.queue.play_now(std::slice::from_ref(&track))
+        let ids = guard.queue.play_now(std::slice::from_ref(&track));
+        ids.into_iter()
+            .next()
+            .ok_or_else(|| "play_track: empty track list".to_string())?
     };
-    let id = ids
-        .into_iter()
-        .next()
-        .ok_or_else(|| "play_track: empty track list".to_string())?;
+
+    // Resolve the stream URI from the active Jellyfin provider and
+    // hand it to the rodio-backed AudioPlayer. If no provider is
+    // connected we still register the track in the queue (so the UI
+    // shows it as "next") but skip the actual audio — useful for
+    // offline browsing and tests.
+    let stream_uri = resolve_stream_uri(&state, &track).await;
+    let track_id = track.id.clone();
+    let duration_seconds = match stream_uri.as_deref() {
+        Some(uri) => {
+            let guard = state.lock().await;
+            match guard.player.play(track_id.clone(), uri) {
+                Ok(duration) => duration,
+                Err(e) => {
+                    eprintln!("sinfonic: player.play failed: {e}");
+                    track.duration_seconds
+                }
+            }
+        }
+        None => 0,
+    };
+
+    // Sync the in-memory PlaybackState mirror so commands that read
+    // it (without going through the player) stay consistent.
+    {
+        let mut guard = state.lock().await;
+        guard.playback.start(duration_seconds);
+    }
 
     emit_queue_changed(&app, &state).await;
     emit_track_changed(&app, &state, &track).await;
     emit_playback_state(&app, &state).await;
     Ok(id)
+}
+
+/// Ask the active Jellyfin provider for the track's stream URI.
+/// Returns `None` if no provider is connected (the UI will show
+/// "no source connected") or if the provider fails to resolve the URI.
+async fn resolve_stream_uri(state: &SharedState<'_>, track: &Track) -> Option<String> {
+    let guard = state.lock().await;
+    let provider_guard = guard.provider.lock().await;
+    let provider = provider_guard.as_ref()?;
+    let track_id = track.id.clone();
+    let descriptor = provider.stream(&track_id).await.ok()?;
+    Some(descriptor.uri().to_string())
 }
 
 #[tauri::command]
@@ -267,6 +325,7 @@ pub async fn queue_clear(app: tauri::AppHandle, state: SharedState<'_>) -> Resul
     {
         let mut guard = state.lock().await;
         guard.queue.clear();
+        guard.player.stop();
         guard.playback.stop();
     }
     emit_queue_changed(&app, &state).await;
@@ -307,6 +366,7 @@ pub async fn set_shuffle(
 pub async fn pause(app: tauri::AppHandle, state: SharedState<'_>) -> Result<(), String> {
     {
         let mut guard = state.lock().await;
+        guard.player.pause();
         guard.playback.pause();
     }
     emit_playback_state(&app, &state).await;
@@ -317,6 +377,7 @@ pub async fn pause(app: tauri::AppHandle, state: SharedState<'_>) -> Result<(), 
 pub async fn resume(app: tauri::AppHandle, state: SharedState<'_>) -> Result<(), String> {
     {
         let mut guard = state.lock().await;
+        guard.player.resume();
         guard.playback.resume();
     }
     emit_playback_state(&app, &state).await;
@@ -330,6 +391,7 @@ pub async fn stop(
 ) -> Result<(), String> {
     {
         let mut guard = state.lock().await;
+        guard.player.stop();
         guard.playback.stop();
     }
     emit_playback_state(&app, &state).await;
@@ -355,9 +417,10 @@ pub async fn next(
         emit_queue_changed(&app, &state).await;
         emit_playback_state(&app, &state).await;
     } else {
-        // Queue ended — stop the playhead.
+        // Queue ended — stop the playhead and the rodio sink.
         {
             let mut guard = state.lock().await;
+            guard.player.stop();
             guard.playback.stop();
         }
         emit_playback_state(&app, &state).await;
@@ -395,6 +458,7 @@ pub async fn seek(
 ) -> Result<(), String> {
     {
         let mut guard = state.lock().await;
+        guard.player.seek(position_seconds);
         guard.playback.seek(position_seconds);
     }
     emit_playback_state(&app, &state).await;
@@ -409,6 +473,7 @@ pub async fn set_volume(
 ) -> Result<(), String> {
     {
         let mut guard = state.lock().await;
+        guard.player.set_volume(volume);
         guard.playback.set_volume(volume);
     }
     emit_playback_state(&app, &state).await;
@@ -423,9 +488,49 @@ pub async fn set_muted(
 ) -> Result<(), String> {
     {
         let mut guard = state.lock().await;
+        guard.player.set_muted(muted);
         guard.playback.set_muted(muted);
     }
     emit_playback_state(&app, &state).await;
+    Ok(())
+}
+
+// ─── Equalizer (Phase 4) ────────────────────────────────────────
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct EqBandPayload {
+    pub hz: u32,
+    pub gain_db: f32,
+}
+
+/// Update a single EQ band. `gain_db` is clamped to `[-12.0, +12.0]`
+/// on the Rust side; an out-of-range value is treated as the clamped
+/// value, never as an error.
+#[tauri::command]
+pub async fn set_eq_band(
+    band: EqBandPayload,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    {
+        let guard = state.lock().await;
+        guard.player.set_eq_band(band.hz, band.gain_db);
+    }
+    let _ = app.emit("eq-changed", &band);
+    Ok(())
+}
+
+/// Reset every EQ band to 0 dB (flat response).
+#[tauri::command]
+pub async fn reset_eq(
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    {
+        let guard = state.lock().await;
+        guard.player.reset_eq();
+    }
+    let _ = app.emit("eq-reset", ());
     Ok(())
 }
 
@@ -550,11 +655,12 @@ pub async fn jellyfin_login(
 
 /// Clear the active Jellyfin provider and remove its token from the
 /// keyring. Library data is left in place so the user can log back in
-/// without a full re-sync.
+/// without a full re-sync. Audio playback is stopped — the stream URL
+/// the rodio sink is consuming will no longer resolve after logout.
 #[tauri::command]
 pub async fn jellyfin_logout(state: SharedState<'_>) -> Result<(), String> {
     let (server_id_opt, secrets) = {
-        let guard = state.lock().await;
+        let mut guard = state.lock().await;
         let server_id = guard
             .provider
             .lock()
@@ -562,6 +668,8 @@ pub async fn jellyfin_logout(state: SharedState<'_>) -> Result<(), String> {
             .as_ref()
             .map(|p| p.identity().server_id.clone());
         *guard.provider.lock().await = None;
+        guard.player.stop();
+        guard.playback.stop();
         (server_id, guard.secrets.clone())
     };
     if let Some(server_id) = server_id_opt {

@@ -113,6 +113,11 @@ export interface TrackChangedPayload {
   album: string;
 }
 
+export interface EqBand {
+  hz: number;
+  gainDb: number;
+}
+
 export interface DiscoveredServer {
   name: string;
   baseUrl: string;

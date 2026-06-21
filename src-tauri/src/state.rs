@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use sinfonic_domain::{PlaybackState, QueueEngine, ServerId};
 use sinfonic_library::Store;
+use sinfonic_playback::AudioPlayer;
 use sinfonic_secrets::KeyringStore;
 use sinfonic_source_jellyfin::JellyfinProvider;
 use tokio::sync::Mutex;
@@ -17,9 +18,10 @@ use tokio::sync::Mutex;
 ///
 /// `QueueEngine` owns *what plays next* (entries, order, repeat,
 /// shuffle). `PlaybackState` owns *what's playing right now* (is it
-/// playing, where the playhead is, volume). `Store` owns the
-/// on-disk SQLite cache of the library (albums, artists, tracks,
-/// playlists + FTS5 search index). `provider` holds the optional
+/// playing, where the playhead is, volume). `AudioPlayer` owns the
+/// rodio audio engine — its cached state shadows `PlaybackState` but
+/// it's the source of truth for `position_seconds`. `Store` owns the
+/// on-disk SQLite cache of the library. `provider` holds the optional
 /// active Jellyfin session — set by `jellyfin_login`, cleared by
 /// `jellyfin_logout`. Keeping them separate follows the layering:
 /// queue is a content concern, playback is a runtime concern,
@@ -29,8 +31,13 @@ use tokio::sync::Mutex;
 pub struct AppState {
     /// The current playback queue.
     pub queue: QueueEngine,
-    /// The current playback state (playhead, volume, mute).
+    /// The current playback state (playhead, volume, mute). Mirrors
+    /// the AudioPlayer's cached state — kept here so the domain type
+    /// stays self-contained for tests and queue logic.
     pub playback: PlaybackState,
+    /// Rodio-backed audio engine. Owns the actual sink that produces
+    /// sound. Cheap to clone (just an Arc bump).
+    pub player: Arc<AudioPlayer>,
     /// The SQLite library cache. Shared by clone, so cloning the
     /// handle is cheap (just a pool clone).
     pub library: Store,
@@ -54,6 +61,7 @@ impl Default for AppState {
         Self {
             queue: QueueEngine::default(),
             playback: PlaybackState::default(),
+            player: Arc::new(AudioPlayer::new()),
             library: Store::open_memory().expect("open_memory never fails"),
             provider: Arc::new(Mutex::new(None)),
             secrets: Arc::new(secrets),
@@ -74,6 +82,7 @@ impl AppState {
         Ok(Self {
             queue: QueueEngine::default(),
             playback: PlaybackState::default(),
+            player: Arc::new(AudioPlayer::new()),
             library,
             provider: Arc::new(Mutex::new(None)),
             secrets: Arc::new(KeyringStore::new("sinfonic")),

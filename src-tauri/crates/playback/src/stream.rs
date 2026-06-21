@@ -1,19 +1,202 @@
-//! StreamHandle — owns a single in-flight stream.
+//! Stream resolution: local files vs HTTP URLs.
 //!
-//! Phase 0: stub. Phase 4 wraps the rodio `Player` + `Decoder` chain.
+//! `rodio::Decoder` requires `Read + Seek`, which means streaming an
+//! HTTP body directly isn't possible. We bridge that gap by:
+//!
+//! - **Local files** (absolute paths) → open with `std::fs::File`,
+//!   wrap in `BufReader`, decode directly. Cheap and supports seeking.
+//! - **HTTP URLs** (`http://`, `https://`) → fetch the body with
+//!   `reqwest::blocking::get`, wrap in a `Cursor`, decode from there.
+//!   Slightly wasteful for long tracks but trivially robust and
+//!   supports seeking.
+//!
+//! The decoded source is then optionally piped through [`crate::eq::apply`]
+//! so that the AudioPlayer doesn't need to know whether EQ is on.
 
-#![allow(dead_code)]
+use std::fs::File;
+use std::io::{self, BufReader, Cursor, Read};
+use std::path::Path;
+use std::time::Duration;
 
-pub struct StreamHandle;
+use rodio::{Decoder, Source};
+use thiserror::Error;
+
+#[cfg(test)]
+use std::path::PathBuf;
+
+use crate::eq::{apply, SharedEqualizer};
+
+/// Errors that can surface while opening a stream.
+#[derive(Debug, Error)]
+pub enum StreamError {
+    #[error("io error: {0}")]
+    Io(#[from] io::Error),
+    #[error("http error: {0}")]
+    Http(String),
+    #[error("decode error: {0}")]
+    Decode(String),
+    #[error("unsupported scheme: {0}")]
+    UnsupportedScheme(String),
+    #[error("invalid uri: {0}")]
+    InvalidUri(String),
+}
+
+/// Decoded audio source, ready to append to a rodio `Sink`. The source
+/// has been normalised to `f32` samples so callers don't have to worry
+/// about the source's native format.
+pub struct StreamHandle {
+    pub source: Box<dyn Source<Item = f32> + Send>,
+    /// The source's `total_duration()` if known, in seconds. `None` for
+    /// live streams.
+    pub duration_seconds: Option<u32>,
+}
 
 impl StreamHandle {
-    pub fn new() -> Self {
-        Self
+    /// Wrap the inner source with the project's EQ.
+    pub fn with_eq(self, eq: SharedEqualizer) -> Self {
+        Self {
+            source: Box::new(apply(self.source, eq)),
+            duration_seconds: self.duration_seconds,
+        }
     }
 }
 
-impl Default for StreamHandle {
-    fn default() -> Self {
-        Self::new()
+/// Open a stream URI and produce a rodio `Source`.
+///
+/// `uri` is one of:
+/// - An absolute filesystem path (e.g. `/music/track.flac`).
+/// - An `http://` or `https://` URL.
+pub fn open(uri: &str) -> Result<StreamHandle, StreamError> {
+    let uri = uri.trim();
+    if uri.is_empty() {
+        return Err(StreamError::InvalidUri("empty uri".into()));
+    }
+
+    if uri.starts_with("http://") || uri.starts_with("https://") {
+        return open_http(uri);
+    }
+    if Path::new(uri).exists() {
+        return open_local(uri);
+    }
+    Err(StreamError::UnsupportedScheme(uri.to_string()))
+}
+
+fn open_local(path: &str) -> Result<StreamHandle, StreamError> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let source = Decoder::new(reader)
+        .map_err(|e| StreamError::Decode(e.to_string()))?
+        .convert_samples::<f32>();
+    let duration_seconds = source.total_duration().map(|d| d.as_secs() as u32);
+    Ok(StreamHandle {
+        source: Box::new(source),
+        duration_seconds,
+    })
+}
+
+fn open_http(url: &str) -> Result<StreamHandle, StreamError> {
+    let bytes = download(url)?;
+    let cursor = Cursor::new(bytes);
+    let source = Decoder::new(cursor)
+        .map_err(|e| StreamError::Decode(e.to_string()))?
+        .convert_samples::<f32>();
+    let duration_seconds = source.total_duration().map(|d| d.as_secs() as u32);
+    Ok(StreamHandle {
+        source: Box::new(source),
+        duration_seconds,
+    })
+}
+
+/// Synchronous HTTP download. Returns the body as bytes. Used by
+/// [`open_http`] to bridge from `reqwest::async` (Tauri) to
+/// `rodio::Decoder` (which expects `Read + Seek`).
+fn download(url: &str) -> Result<Vec<u8>, StreamError> {
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| StreamError::Http(e.to_string()))?;
+    let mut response = client
+        .get(url)
+        .send()
+        .map_err(|e| StreamError::Http(e.to_string()))?;
+    if !response.status().is_success() {
+        return Err(StreamError::Http(format!(
+            "GET {url} returned {}",
+            response.status()
+        )));
+    }
+    let mut buf = Vec::new();
+    response
+        .read_to_end(&mut buf)
+        .map_err(StreamError::Io)?;
+    Ok(buf)
+}
+
+/// Helper for tests: write a WAV file at `path` containing a short
+/// generated tone. Returns the path on success.
+#[cfg(test)]
+pub(crate) fn write_test_wav(path: &Path, duration_seconds: u32) -> Result<PathBuf, StreamError> {
+    use std::io::Error as IoError;
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: 44_100,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec)
+        .map_err(|e| StreamError::Io(IoError::other(e.to_string())))?;
+    let total_samples = spec.sample_rate * duration_seconds;
+    for n in 0..total_samples {
+        let t = n as f32 / spec.sample_rate as f32;
+        let sample = (t * 440.0 * 2.0 * std::f32::consts::PI).sin();
+        let amplitude = (i16::MAX as f32) * sample * 0.2;
+        writer
+            .write_sample(amplitude as i16)
+            .map_err(|e| StreamError::Io(IoError::other(e.to_string())))?;
+        writer
+            .write_sample(amplitude as i16)
+            .map_err(|e| StreamError::Io(IoError::other(e.to_string())))?;
+    }
+    writer
+        .finalize()
+        .map_err(|e| StreamError::Io(IoError::other(e.to_string())))?;
+    Ok(path.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_rejects_empty_uri() {
+        assert!(matches!(open(""), Err(StreamError::InvalidUri(_))));
+    }
+
+    #[test]
+    fn open_unknown_path_returns_unsupported() {
+        let bogus = "/tmp/does-not-exist-sinfonic-abc.flac";
+        let result = open(bogus);
+        // Falls through "not http" + "path doesn't exist" → unsupported
+        // scheme error.
+        assert!(matches!(result, Err(StreamError::UnsupportedScheme(_))));
+    }
+
+    #[test]
+    fn test_wav_round_trip() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("sinfonic-test-{}.wav", std::process::id()));
+        let written = write_test_wav(&path, 1).expect("write wav");
+        let handle = open(written.to_str().unwrap()).expect("open wav");
+        let mut source = handle.source;
+        let mut count = 0_usize;
+        for sample in source.by_ref() {
+            count += 1;
+            // Touch the sample so the optimiser can't elide the loop.
+            let _ = sample.abs();
+        }
+        // 44_100 Hz × 2 channels × 1 s = 88_200 samples.
+        assert!((88_000..=88_500).contains(&count), "got {count} samples");
+        std::fs::remove_file(&written).ok();
     }
 }

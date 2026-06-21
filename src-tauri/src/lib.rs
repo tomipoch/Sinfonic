@@ -10,12 +10,16 @@
 //! - Phase 1: the queue + playback commands (`queue_*`, `play_track`,
 //!   `next`, `previous`, `pause`, `resume`, `set_repeat`, `set_shuffle`,
 //!   `set_volume`, `set_muted`, `seek`, `stop`) operate on the
-//!   in-memory `AppState` and emit real events. Audio playback is still
-//!   stubbed (Phase 4 wires rodio).
+//!   in-memory `AppState` and emit real events.
 //! - Phases 2–3: library cache (rusqlite) and Jellyfin provider land.
+//! - Phase 4: rodio-backed `AudioPlayer` replaces the stub. Stream URIs
+//!   from the active provider are resolved and pumped through a
+//!   Symphonia decoder, optional 10-band graphic EQ, and out to the
+//!   default OS sink. A background poller thread emits
+//!   `playback-state-changed` every 250ms and `track-changed` on end.
 
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
 mod commands;
@@ -57,6 +61,50 @@ pub fn run() {
                     AppState::new()
                 }
             };
+
+            // Wire the AudioPlayer's events to Tauri. The player emits
+            // PlayerEvent::StateChanged on every position poll and
+            // PlayerEvent::TrackEnded when the rodio sink runs dry;
+            // we forward both to the webview as typed events.
+            let app_handle = app.handle().clone();
+            state.player.set_event_callback(move |event| {
+                match event {
+                    sinfonic_playback::PlayerEvent::StateChanged {
+                        track_id,
+                        position_seconds,
+                        is_playing,
+                        volume,
+                        muted,
+                        duration_seconds,
+                    } => {
+                        let payload = PlaybackStatePayload {
+                            is_playing,
+                            position_seconds,
+                            duration_seconds,
+                            volume,
+                            muted,
+                            ..Default::default()
+                        };
+                        let _ = app_handle.emit(EventName::PlaybackStateChanged.as_str(), &payload);
+                        if let Some(track_id) = track_id {
+                            let _ = app_handle.emit(
+                                "track-position",
+                                &serde_json::json!({
+                                    "trackId": track_id,
+                                    "positionSeconds": position_seconds,
+                                }),
+                            );
+                        }
+                    }
+                    sinfonic_playback::PlayerEvent::TrackEnded { track_id } => {
+                        let _ = app_handle.emit(
+                            "track-ended",
+                            &serde_json::json!({ "trackId": track_id }),
+                        );
+                    }
+                }
+            });
+
             app.manage(Arc::new(Mutex::new(state)));
             Ok(())
         })
@@ -66,7 +114,7 @@ pub fn run() {
             commands::get_albums,
             commands::get_artists,
             commands::get_tracks,
-            // Playback (Phase 1, in-memory)
+            // Playback (Phase 1 + Phase 4 audio)
             commands::get_playback_state,
             commands::get_queue,
             commands::play_track,
@@ -87,6 +135,8 @@ pub fn run() {
             commands::seek,
             commands::set_volume,
             commands::set_muted,
+            commands::set_eq_band,
+            commands::reset_eq,
             // Search (Phase 2)
             commands::search,
             // Jellyfin (Phase 3)
