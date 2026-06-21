@@ -141,6 +141,32 @@ export interface AlbumArtResponse {
 export const providerImageBytes = (albumId: string, tag?: string | null) =>
   invoke<AlbumArtResponse>("provider_image_bytes", { albumId, tag });
 
+// ─── Last.fm (Phase 7) ─────────────────────────────────────────
+
+export interface LastFmStatus {
+  configured: boolean;
+  authenticated: boolean;
+  username: string | null;
+}
+
+export const lastfmConnect = (params: {
+  apiKey: string;
+  apiSecret: string;
+  username: string;
+  password: string;
+}) =>
+  invoke<LastFmStatus>("lastfm_connect", {
+    apiKey: params.apiKey,
+    apiSecret: params.apiSecret,
+    username: params.username,
+    password: params.password,
+  });
+
+export const lastfmDisconnect = () =>
+  invoke<LastFmStatus>("lastfm_disconnect");
+
+export const lastfmStatus = () => invoke<LastFmStatus>("lastfm_status");
+
 // ─── Misc ───────────────────────────────────────────────────────
 
 export const greet = (name: string) => invoke<string>("greet", { name });
