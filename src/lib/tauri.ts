@@ -130,6 +130,17 @@ export const providerActiveServer = () =>
 export const providerSyncLibrary = () =>
   invoke<void>("provider_sync_library");
 
+// ─── Album art (Phase 7) ────────────────────────────────────────
+
+export interface AlbumArtResponse {
+  bytes: number[];
+  contentType: string;
+  cached: boolean;
+}
+
+export const providerImageBytes = (albumId: string, tag?: string | null) =>
+  invoke<AlbumArtResponse>("provider_image_bytes", { albumId, tag });
+
 // ─── Misc ───────────────────────────────────────────────────────
 
 export const greet = (name: string) => invoke<string>("greet", { name });
