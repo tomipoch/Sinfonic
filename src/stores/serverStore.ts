@@ -3,17 +3,19 @@
 import { create } from "zustand";
 
 import {
-  jellyfinActiveServer,
   jellyfinDiscover,
   jellyfinLogin,
-  jellyfinLogout,
-  jellyfinServers,
-  jellyfinSyncLibrary,
+  providerActiveServer,
+  providerLogout,
+  providerServers,
+  providerSyncLibrary,
+  subsonicLogin,
 } from "../lib/tauri";
 import type {
   ConnectedServer,
   DiscoveredServer,
   JellyfinLoginRequest,
+  SubsonicLoginRequest,
 } from "../types/domain";
 
 export type ServerKind = "jellyfin" | "subsonic" | "local";
@@ -28,6 +30,12 @@ export interface Server {
 
 export type SyncStatus = "idle" | "syncing" | "success" | "error";
 
+export type LoginRequest = {
+  kind: "jellyfin";
+} & JellyfinLoginRequest | {
+  kind: "subsonic";
+} & SubsonicLoginRequest;
+
 export interface ServerStore {
   servers: Server[];
   activeServerId: string | null;
@@ -38,7 +46,7 @@ export interface ServerStore {
   refreshServers: () => Promise<void>;
   refreshActive: () => Promise<void>;
   discover: () => Promise<DiscoveredServer[]>;
-  login: (req: JellyfinLoginRequest) => Promise<ConnectedServer>;
+  login: (req: LoginRequest) => Promise<ConnectedServer>;
   logout: () => Promise<void>;
   syncLibrary: () => Promise<void>;
   setSyncStatus: (status: SyncStatus) => void;
@@ -54,7 +62,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
 
   refreshServers: async () => {
     try {
-      const servers = await jellyfinServers();
+      const servers = await providerServers();
       set({ servers: servers as unknown as Server[] });
     } catch (e) {
       set({ error: (e as Error).message });
@@ -63,7 +71,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
 
   refreshActive: async () => {
     try {
-      const id = await jellyfinActiveServer();
+      const id = await providerActiveServer();
       set({ activeServerId: id });
     } catch (e) {
       set({ error: (e as Error).message });
@@ -84,7 +92,17 @@ export const useServerStore = create<ServerStore>((set, get) => ({
   login: async (req) => {
     set({ error: null });
     try {
-      const connected = await jellyfinLogin(req);
+      const connected = req.kind === "jellyfin"
+        ? await jellyfinLogin({
+            baseUrl: req.baseUrl,
+            username: req.username,
+            password: req.password,
+          })
+        : await subsonicLogin({
+            baseUrl: req.baseUrl,
+            username: req.username,
+            password: req.password,
+          });
       set({ activeServerId: connected.serverId });
       // Refresh the full list so the Settings view can show it.
       await get().refreshServers();
@@ -98,7 +116,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
 
   logout: async () => {
     try {
-      await jellyfinLogout();
+      await providerLogout();
       set({ activeServerId: null });
       await get().refreshServers();
     } catch (e) {
@@ -109,7 +127,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
   syncLibrary: async () => {
     set({ lastSync: "syncing", error: null });
     try {
-      await jellyfinSyncLibrary();
+      await providerSyncLibrary();
       set({ lastSync: "success" });
     } catch (e) {
       set({ lastSync: "error", error: (e as Error).message });

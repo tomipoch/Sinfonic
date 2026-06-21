@@ -66,7 +66,7 @@ export const resetEq = () => invoke<void>("reset_eq");
 export const search = (query: string, limit = 20) =>
   invoke<SearchResults>("search", { query, limit });
 
-// ─── Jellyfin provider ──────────────────────────────────────────
+// ─── Provider (Jellyfin + Subsonic) ─────────────────────────────
 
 export const jellyfinDiscover = () =>
   invoke<DiscoveredServer[]>("jellyfin_discover");
@@ -78,16 +78,23 @@ export const jellyfinLogin = (params: {
 }) =>
   invoke<ConnectedServer>("jellyfin_login", { request: params });
 
-export const jellyfinLogout = () => invoke<void>("jellyfin_logout");
+export const subsonicLogin = (params: {
+  baseUrl: string;
+  username: string;
+  password: string;
+}) =>
+  invoke<ConnectedServer>("subsonic_login", { request: params });
 
-export const jellyfinServers = () =>
-  invoke<ConnectedServer[]>("jellyfin_servers");
+export const providerLogout = () => invoke<void>("provider_logout");
 
-export const jellyfinActiveServer = () =>
-  invoke<string | null>("jellyfin_active_server");
+export const providerServers = () =>
+  invoke<ConnectedServer[]>("provider_servers");
 
-export const jellyfinSyncLibrary = () =>
-  invoke<void>("jellyfin_sync_library");
+export const providerActiveServer = () =>
+  invoke<string | null>("provider_active_server");
+
+export const providerSyncLibrary = () =>
+  invoke<void>("provider_sync_library");
 
 // ─── Misc ───────────────────────────────────────────────────────
 
