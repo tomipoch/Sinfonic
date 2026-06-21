@@ -25,6 +25,7 @@ use tokio::sync::Mutex;
 mod commands;
 mod events;
 mod lastfm;
+mod scrobble_watcher;
 mod state;
 
 pub use events::{
@@ -107,15 +108,32 @@ pub fn run() {
                 }
             });
 
-            // Resume a previously-persisted Last.fm session, if any.
-            // We spawn on the tokio runtime because the Tauri setup
-            // closure is sync; network errors are swallowed (we just
-            // stay disconnected until the user re-enters credentials).
+            // Resume a previously-persisted Last.fm session, if any,
+            // and spawn the scrobble watcher. Both run on the tokio
+            // runtime because the Tauri setup closure is sync; network
+            // errors are swallowed (we just stay disconnected until the
+            // user re-enters credentials).
             let state_for_resume = Arc::new(Mutex::new(state));
-            let resume_handle = state_for_resume.clone();
+            let setup_handle = state_for_resume.clone();
             tauri::async_runtime::spawn(async move {
-                let state_ref = resume_handle.lock().await;
-                commands::try_resume_lastfm(&state_ref).await;
+                // 1) Resume a persisted session (cheap — does not
+                //    block startup if Last.fm is unreachable).
+                {
+                    let state_ref = setup_handle.lock().await;
+                    commands::try_resume_lastfm(&state_ref).await;
+                }
+                // 2) Take clones of the bits the watcher needs, then
+                //    hand them off. This keeps the watcher's mutex
+                //    pressure off the IPC lock.
+                let (queue_clone, player_clone, lastfm_clone) = {
+                    let state_ref = setup_handle.lock().await;
+                    (
+                        Arc::new(Mutex::new(state_ref.queue.clone())),
+                        state_ref.player.clone(),
+                        state_ref.lastfm.clone(),
+                    )
+                };
+                scrobble_watcher::run(queue_clone, player_clone, lastfm_clone).await;
             });
 
             app.manage(state_for_resume);
