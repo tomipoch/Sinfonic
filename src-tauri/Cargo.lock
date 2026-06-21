@@ -3817,6 +3817,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sinfonic-domain",
+ "sinfonic-lastfm",
  "sinfonic-library",
  "sinfonic-playback",
  "sinfonic-secrets",
@@ -3838,6 +3839,22 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "sinfonic-lastfm"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "md5",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sinfonic-domain",
+ "thiserror 1.0.69",
+ "tokio",
+ "url",
+ "wiremock",
 ]
 
 [[package]]

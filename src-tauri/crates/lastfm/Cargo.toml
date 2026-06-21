@@ -1,0 +1,24 @@
+[package]
+name = "sinfonic-lastfm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Last.fm / Libre.fm scrobble client (audioscrobbler 2.0)"
+
+[dependencies]
+sinfonic-domain = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+url = { workspace = true }
+md5 = { workspace = true }
+hex = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+wiremock = "0.6"
+tokio = { workspace = true }

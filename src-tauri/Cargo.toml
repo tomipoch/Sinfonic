@@ -54,6 +54,7 @@ sinfonic-source-local = { path = "crates/source-local" }
 sinfonic-playback = { path = "crates/playback" }
 sinfonic-library = { path = "crates/library" }
 sinfonic-secrets = { path = "crates/secrets" }
+sinfonic-lastfm = { path = "crates/lastfm" }
 
 # ─────────────────────────────────────────────────────────────
 # Tauri app package (root)
@@ -99,3 +100,4 @@ sinfonic-source-local = { workspace = true }
 sinfonic-playback = { workspace = true }
 sinfonic-library = { workspace = true }
 sinfonic-secrets = { workspace = true }
+sinfonic-lastfm = { workspace = true }
