@@ -170,6 +170,7 @@ pub fn run() {
             commands::set_muted,
             commands::set_eq_band,
             commands::reset_eq,
+            commands::get_eq_bands,
             // Search (Phase 2)
             commands::search,
             // Provider (Phase 3 + Phase 5)

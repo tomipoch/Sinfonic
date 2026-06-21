@@ -618,6 +618,25 @@ pub async fn reset_eq(
     Ok(())
 }
 
+/// Snapshot the current EQ bands so the UI can hydrate its sliders
+/// on mount. Order matches the player's `DEFAULT_BANDS` (60 Hz …
+/// 16 kHz).
+#[tauri::command]
+pub async fn get_eq_bands(
+    state: SharedState<'_>,
+) -> Result<Vec<EqBandPayload>, String> {
+    let guard = state.lock().await;
+    Ok(guard
+        .player
+        .eq_bands()
+        .into_iter()
+        .map(|b| EqBandPayload {
+            hz: b.hz as u32,
+            gain_db: b.gain_db,
+        })
+        .collect())
+}
+
 // ─── Search (Phase 2) ───────────────────────────────────────────
 
 #[tauri::command]
