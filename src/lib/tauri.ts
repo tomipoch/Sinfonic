@@ -20,6 +20,11 @@ import type {
   Track,
 } from "../types/domain";
 
+interface AlbumDetail {
+  album: Album;
+  tracks: Track[];
+}
+
 // ─── Library ────────────────────────────────────────────────────
 
 export const getAlbums = (offset = 0, limit = 50) =>
@@ -31,6 +36,9 @@ export const getArtists = (offset = 0, limit = 50) =>
 export const getTracks = (offset = 0, limit = 50) =>
   invoke<PagedResponse<Track>>("get_tracks", { offset, limit });
 
+export const getAlbumDetail = (albumId: string) =>
+  invoke<AlbumDetail | null>("get_album_detail", { albumId });
+
 // ─── Playback ───────────────────────────────────────────────────
 
 export const getPlaybackState = () =>
@@ -40,6 +48,9 @@ export const getQueue = () => invoke<QueueSnapshot>("get_queue");
 
 export const playTrack = (track: Track) =>
   invoke<string>("play_track", { track });
+
+export const playAlbum = (tracks: Track[]) =>
+  invoke<void>("play_album", { tracks });
 
 export const pause = () => invoke<void>("pause");
 export const resume = () => invoke<void>("resume");

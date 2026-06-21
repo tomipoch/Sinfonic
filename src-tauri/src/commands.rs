@@ -40,8 +40,8 @@ use crate::events::{
 };
 use crate::state::AppState;
 use sinfonic_domain::{
-    Album, Artist, PagedResponse, QueueEntryId, QueueSnapshot, RepeatMode, SearchResults, ServerId,
-    Track, TrackId,
+    Album, AlbumDetail, AlbumId, Artist, PagedResponse, QueueEntryId, QueueSnapshot, RepeatMode,
+    SearchResults, ServerId, Track, TrackId,
 };
 use sinfonic_secrets::SecretStore;
 use sinfonic_source::MusicProvider;
@@ -122,6 +122,81 @@ pub async fn get_tracks(
         .library
         .list_tracks(&server_id, offset, limit)
         .map_err(|e| e.to_string())
+}
+
+/// Album detail: the album row plus its tracks in disc/track-number
+/// order. Reads from the SQLite cache (same scope as `get_albums`),
+/// so the detail view works offline after a sync. Returns `None`
+/// for the album when the cache doesn't know about that id (the
+/// frontend shows a "not found" state instead of erroring).
+#[tauri::command]
+pub async fn get_album_detail(
+    album_id: String,
+    state: SharedState<'_>,
+) -> Result<Option<AlbumDetail>, String> {
+    let server_id = active_server_id(&state).await;
+    let parsed = AlbumId::new(album_id);
+    let guard = state.lock().await;
+    let album = guard
+        .library
+        .get_album(&server_id, &parsed)
+        .map_err(|e| e.to_string())?;
+    let Some(album) = album else {
+        return Ok(None);
+    };
+    let tracks = guard
+        .library
+        .list_album_tracks(&server_id, &parsed)
+        .map_err(|e| e.to_string())?;
+    Ok(Some(AlbumDetail { album, tracks }))
+}
+
+/// Replace the queue with `tracks` and start playing the first one
+/// in one atomic step. `play_track` only handles a single track and
+/// would clobber the queue; `queue_play_now` queues without
+/// starting playback. `play_album` is the right shape for the
+/// "Play album" button in the UI.
+#[tauri::command]
+pub async fn play_album(
+    tracks: Vec<Track>,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    if tracks.is_empty() {
+        return Err("play_album: track list is empty".into());
+    }
+    let first = tracks[0].clone();
+
+    {
+        let mut guard = state.lock().await;
+        guard.queue.play_now(&tracks);
+    }
+
+    let stream_uri = resolve_stream_uri(&state, &first).await;
+    let fallback_duration = first.duration_seconds;
+    let actual_duration = match stream_uri.as_deref() {
+        Some(uri) => {
+            let guard = state.lock().await;
+            match guard.player.play(first.id.clone(), uri) {
+                Ok(duration) => duration,
+                Err(e) => {
+                    eprintln!("sinfonic: player.play failed: {e}");
+                    fallback_duration
+                }
+            }
+        }
+        None => fallback_duration,
+    };
+
+    {
+        let mut guard = state.lock().await;
+        guard.playback.start(actual_duration);
+    }
+
+    emit_queue_changed(&app, &state).await;
+    emit_track_changed(&app, &state, &first).await;
+    emit_playback_state(&app, &state).await;
+    Ok(())
 }
 
 // ─── Playback (Phase 1: in-memory only) ─────────────────────────
