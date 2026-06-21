@@ -22,7 +22,10 @@ mod commands;
 mod events;
 mod state;
 
-pub use events::{EventName, PlaybackStatePayload, QueueSnapshotPayload, TrackChangedPayload};
+pub use events::{
+    EventName, LibrarySyncStatusPayload, PlaybackStatePayload, QueueSnapshotPayload,
+    TrackChangedPayload,
+};
 pub use state::AppState;
 
 /// Entrypoint invoked by `main.rs` (and the mobile target on iOS/Android).
@@ -89,6 +92,10 @@ pub fn run() {
             // Jellyfin (Phase 3)
             commands::jellyfin_discover,
             commands::jellyfin_login,
+            commands::jellyfin_logout,
+            commands::jellyfin_servers,
+            commands::jellyfin_active_server,
+            commands::jellyfin_sync_library,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

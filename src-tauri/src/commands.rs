@@ -13,9 +13,10 @@
 //! - Phase 2: library reads (`get_albums`, `get_artists`,
 //!   `get_tracks`, `search`) are wired against the real SQLite
 //!   cache. They return real data. The default `server_id` is
-//!   "server-1" until Phase 3 (Jellyfin auth) supplies the real
-//!   one.
-//! - Phase 3: Jellyfin provider + login flow.
+//!   `"server-local"` until a Jellyfin login provides the real one.
+//! - Phase 3: Jellyfin provider + login flow. Library reads now
+//!   prefer the active Jellyfin `ServerId` if a session is
+//!   connected, falling back to the placeholder otherwise.
 
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
@@ -24,24 +25,41 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::events::{
-    EventName, PlaybackStatePayload, QueueSnapshotPayload, TrackChangedPayload,
+    EventName, LibrarySyncStatusPayload, PlaybackStatePayload, QueueSnapshotPayload,
+    TrackChangedPayload,
 };
 use crate::state::AppState;
 use sinfonic_domain::{
     Album, Artist, PagedResponse, QueueEntryId, QueueSnapshot, RepeatMode, SearchResults, ServerId,
     Track, TrackId,
 };
+use sinfonic_secrets::SecretStore;
+use sinfonic_source::MusicProvider;
+use sinfonic_source_jellyfin::auth::{login as jellyfin_login_inner, LoginRequest};
 
 type SharedState<'a> = State<'a, Arc<Mutex<AppState>>>;
 
-/// The default `ServerId` used by library reads until Phase 3
-/// supplies the real one. Single-server installs never see a
-/// different value; multi-server installs will get a list and
-/// the UI will pick one.
+/// Placeholder `ServerId` used when no Jellyfin session is active.
+/// Library reads return empty pages in that state instead of erroring
+/// — the UI surfaces a "connect a server" hint.
 const DEFAULT_SERVER_ID: &str = "server-local";
 
 fn default_server_id() -> ServerId {
     ServerId::new(DEFAULT_SERVER_ID)
+}
+
+/// Return the `ServerId` of the active Jellyfin provider if one is
+/// connected, otherwise the placeholder. Used by library reads so
+/// they automatically follow the active session.
+async fn active_server_id(state: &SharedState<'_>) -> ServerId {
+    let guard = state.lock().await;
+    let provider_guard = guard.provider.lock().await;
+    let server_id = provider_guard
+        .as_ref()
+        .map(|p| p.identity().server_id.clone())
+        .unwrap_or_else(default_server_id);
+    drop(provider_guard);
+    server_id
 }
 
 // ─── Greet (kept from the original scaffold) ────────────────────
@@ -59,10 +77,11 @@ pub async fn get_albums(
     limit: usize,
     state: SharedState<'_>,
 ) -> Result<PagedResponse<Album>, String> {
+    let server_id = active_server_id(&state).await;
     let guard = state.lock().await;
     guard
         .library
-        .list_albums(&default_server_id(), offset, limit)
+        .list_albums(&server_id, offset, limit)
         .map_err(|e| e.to_string())
 }
 
@@ -72,10 +91,11 @@ pub async fn get_artists(
     limit: usize,
     state: SharedState<'_>,
 ) -> Result<PagedResponse<Artist>, String> {
+    let server_id = active_server_id(&state).await;
     let guard = state.lock().await;
     guard
         .library
-        .list_artists(&default_server_id(), offset, limit)
+        .list_artists(&server_id, offset, limit)
         .map_err(|e| e.to_string())
 }
 
@@ -85,10 +105,11 @@ pub async fn get_tracks(
     limit: usize,
     state: SharedState<'_>,
 ) -> Result<PagedResponse<Track>, String> {
+    let server_id = active_server_id(&state).await;
     let guard = state.lock().await;
     guard
         .library
-        .list_tracks(&default_server_id(), offset, limit)
+        .list_tracks(&server_id, offset, limit)
         .map_err(|e| e.to_string())
 }
 
@@ -417,15 +438,18 @@ pub async fn search(
     state: SharedState<'_>,
 ) -> Result<SearchResults, String> {
     let limit = limit.unwrap_or(20);
+    let server_id = active_server_id(&state).await;
     let guard = state.lock().await;
     guard
         .library
-        .search(&default_server_id(), &query, limit)
+        .search(&server_id, &query, limit)
         .map_err(|e| e.to_string())
 }
 
 // ─── Jellyfin provider (Phase 3) ────────────────────────────────
 
+/// Wire-format mirror of `sinfonic_source_jellyfin::discovery::DiscoveredJellyfinServer`.
+/// Kept here so the frontend never imports the crate directly.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DiscoveredServer {
     pub name: String,
@@ -433,19 +457,222 @@ pub struct DiscoveredServer {
     pub server_id: String,
 }
 
-#[tauri::command]
-pub async fn jellyfin_discover() -> Result<Vec<DiscoveredServer>, String> {
-    Ok(Vec::new())
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConnectedServer {
+    pub server_id: String,
+    pub kind: String,
+    pub name: String,
+    pub base_url: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct JellyfinLoginRequest {
+    pub base_url: String,
+    pub username: String,
+    pub password: String,
+}
+
+/// Discover Jellyfin servers on the local network. Listens on UDP
+/// 7359 for ~1.5s and falls back to a localhost probe if nothing
+/// answers.
+#[tauri::command]
+pub async fn jellyfin_discover() -> Result<Vec<DiscoveredServer>, String> {
+    use sinfonic_source_jellyfin::discovery;
+    let servers =
+        discovery::discover_jellyfin_servers(std::time::Duration::from_millis(1500)).await;
+    Ok(servers
+        .into_iter()
+        .map(|s| DiscoveredServer {
+            name: s.name,
+            base_url: s.base_url,
+            server_id: s.server_id,
+        })
+        .collect())
+}
+
+/// Log in to a Jellyfin server, persist the token in the OS keyring,
+/// upsert the server row in the SQLite cache, and install the
+/// provider on the app state.
 #[tauri::command]
 pub async fn jellyfin_login(
-    base_url: String,
-    username: String,
-    password: String,
-) -> Result<ServerId, String> {
-    let _ = (base_url, username, password);
-    Err("Jellyfin login not implemented in skeleton".into())
+    request: JellyfinLoginRequest,
+    state: SharedState<'_>,
+) -> Result<ConnectedServer, String> {
+    let (device_id, secrets) = {
+        let guard = state.lock().await;
+        (guard.device_id.clone(), guard.secrets.clone())
+    };
+
+    let login_request = LoginRequest {
+        base_url: request.base_url.clone(),
+        username: request.username.clone(),
+        password: request.password.clone(),
+        device_id: device_id.clone(),
+    };
+
+    let success = jellyfin_login_inner(login_request)
+        .await
+        .map_err(|e| format!("login failed: {e}"))?;
+
+    // Persist token before swapping in the provider so a keyring
+    // failure doesn't leave a half-logged-in app.
+    let token = success.session.access_token.clone();
+    secrets
+        .save_token(success.server_id.clone(), token)
+        .await
+        .map_err(|e| format!("save token: {e}"))?;
+
+    // Upsert the server row so `servers` knows about it before we
+    // hand the provider to the library cache.
+    let provider = sinfonic_source_jellyfin::JellyfinProvider::new(success.session.clone())
+        .map_err(|e| format!("build provider: {e}"))?;
+    let server_name = provider
+        .refresh_server_name()
+        .await
+        .unwrap_or_else(|_| success.session.base_url.clone());
+
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .upsert_server(&success.server_id, "jellyfin", &server_name, &request.base_url)
+            .map_err(|e| format!("upsert server: {e}"))?;
+        *guard.provider.lock().await = Some(provider);
+    }
+
+    Ok(ConnectedServer {
+        server_id: success.server_id.to_string(),
+        kind: "jellyfin".into(),
+        name: server_name,
+        base_url: request.base_url,
+    })
+}
+
+/// Clear the active Jellyfin provider and remove its token from the
+/// keyring. Library data is left in place so the user can log back in
+/// without a full re-sync.
+#[tauri::command]
+pub async fn jellyfin_logout(state: SharedState<'_>) -> Result<(), String> {
+    let (server_id_opt, secrets) = {
+        let guard = state.lock().await;
+        let server_id = guard
+            .provider
+            .lock()
+            .await
+            .as_ref()
+            .map(|p| p.identity().server_id.clone());
+        *guard.provider.lock().await = None;
+        (server_id, guard.secrets.clone())
+    };
+    if let Some(server_id) = server_id_opt {
+        let _ = secrets.delete_token(server_id).await;
+    }
+    Ok(())
+}
+
+/// Trigger a sync: fetch the first page of albums / artists / tracks
+/// from the active provider and pipe them into the SQLite cache.
+/// Subsequent reads serve from the cache.
+#[tauri::command]
+pub async fn jellyfin_sync_library(
+    state: SharedState<'_>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    use sinfonic_domain::PagedRequest;
+
+    let payload_start = LibrarySyncStatusPayload {
+        server_id: None,
+        state: "started".into(),
+        progress: 0.0,
+    };
+    let _ = app.emit(EventName::LibrarySyncStatus.as_str(), payload_start);
+
+    // Fetch outside the lock; we only hold the lock when swapping
+    // results into the SQLite cache.
+    let (provider_snapshot, library_handle) = {
+        let guard = state.lock().await;
+        let provider = guard
+            .provider
+            .lock()
+            .await
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "no active Jellyfin session".to_string())?;
+        (provider, guard.library.clone())
+    };
+
+    let server_id = provider_snapshot.identity().server_id.clone();
+
+    let albums = provider_snapshot
+        .albums(PagedRequest::new(0, 200))
+        .await
+        .map_err(|e| format!("albums: {e}"))?;
+    library_handle
+        .replace_albums(&server_id, &albums.items)
+        .map_err(|e| format!("upsert albums: {e}"))?;
+
+    let artists = provider_snapshot
+        .artists(PagedRequest::new(0, 200))
+        .await
+        .map_err(|e| format!("artists: {e}"))?;
+    library_handle
+        .replace_artists(&server_id, &artists.items)
+        .map_err(|e| format!("upsert artists: {e}"))?;
+
+    let tracks = provider_snapshot
+        .tracks(PagedRequest::new(0, 500))
+        .await
+        .map_err(|e| format!("tracks: {e}"))?;
+    library_handle
+        .replace_tracks(&server_id, &tracks.items)
+        .map_err(|e| format!("upsert tracks: {e}"))?;
+
+    let payload_done = LibrarySyncStatusPayload {
+        server_id: Some(server_id.to_string()),
+        state: "complete".into(),
+        progress: 1.0,
+    };
+    let _ = app.emit(EventName::LibrarySyncStatus.as_str(), payload_done);
+
+    Ok(())
+}
+
+/// Return the list of servers the user has configured (rows in the
+/// `servers` table). The active server — if any — is the first entry.
+#[tauri::command]
+pub async fn jellyfin_servers(
+    state: SharedState<'_>,
+) -> Result<Vec<ConnectedServer>, String> {
+    let guard = state.lock().await;
+    let conn = guard.library.connection().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT server_id, kind, name, base_url FROM servers ORDER BY name")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ConnectedServer {
+                server_id: row.get(0)?,
+                kind: row.get(1)?,
+                name: row.get(2)?,
+                base_url: row.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let items: Vec<ConnectedServer> = rows.filter_map(|r| r.ok()).collect();
+    Ok(items)
+}
+
+/// Surface the active server id (or `null` if none). Used by the
+/// frontend to keep the Zustand store in sync.
+#[tauri::command]
+pub async fn jellyfin_active_server(
+    state: SharedState<'_>,
+) -> Result<Option<String>, String> {
+    let guard = state.lock().await;
+    let provider = guard.provider.lock().await;
+    Ok(provider
+        .as_ref()
+        .map(|p| p.identity().server_id.to_string()))
 }
 
 // ─── Internal event helpers ─────────────────────────────────────

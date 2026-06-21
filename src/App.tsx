@@ -12,6 +12,7 @@ import { HomeView } from "./components/views/HomeView";
 import { LibraryView } from "./components/views/LibraryView";
 import { QueueView } from "./components/views/QueueView";
 import { SearchView } from "./components/views/SearchView";
+import { SettingsView } from "./components/views/SettingsView";
 import { TracksTab } from "./components/views/TracksTab";
 
 export default function App() {
@@ -28,6 +29,7 @@ export default function App() {
         </Route>
         <Route path="queue" element={<QueueView />} />
         <Route path="search" element={<SearchView />} />
+        <Route path="settings" element={<SettingsView />} />
         <Route path="*" element={<HomeView />} />
       </Route>
     </Routes>

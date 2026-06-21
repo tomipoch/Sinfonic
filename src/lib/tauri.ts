@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Album,
   Artist,
+  ConnectedServer,
   DiscoveredServer,
   PagedResponse,
   PlaybackStatePayload,
@@ -65,12 +66,23 @@ export const search = (query: string, limit = 20) =>
 export const jellyfinDiscover = () =>
   invoke<DiscoveredServer[]>("jellyfin_discover");
 
-export const jellyfinLogin = (
-  baseUrl: string,
-  username: string,
-  password: string,
-) =>
-  invoke<string>("jellyfin_login", { baseUrl, username, password });
+export const jellyfinLogin = (params: {
+  baseUrl: string;
+  username: string;
+  password: string;
+}) =>
+  invoke<ConnectedServer>("jellyfin_login", { request: params });
+
+export const jellyfinLogout = () => invoke<void>("jellyfin_logout");
+
+export const jellyfinServers = () =>
+  invoke<ConnectedServer[]>("jellyfin_servers");
+
+export const jellyfinActiveServer = () =>
+  invoke<string | null>("jellyfin_active_server");
+
+export const jellyfinSyncLibrary = () =>
+  invoke<void>("jellyfin_sync_library");
 
 // ─── Misc ───────────────────────────────────────────────────────
 
