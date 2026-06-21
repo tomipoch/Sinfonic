@@ -6,10 +6,35 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Audio playback engine (rodio + dsyneq + symphonia)"
+description = "Audio playback engine (rodio + custom 10-band biquad EQ)"
 
 [dependencies]
 sinfonic-domain = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+# Audio pipeline. rodio 0.20 has no `playback` feature gate — the
+# default features already include cpal-based playback (the OS sink).
+# We disable defaults and only enable Symphonia for the formats
+# Jellyfin serves (FLAC, MP3, MP4/AAC, Vorbis/Opus, WAV).
+rodio = { version = "0.20", default-features = false, features = [
+    "symphonia-flac",
+    "symphonia-mp3",
+    "symphonia-isomp4",
+    "symphonia-vorbis",
+    "symphonia-wav",
+    "symphonia-aac",
+] }
+
+# Streaming the Jellyfin track URL into rodio's Decoder (which needs
+# `Read + Seek`) via a temp file on disk.
+reqwest = { workspace = true }
+
+# Async runtime + sync primitives for the position-polling task.
+tokio = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+# Generated-WAV helper for offline AudioPlayer tests.
+hound = "3.5"

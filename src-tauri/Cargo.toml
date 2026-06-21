@@ -22,7 +22,7 @@ async-trait = "0.1"
 futures = "0.3"
 
 # HTTP
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 url = "2"
 
 # Hashing (Subsonic auth)
@@ -36,6 +36,9 @@ r2d2_sqlite = "0.24"
 
 # Secrets
 keyring = "3"
+
+# Synchronisation primitives (faster, non-poisoning Mutexes for hot paths)
+parking_lot = "0.12"
 
 # Tauri
 tauri = { version = "2", features = [] }
