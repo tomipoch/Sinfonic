@@ -118,3 +118,24 @@ export interface DiscoveredServer {
   baseUrl: string;
   serverId: string;
 }
+
+export interface ConnectedServer {
+  serverId: string;
+  kind: string;
+  name: string;
+  baseUrl: string;
+}
+
+export interface JellyfinLoginRequest {
+  baseUrl: string;
+  username: string;
+  password: string;
+}
+
+export type LibrarySyncState = "started" | "complete" | "failed";
+
+export interface LibrarySyncStatus {
+  serverId: string | null;
+  state: LibrarySyncState | string;
+  progress: number;
+}

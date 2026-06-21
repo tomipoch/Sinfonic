@@ -9,6 +9,7 @@ const links: ReadonlyArray<{ to: string; label: string; end?: boolean }> = [
   { to: "/library", label: "Library" },
   { to: "/queue", label: "Queue" },
   { to: "/search", label: "Search" },
+  { to: "/settings", label: "Settings" },
 ];
 
 export function Sidebar() {
