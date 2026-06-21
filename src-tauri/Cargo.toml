@@ -54,6 +54,7 @@ sinfonic-source-local = { path = "crates/source-local" }
 sinfonic-playback = { path = "crates/playback" }
 sinfonic-library = { path = "crates/library" }
 sinfonic-secrets = { path = "crates/secrets" }
+sinfonic-lastfm = { path = "crates/lastfm" }
 
 # ─────────────────────────────────────────────────────────────
 # Tauri app package (root)
@@ -89,6 +90,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
+md5 = { workspace = true }
+hex = { workspace = true }
+parking_lot = { workspace = true }
 
 # Local workspace members
 sinfonic-domain = { workspace = true }
@@ -99,3 +103,4 @@ sinfonic-source-local = { workspace = true }
 sinfonic-playback = { workspace = true }
 sinfonic-library = { workspace = true }
 sinfonic-secrets = { workspace = true }
+sinfonic-lastfm = { workspace = true }

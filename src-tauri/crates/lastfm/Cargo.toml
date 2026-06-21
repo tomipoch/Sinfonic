@@ -1,23 +1,24 @@
 [package]
-name = "sinfonic-library"
+name = "sinfonic-lastfm"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "SQLite library cache + FTS5 search"
+description = "Last.fm / Libre.fm scrobble client (audioscrobbler 2.0)"
 
 [dependencies]
 sinfonic-domain = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-rusqlite = { workspace = true }
-r2d2 = { workspace = true }
-r2d2_sqlite = { workspace = true }
-parking_lot = { workspace = true }
-sha2 = "0.10"
+reqwest = { workspace = true }
+url = { workspace = true }
+md5 = { workspace = true }
+hex = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+wiremock = "0.6"
+tokio = { workspace = true }

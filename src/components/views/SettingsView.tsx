@@ -1,10 +1,18 @@
 // Settings — manage server connections (Jellyfin and Subsonic) and
 // trigger library sync. Phase 3 added the Jellyfin path; Phase 5
 // adds Subsonic with the same form layout but no discovery (the
-// Subsonic protocol has no UDP broadcast equivalent).
+// Subsonic protocol has no UDP broadcast equivalent). Phase 7 adds
+// an optional Last.fm scrobble section below the server block.
 
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 
+import {
+  lastfmConnect,
+  lastfmDisconnect,
+  lastfmStatus,
+  type LastFmStatus,
+} from "../../lib/tauri";
 import { useServerStore, type ServerKind } from "../../stores/serverStore";
 
 export function SettingsView() {
@@ -28,10 +36,31 @@ export function SettingsView() {
   const [busy, setBusy] = useState(false);
   const [discovering, setDiscovering] = useState(false);
 
+  const [lastfm, setLastfm] = useState<LastFmStatus>({
+    configured: false,
+    authenticated: false,
+    username: null,
+  });
+  const [lastfmApiKey, setLastfmApiKey] = useState("");
+  const [lastfmApiSecret, setLastfmApiSecret] = useState("");
+  const [lastfmUsername, setLastfmUsername] = useState("");
+  const [lastfmPassword, setLastfmPassword] = useState("");
+  const [lastfmBusy, setLastfmBusy] = useState(false);
+
   useEffect(() => {
     void refreshServers();
     void refreshActive();
+    void refreshLastfm();
   }, [refreshServers, refreshActive]);
+
+  const refreshLastfm = async () => {
+    try {
+      const status = await lastfmStatus();
+      setLastfm(status);
+    } catch (err) {
+      console.warn("lastfm status failed", err);
+    }
+  };
 
   const onDiscover = async () => {
     setDiscovering(true);
@@ -76,6 +105,43 @@ export function SettingsView() {
       await syncLibrary();
     } finally {
       setBusy(false);
+    }
+  };
+
+  const onLastfmConnect = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setLastfmBusy(true);
+    try {
+      const status = await lastfmConnect({
+        apiKey: lastfmApiKey.trim(),
+        apiSecret: lastfmApiSecret.trim(),
+        username: lastfmUsername.trim(),
+        password: lastfmPassword,
+      });
+      setLastfm(status);
+      setLastfmPassword("");
+      toast.success(
+        status.username
+          ? `Last.fm connected as ${status.username}`
+          : "Last.fm connected",
+      );
+    } catch (err) {
+      toast.error(`Last.fm: ${(err as Error).message ?? String(err)}`);
+    } finally {
+      setLastfmBusy(false);
+    }
+  };
+
+  const onLastfmDisconnect = async () => {
+    setLastfmBusy(true);
+    try {
+      const status = await lastfmDisconnect();
+      setLastfm(status);
+      toast.success("Last.fm disconnected");
+    } catch (err) {
+      toast.error(`Last.fm: ${(err as Error).message ?? String(err)}`);
+    } finally {
+      setLastfmBusy(false);
     }
   };
 
@@ -273,6 +339,120 @@ export function SettingsView() {
               </li>
             ))}
           </ul>
+        )}
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-medium">Last.fm scrobbling</h2>
+            <p className="text-xs text-fg-subtle">
+              Optional. Scrobble tracks you play to your Last.fm profile.
+            </p>
+          </div>
+          <span
+            className={
+              "rounded-full px-2 py-0.5 text-xs " +
+              (lastfm.authenticated
+                ? "bg-accent/20 text-accent"
+                : lastfm.configured
+                  ? "bg-yellow-500/20 text-yellow-300"
+                  : "bg-bg-raised text-fg-subtle")
+            }
+          >
+            {lastfm.authenticated
+              ? `Connected${lastfm.username ? ` as ${lastfm.username}` : ""}`
+              : lastfm.configured
+                ? "Session expired"
+                : "Not configured"}
+          </span>
+        </div>
+
+        {lastfm.authenticated ? (
+          <div className="rounded-md border border-bg-raised bg-bg-subtle p-4">
+            <p className="text-sm text-fg">
+              Scrobbling is on. A scrobble is sent when a track crosses
+              50 % of its duration (or when it ends).
+            </p>
+            <button
+              type="button"
+              onClick={onLastfmDisconnect}
+              disabled={lastfmBusy}
+              className="btn-secondary mt-3"
+            >
+              {lastfmBusy ? "Disconnecting…" : "Disconnect"}
+            </button>
+          </div>
+        ) : (
+          <form
+            onSubmit={onLastfmConnect}
+            className="flex flex-col gap-3 rounded-md border border-bg-raised bg-bg-subtle p-4"
+          >
+            <p className="text-xs text-fg-subtle">
+              Create an API account at{" "}
+              <a
+                className="text-accent underline"
+                href="https://www.last.fm/api/account/create"
+                target="_blank"
+                rel="noreferrer"
+              >
+                last.fm/api
+              </a>{" "}
+              and paste the credentials here. Your password is hashed
+              locally and never persisted.
+            </p>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-fg-subtle">API key</span>
+              <input
+                type="text"
+                value={lastfmApiKey}
+                onChange={(e) => setLastfmApiKey(e.currentTarget.value)}
+                required
+                className="rounded-md border border-bg-raised bg-bg px-3 py-2 text-sm text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-fg-subtle">API secret</span>
+              <input
+                type="password"
+                value={lastfmApiSecret}
+                onChange={(e) => setLastfmApiSecret(e.currentTarget.value)}
+                required
+                className="rounded-md border border-bg-raised bg-bg px-3 py-2 text-sm text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-fg-subtle">Last.fm username</span>
+              <input
+                type="text"
+                value={lastfmUsername}
+                onChange={(e) => setLastfmUsername(e.currentTarget.value)}
+                required
+                autoComplete="username"
+                className="rounded-md border border-bg-raised bg-bg px-3 py-2 text-sm text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-fg-subtle">Last.fm password</span>
+              <input
+                type="password"
+                value={lastfmPassword}
+                onChange={(e) => setLastfmPassword(e.currentTarget.value)}
+                required
+                autoComplete="current-password"
+                className="rounded-md border border-bg-raised bg-bg px-3 py-2 text-sm text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none"
+              />
+            </label>
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={lastfmBusy}
+                className="btn-primary"
+              >
+                {lastfmBusy ? "Connecting…" : "Connect"}
+              </button>
+            </div>
+          </form>
         )}
       </section>
     </section>

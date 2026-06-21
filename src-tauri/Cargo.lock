@@ -3814,9 +3814,13 @@ name = "sinfonic"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "hex",
+ "md5",
+ "parking_lot",
  "serde",
  "serde_json",
  "sinfonic-domain",
+ "sinfonic-lastfm",
  "sinfonic-library",
  "sinfonic-playback",
  "sinfonic-secrets",
@@ -3841,14 +3845,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "sinfonic-lastfm"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "md5",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sinfonic-domain",
+ "thiserror 1.0.69",
+ "tokio",
+ "url",
+ "wiremock",
+]
+
+[[package]]
 name = "sinfonic-library"
 version = "0.1.0"
 dependencies = [
+ "parking_lot",
  "r2d2",
  "r2d2_sqlite",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "sinfonic-domain",
  "tempfile",
  "thiserror 1.0.69",

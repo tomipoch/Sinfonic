@@ -159,7 +159,7 @@ impl SubsonicClient {
         path: &str,
         auth: &AuthParams,
         version: &str,
-    ) -> Result<Vec<u8>, ProviderError> {
+    ) -> Result<(Vec<u8>, Option<String>), ProviderError> {
         let url = self.url(path, auth, version, std::iter::empty::<(&'static str, String)>())?;
         let resp = self
             .http
@@ -167,6 +167,11 @@ impl SubsonicClient {
             .send()
             .await
             .map_err(|e| ProviderError::Network(e.to_string()))?;
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.split(';').next().unwrap_or(s).trim().to_string());
         let resp = check_status(resp, path).await?;
         let bytes = resp
             .bytes()
@@ -178,7 +183,7 @@ impl SubsonicClient {
                 bytes.len()
             )));
         }
-        Ok(bytes.to_vec())
+        Ok((bytes.to_vec(), content_type))
     }
 
     /// Build a signed query string. The path is appended to the

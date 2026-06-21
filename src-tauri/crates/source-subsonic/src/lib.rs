@@ -641,14 +641,14 @@ impl MusicProvider for SubsonicProvider {
             .unwrap_or(real_id);
         let path = "rest/getCoverArt".to_string();
         let auth = self.session.sign();
-        let bytes = self
+        let (bytes, content_type) = self
             .client
             .get_bytes(&path, &auth, SUBSONIC_API_VERSION)
             .await?;
         // size param is a hint; some servers ignore it. We use the
         // request's size as the requested resolution.
         let _ = (stripped, request.size);
-        Ok(ImageBytes { bytes })
+        Ok(ImageBytes { bytes, content_type })
     }
 
     async fn set_favorite(

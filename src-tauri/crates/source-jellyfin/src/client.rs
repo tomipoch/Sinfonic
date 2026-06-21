@@ -157,12 +157,15 @@ pub(super) fn base_url(client: &JellyfinClient) -> &Url {
 
     /// Run `GET {path}` and return raw bytes (for image fetches).
     /// Enforces `JELLYFIN_IMAGE_MAX_BYTES` so a malicious server can't
-    /// exhaust memory.
+    /// exhaust memory. The returned tuple is `(bytes, content_type)`
+    /// where `content_type` is the first value of the response's
+    /// `Content-Type` header (e.g. `image/jpeg`), stripped of any
+    /// `; charset=…` suffix.
     pub async fn get_bytes(
         &self,
         path: &str,
         auth: &AuthContext,
-    ) -> Result<Vec<u8>, ProviderError> {
+    ) -> Result<(Vec<u8>, Option<String>), ProviderError> {
         let url = self.url(path)?;
         let resp = self
             .http
@@ -171,6 +174,11 @@ pub(super) fn base_url(client: &JellyfinClient) -> &Url {
             .send()
             .await
             .map_err(|e| ProviderError::Network(e.to_string()))?;
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.split(';').next().unwrap_or(s).trim().to_string());
         let resp = check_status(resp, path).await?;
         let bytes = resp
             .bytes()
@@ -182,7 +190,7 @@ pub(super) fn base_url(client: &JellyfinClient) -> &Url {
                 bytes.len()
             )));
         }
-        Ok(bytes.to_vec())
+        Ok((bytes.to_vec(), content_type))
     }
 
     async fn send_json<B, T>(

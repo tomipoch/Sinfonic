@@ -59,21 +59,23 @@
 - `PlayerBar`: transport (prev/play-pause/next) + seek bar (commits on pointer/key release) + mute + volume slider
 - `QueueView`: lista con current-entry highlight + jump-to + remove + repeat cycle (off→all→one) + shuffle + clear
 
-**Total tests: 129**
+### Fase 7 — Album art + scrobble polish + EQ UI
+- **Album art cache** (`sinfonic-library`): `AlbumArtCache` filesystem LRU bajo `app_data_dir/album_art/`, clave SHA-256(provider + image_id + tag) truncada a 32 hex, layout shard (root/ab/abcd….bin + .mime + .meta), `evict_if_over(max_bytes)` por timestamp ascendente, atomic temp+rename
+- **`provider_image_bytes` command**: read-through (cache miss → `MusicProvider::image_bytes(ImageRequest{ kind: Primary, size: 600 })` → sniff JPEG/PNG/GIF/WebP magic bytes si falta `Content-Type` → write-through), devuelve `AlbumArtResponse { bytes, content_type, cached }`
+- **`ImageBytes.content_type`**: `JellyfinClient::get_bytes` y `SubsonicClient::get_bytes` ahora devuelven `(Vec<u8>, Option<String>)` parseando el header `Content-Type` (charset stripped)
+- **`AlbumCover` real**: `<img>` con `URL.createObjectURL(new Blob([Uint8Array], { type: contentType }))`, `URL.revokeObjectURL` en cleanup, `loading="lazy"`, fallback al gradiente en error
+- **`useAlbumArtPrewarm`**: dispara `providerImageBytes` para los primeros 24 álbumes al cargar la librería (cache hits son no-ops)
+- **`sinfonic-lastfm` crate** (nuevo, 9º workspace member): `LastFmClient` (authenticate + resume + now_playing + scrobble), `signature::sign` (lex sort + concat + md5(api_secret suffix)) verificado contra el ejemplo de la docu de Last.fm, mapeo de error codes (4/9/14 → Auth, 29 → RateLimited, etc.), `ScrobbleSource { User, NonPersonalised, Recommended }`
+- **Credenciales en keyring**: `SecretKey::LastFmApiSecret` (JSON `{api_key, api_secret}`) + `LastFmSession` (session key) — variantes del enum que ya existían sin uso; password NUNCA persistido (md5-hash local antes de enviar)
+- **`ScrobbleWatcher`**: task en background (1 s tick) que polla `AudioPlayer::cached_state()` + `QueueEngine::current()` → `now_playing` al cambiar track, `scrobble` al cruzar 50 % del duration (una vez por track, dedupe por `HashSet<TrackId>`)
+- **Settings UI**: sección Last.fm al final (status pill, form api_key + api_secret + username + password, Connect/Disconnect)
+- **EQ panel**: comando `get_eq_bands` (lee `AudioPlayer::eq_bands()`), `useEqStore` Zustand, `EqPanel` con 10 sliders verticales (±12 dB, commits on pointer/key release, subscribe a `eq-changed` / `eq-reset`), botón "EQ" en `PlayerBar` que abre popover anchored arriba a la derecha, Esc cierra
+
+**Total tests: 148** (129 base + 6 album_art unit + 5 lastfm unit + 5 lastfm integration + 3 lastfm.rs unit)
 
 ---
 
 ## 🔜 Siguiente
-
-### Fase 7 — Album art + scrobble polish + EQ UI
-- **Album art cache**: filesystem LRU bajo `app_data_dir/album_art/`, clave SHA-256(provider_image_id + image_tag), comando `provider_image_bytes(album_id)` read-through con eviction por tamaño
-- **AlbumCover real**: `<img>` con `URL.createObjectURL` + fallback al gradiente cuando no hay bytes
-- **Pre-warm**: hook dispara fetch en background para los primeros N álbumes al cargar la librería
-- **Last.fm scrobble**: `sinfonic-lastfm` crate (handshake `auth.getMobileSession` + `track.updateNowPlaying` + `track.scrobble` con firma md5(api_secret + timestamp))
-- **Credenciales en keyring**: `SecretKey::LastFmApiSecret` + `LastFmSession` (variantes ya existían sin uso)
-- **ScrobbleWatcher**: task en background escucha `PlayerEvent::StateChanged` (cada 250 ms) + `TrackEnded` → dispara now-playing al cambiar track y scrobble al pasar 50 % (o al terminar)
-- **Settings UI**: sección Last.fm (api_key + api_secret + username + password + Connect/Test/Disconnect)
-- **EQ panel**: comando `get_eq_bands` (lee del `AudioPlayer`), `useEqStore`, `EqPanel` con 10 sliders (60 Hz … 16 kHz, ±12 dB) + botón reset, popover colapsable dentro de `PlayerBar`
 
 ### Fase 8 — Local-files provider
 - Scan recursivo de `~/Music` con `lofty` (MP3/FLAC/OGG/Opus/MP4)
@@ -83,5 +85,5 @@
 ---
 
 **Estado actual:**
-- `develop` HEAD: `42ab555` (Phase 6 merged)
-- 129 tests · clippy clean · pnpm build clean
+- `develop` HEAD: pendiente del merge de Fase 7
+- 148 tests · clippy clean · pnpm build clean

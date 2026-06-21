@@ -78,9 +78,13 @@ pub struct ImageRequest {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(transparent)]
 pub struct ImageBytes {
     pub bytes: Vec<u8>,
+    /// MIME type from the server's `Content-Type` header when
+    /// available (e.g. `image/jpeg`, `image/png`). Providers should
+    /// populate this so the frontend can render the right format;
+    /// `None` means "unknown — guess from the bytes".
+    pub content_type: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

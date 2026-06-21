@@ -1,7 +1,7 @@
 // PlayerBar — fixed bottom bar. Three sections:
 //   left: cover + track title + artist
 //   center: transport controls + seek slider + position/total
-//   right: mute toggle + volume slider
+//   right: mute toggle + volume slider + EQ toggle
 //
 // All state reads from the playback + queue stores, which are kept
 // in sync by the global event bridge at the app root. Click
@@ -10,8 +10,12 @@
 //
 // Seek slider commits on pointer-up / key-up / blur (not on every
 // onChange) to avoid spamming the backend while the user drags.
+//
+// EQ panel lives in a popover anchored above the player bar; toggle
+// state lives in the PlayerBar so the panel auto-closes when the
+// user navigates away or hits Esc.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -27,6 +31,7 @@ import { usePlaybackStore } from "../../stores/playbackStore";
 import { useQueueStore } from "../../stores/queueStore";
 import { cn } from "../../lib/cn";
 import { formatDuration } from "../../lib/format";
+import { EqPanel } from "../views/EqPanel";
 
 const VOLUME_STEP = 0.05;
 const VOLUME_MIN = 0;
@@ -78,6 +83,7 @@ export function PlayerBar() {
   const [busy, setBusy] = useState(false);
   const [seekDrag, setSeekDrag] = useState<number | null>(null);
   const seekDragRef = useRef<number | null>(null);
+  const [eqOpen, setEqOpen] = useState(false);
 
   const run = async (fn: () => Promise<void>, label: string) => {
     if (busy) return;
@@ -135,12 +141,26 @@ export function PlayerBar() {
   const seekEnabled = hasTrack && durationSeconds > 0;
   const displayedPosition = seekDrag ?? positionSeconds;
 
+  useEffect(() => {
+    if (!eqOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setEqOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [eqOpen]);
+
   return (
     <footer
-      className="flex h-20 shrink-0 items-center justify-between gap-4 border-t border-bg-raised bg-bg-subtle px-4"
+      className="relative flex h-20 shrink-0 items-center justify-between gap-4 border-t border-bg-raised bg-bg-subtle px-4"
       role="contentinfo"
       aria-label="Player controls"
     >
+      {eqOpen && (
+        <div className="absolute bottom-full right-4 mb-2 w-[min(36rem,calc(100vw-2rem))] z-10">
+          <EqPanel />
+        </div>
+      )}
       <div className="flex min-w-0 items-center gap-3">
         <div
           className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-bg-raised text-lg font-bold text-white/80"
@@ -249,8 +269,23 @@ export function PlayerBar() {
           value={effectiveVolume}
           onChange={(e) => void onVolumeChange(Number(e.currentTarget.value))}
           aria-label="Volume"
-          className="h-1 w-28 cursor-pointer accent-accent"
+          className="h-1 w-24 cursor-pointer accent-accent"
         />
+        <button
+          type="button"
+          onClick={() => setEqOpen((open) => !open)}
+          aria-label="Toggle equalizer"
+          aria-expanded={eqOpen}
+          aria-pressed={eqOpen}
+          className={cn(
+            "rounded-md px-2 py-1 text-xs",
+            eqOpen
+              ? "bg-accent/20 text-accent"
+              : "text-fg-subtle hover:bg-bg-raised hover:text-fg",
+          )}
+        >
+          EQ
+        </button>
       </div>
     </footer>
   );

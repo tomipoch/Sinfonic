@@ -24,6 +24,8 @@ use tokio::sync::Mutex;
 
 mod commands;
 mod events;
+mod lastfm;
+mod scrobble_watcher;
 mod state;
 
 pub use events::{
@@ -49,7 +51,8 @@ pub fn run() {
                         AppState::new()
                     } else {
                         let db = dir.join("library.sqlite");
-                        AppState::with_library_path(&db)
+                        let art_dir = dir.join("album_art");
+                        AppState::with_paths(&db, &art_dir)
                             .unwrap_or_else(|e| {
                                 eprintln!("sinfonic: open({db:?}) failed: {e}, falling back to memory");
                                 AppState::new()
@@ -105,7 +108,35 @@ pub fn run() {
                 }
             });
 
-            app.manage(Arc::new(Mutex::new(state)));
+            // Resume a previously-persisted Last.fm session, if any,
+            // and spawn the scrobble watcher. Both run on the tokio
+            // runtime because the Tauri setup closure is sync; network
+            // errors are swallowed (we just stay disconnected until the
+            // user re-enters credentials).
+            let state_for_resume = Arc::new(Mutex::new(state));
+            let setup_handle = state_for_resume.clone();
+            tauri::async_runtime::spawn(async move {
+                // 1) Resume a persisted session (cheap — does not
+                //    block startup if Last.fm is unreachable).
+                {
+                    let state_ref = setup_handle.lock().await;
+                    commands::try_resume_lastfm(&state_ref).await;
+                }
+                // 2) Take clones of the bits the watcher needs, then
+                //    hand them off. This keeps the watcher's mutex
+                //    pressure off the IPC lock.
+                let (queue_clone, player_clone, lastfm_clone) = {
+                    let state_ref = setup_handle.lock().await;
+                    (
+                        Arc::new(Mutex::new(state_ref.queue.clone())),
+                        state_ref.player.clone(),
+                        state_ref.lastfm.clone(),
+                    )
+                };
+                scrobble_watcher::run(queue_clone, player_clone, lastfm_clone).await;
+            });
+
+            app.manage(state_for_resume);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -139,6 +170,7 @@ pub fn run() {
             commands::set_muted,
             commands::set_eq_band,
             commands::reset_eq,
+            commands::get_eq_bands,
             // Search (Phase 2)
             commands::search,
             // Provider (Phase 3 + Phase 5)
@@ -149,6 +181,12 @@ pub fn run() {
             commands::provider_servers,
             commands::provider_active_server,
             commands::provider_sync_library,
+            // Album art (Phase 7)
+            commands::provider_image_bytes,
+            // Last.fm (Phase 7)
+            commands::lastfm_connect,
+            commands::lastfm_disconnect,
+            commands::lastfm_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -90,6 +90,13 @@ export const setVolume = (volume: number) =>
 export const setMuted = (muted: boolean) =>
   invoke<void>("set_muted", { muted });
 
+export interface EqBandPayload {
+  hz: number;
+  gainDb: number;
+}
+
+export const getEqBands = () => invoke<EqBandPayload[]>("get_eq_bands");
+
 export const setEqBand = (hz: number, gainDb: number) =>
   invoke<void>("set_eq_band", { band: { hz, gainDb } });
 
@@ -129,6 +136,43 @@ export const providerActiveServer = () =>
 
 export const providerSyncLibrary = () =>
   invoke<void>("provider_sync_library");
+
+// ─── Album art (Phase 7) ────────────────────────────────────────
+
+export interface AlbumArtResponse {
+  bytes: number[];
+  contentType: string;
+  cached: boolean;
+}
+
+export const providerImageBytes = (albumId: string, tag?: string | null) =>
+  invoke<AlbumArtResponse>("provider_image_bytes", { albumId, tag });
+
+// ─── Last.fm (Phase 7) ─────────────────────────────────────────
+
+export interface LastFmStatus {
+  configured: boolean;
+  authenticated: boolean;
+  username: string | null;
+}
+
+export const lastfmConnect = (params: {
+  apiKey: string;
+  apiSecret: string;
+  username: string;
+  password: string;
+}) =>
+  invoke<LastFmStatus>("lastfm_connect", {
+    apiKey: params.apiKey,
+    apiSecret: params.apiSecret,
+    username: params.username,
+    password: params.password,
+  });
+
+export const lastfmDisconnect = () =>
+  invoke<LastFmStatus>("lastfm_disconnect");
+
+export const lastfmStatus = () => invoke<LastFmStatus>("lastfm_status");
 
 // ─── Misc ───────────────────────────────────────────────────────
 
