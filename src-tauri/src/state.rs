@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use sinfonic_domain::{PlaybackState, QueueEngine, ServerId};
-use sinfonic_library::Store;
+use sinfonic_library::{AlbumArtCache, Store};
 use sinfonic_playback::AudioPlayer;
 use sinfonic_secrets::KeyringStore;
 use sinfonic_source::MusicProvider;
@@ -54,6 +54,11 @@ pub struct AppState {
     /// send the same id (Jellyfin tracks devices by id and rotates
     /// tokens if it changes).
     pub device_id: String,
+    /// Filesystem-backed album art cache. `None` when no data dir
+    /// is available (e.g. a misconfigured mobile sandbox). Commands
+    /// that need it short-circuit to a provider-direct fetch in that
+    /// case so the UI still works.
+    pub album_art: Option<Arc<AlbumArtCache>>,
 }
 
 impl Default for AppState {
@@ -69,6 +74,7 @@ impl Default for AppState {
             provider: Arc::new(Mutex::new(None)),
             secrets: Arc::new(secrets),
             device_id: default_device_id(),
+            album_art: None,
         }
     }
 }
@@ -90,6 +96,29 @@ impl AppState {
             provider: Arc::new(Mutex::new(None)),
             secrets: Arc::new(KeyringStore::new("sinfonic")),
             device_id: default_device_id(),
+            album_art: None,
+        })
+    }
+
+    /// Build an `AppState` with both the library cache and the album
+    /// art cache pointed at real on-disk locations. Called from
+    /// `lib.rs` when the app data directory is available.
+    pub fn with_paths(
+        library_path: impl AsRef<std::path::Path>,
+        album_art_dir: impl AsRef<std::path::Path>,
+    ) -> Result<Self, String> {
+        let library = Store::open(library_path).map_err(|e| e.to_string())?;
+        let album_art =
+            AlbumArtCache::open(album_art_dir.as_ref()).map_err(|e| e.to_string())?;
+        Ok(Self {
+            queue: QueueEngine::default(),
+            playback: PlaybackState::default(),
+            player: Arc::new(AudioPlayer::new()),
+            library,
+            provider: Arc::new(Mutex::new(None)),
+            secrets: Arc::new(KeyringStore::new("sinfonic")),
+            device_id: default_device_id(),
+            album_art: Some(Arc::new(album_art)),
         })
     }
 

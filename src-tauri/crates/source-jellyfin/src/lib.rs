@@ -516,8 +516,9 @@ impl MusicProvider for JellyfinProvider {
             kind_str,
             request.size,
         );
-        let bytes = self.client.get_bytes(&path, &self.session.auth()).await?;
-        Ok(ImageBytes { bytes })
+        let (bytes, content_type) =
+            self.client.get_bytes(&path, &self.session.auth()).await?;
+        Ok(ImageBytes { bytes, content_type })
     }
 
     async fn set_favorite(

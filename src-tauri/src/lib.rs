@@ -49,7 +49,8 @@ pub fn run() {
                         AppState::new()
                     } else {
                         let db = dir.join("library.sqlite");
-                        AppState::with_library_path(&db)
+                        let art_dir = dir.join("album_art");
+                        AppState::with_paths(&db, &art_dir)
                             .unwrap_or_else(|e| {
                                 eprintln!("sinfonic: open({db:?}) failed: {e}, falling back to memory");
                                 AppState::new()
@@ -149,6 +150,8 @@ pub fn run() {
             commands::provider_servers,
             commands::provider_active_server,
             commands::provider_sync_library,
+            // Album art (Phase 7)
+            commands::provider_image_bytes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

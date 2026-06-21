@@ -40,11 +40,13 @@ use crate::events::{
 };
 use crate::state::AppState;
 use sinfonic_domain::{
-    Album, AlbumDetail, AlbumId, Artist, PagedResponse, QueueEntryId, QueueSnapshot, RepeatMode,
-    SearchResults, ServerId, Track, TrackId,
+    Album, AlbumDetail, AlbumId, Artist, ImageKind, PagedResponse, QueueEntryId, QueueSnapshot,
+    RepeatMode, SearchResults, ServerId, Track, TrackId,
 };
+use sinfonic_library::ImageCacheKey;
 use sinfonic_secrets::SecretStore;
 use sinfonic_source::MusicProvider;
+use sinfonic_source::{ImageBytes, ImageRequest};
 use sinfonic_source_jellyfin::auth::{login as jellyfin_login_inner, LoginRequest as JellyfinAuthRequest};
 use sinfonic_source_subsonic::auth::{login as subsonic_login_inner, LoginRequest as SubsonicAuthRequest};
 
@@ -935,6 +937,133 @@ pub async fn provider_active_server(
     Ok(provider
         .as_ref()
         .map(|p| p.identity().server_id.to_string()))
+}
+
+// ─── Album art (Phase 7) ───────────────────────────────────────
+
+/// Payload returned by `provider_image_bytes`. Mirrors the on-disk
+/// cache shape so the frontend can build a blob URL straight away.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AlbumArtResponse {
+    pub bytes: Vec<u8>,
+    pub content_type: String,
+    pub cached: bool,
+}
+
+/// Resolve an album's primary cover image through the active
+/// provider, with a read-through filesystem cache keyed by
+/// `(provider, image_id, tag)`.
+///
+/// `album_id` is the provider's item id (e.g. `jellyfin`'s
+/// `Album/abc…` or `subsonic`'s `album-12`). The optional `tag`
+/// comes from the library cache's `image_tag` column — passing it
+/// ensures a stale cache entry is invalidated when the server bumps
+/// the tag.
+#[tauri::command]
+pub async fn provider_image_bytes(
+    album_id: String,
+    tag: Option<String>,
+    state: SharedState<'_>,
+) -> Result<AlbumArtResponse, String> {
+    if album_id.is_empty() {
+        return Err("provider_image_bytes: album_id is empty".into());
+    }
+
+    let provider_id;
+    let request_kind = ImageKind::Primary;
+    let request = ImageRequest {
+        item_id: album_id.clone(),
+        kind: request_kind,
+        tag: tag.clone(),
+        size: 600,
+    };
+
+    // Cache lookup is best-effort. The cache may be absent (e.g.
+    // when the app data dir is unavailable) — in that case we just
+    // fetch through the provider and skip the write.
+    let cache_key = ImageCacheKey::new(
+        {
+            let guard = state.lock().await;
+            let provider = guard.provider.lock().await;
+            provider_id = provider
+                .as_ref()
+                .map(|p| p.identity().provider_id.clone())
+                .unwrap_or_else(|| "unknown".into());
+            provider_id.clone()
+        },
+        album_id.clone(),
+        tag.clone().unwrap_or_default(),
+    );
+
+    let (cache_for_lookup, cache_for_write) = {
+        let guard = state.lock().await;
+        (guard.album_art.clone(), guard.album_art.clone())
+    };
+
+    if let Some(cache) = cache_for_lookup.as_ref() {
+        if let Ok(Some(hit)) = cache.get(&cache_key) {
+            return Ok(AlbumArtResponse {
+                bytes: hit.bytes,
+                content_type: hit.content_type,
+                cached: true,
+            });
+        }
+    }
+
+    // Cache miss — fetch from the provider.
+    let fetched: ImageBytes = {
+        let guard = state.lock().await;
+        let provider_guard = guard.provider.lock().await;
+        let provider = provider_guard
+            .as_ref()
+            .ok_or_else(|| "provider_image_bytes: no active provider".to_string())?;
+        provider
+            .image_bytes(request)
+            .await
+            .map_err(|e| format!("image_bytes: {e}"))?
+    };
+
+    // Pick a sensible default if the provider did not surface a
+    // content type — JPEG is the dominant format in the wild.
+    let content_type = fetched
+        .content_type
+        .unwrap_or_else(|| guess_image_content_type(&fetched.bytes).to_string());
+
+    // Best-effort write-through. Failures here are non-fatal — we
+    // already have the bytes to return to the UI.
+    if let Some(cache) = cache_for_write.as_ref() {
+        let _ = cache.put(&cache_key, &fetched.bytes, &content_type);
+    }
+
+    Ok(AlbumArtResponse {
+        bytes: fetched.bytes,
+        content_type,
+        cached: false,
+    })
+}
+
+/// Sniff a small set of magic bytes to fall back to a content type
+/// when the provider's `Content-Type` header was missing. JPEG /
+/// PNG / WebP / GIF cover the overwhelming majority of music
+/// artwork; anything else becomes `application/octet-stream` so the
+/// browser still tries to render.
+fn guess_image_content_type(bytes: &[u8]) -> &'static str {
+    if bytes.len() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF {
+        "image/jpeg"
+    } else if bytes.len() >= 8
+        && bytes[..8] == [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]
+    {
+        "image/png"
+    } else if bytes.len() >= 6 && &bytes[..6] == b"GIF87a" || bytes.len() >= 6 && &bytes[..6] == b"GIF89a" {
+        "image/gif"
+    } else if bytes.len() >= 12
+        && &bytes[..4] == b"RIFF"
+        && &bytes[8..12] == b"WEBP"
+    {
+        "image/webp"
+    } else {
+        "application/octet-stream"
+    }
 }
 
 // ─── Internal event helpers ─────────────────────────────────────
