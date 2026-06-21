@@ -1,14 +1,17 @@
 // PlayerBar — fixed bottom bar. Three sections:
 //   left: cover + track title + artist
-//   center: transport controls + position display
-//   right: volume slider + mute + queue/repeat/shuffle toggles
+//   center: transport controls + seek slider + position/total
+//   right: mute toggle + volume slider
 //
 // All state reads from the playback + queue stores, which are kept
 // in sync by the global event bridge at the app root. Click
 // handlers call the typed IPC wrappers directly; the resulting
 // events update the stores for every other component.
+//
+// Seek slider commits on pointer-up / key-up / blur (not on every
+// onChange) to avoid spamming the backend while the user drags.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -16,6 +19,7 @@ import {
   pause,
   previous,
   resume,
+  seek,
   setMuted,
   setVolume,
 } from "../../lib/tauri";
@@ -72,6 +76,8 @@ export function PlayerBar() {
   const queueLength = useQueueStore((s) => s.entries.length);
 
   const [busy, setBusy] = useState(false);
+  const [seekDrag, setSeekDrag] = useState<number | null>(null);
+  const seekDragRef = useRef<number | null>(null);
 
   const run = async (fn: () => Promise<void>, label: string) => {
     if (busy) return;
@@ -107,9 +113,27 @@ export function PlayerBar() {
       usePlaybackStore.getState().setMuted(nextMuted);
     }, "Toggle mute");
 
+  const commitSeek = (rawValue: number) => {
+    const value = Math.max(0, Math.min(durationSeconds || 0, Math.round(rawValue)));
+    seekDragRef.current = null;
+    setSeekDrag(null);
+    void run(async () => {
+      await seek(value);
+      usePlaybackStore.getState().setPosition(value);
+    }, "Seek");
+  };
+
+  const onSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const nextValue = Number(e.currentTarget.value);
+    seekDragRef.current = nextValue;
+    setSeekDrag(nextValue);
+  };
+
   const hasTrack = currentTrack !== null;
   const effectiveVolume = muted ? 0 : volume;
   const transportDisabled = !hasTrack || busy;
+  const seekEnabled = hasTrack && durationSeconds > 0;
+  const displayedPosition = seekDrag ?? positionSeconds;
 
   return (
     <footer
@@ -134,7 +158,7 @@ export function PlayerBar() {
         </div>
       </div>
 
-      <div className="flex min-w-0 flex-col items-center gap-1">
+      <div className="flex min-w-0 flex-1 max-w-xl flex-col items-center gap-1">
         <div className="flex items-center gap-1">
           <button
             type="button"
@@ -168,8 +192,37 @@ export function PlayerBar() {
             <NextIcon className="h-5 w-5" />
           </button>
         </div>
-        <div className="font-mono text-xs text-fg-muted">
-          {formatDuration(positionSeconds)} / {formatDuration(durationSeconds)}
+        <div className="flex w-full items-center gap-2">
+          <span className="w-10 shrink-0 text-right font-mono text-xs text-fg-muted">
+            {formatDuration(displayedPosition)}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={durationSeconds || 0}
+            step={1}
+            value={displayedPosition}
+            onChange={onSeekChange}
+            onPointerUp={() => {
+              if (seekDragRef.current !== null) commitSeek(seekDragRef.current);
+            }}
+            onKeyUp={(e) => {
+              if (e.key === "Tab") return;
+              if (seekDragRef.current !== null) commitSeek(seekDragRef.current);
+            }}
+            onBlur={() => {
+              if (seekDragRef.current !== null) commitSeek(seekDragRef.current);
+            }}
+            disabled={!seekEnabled}
+            aria-label="Seek"
+            aria-valuemin={0}
+            aria-valuemax={durationSeconds}
+            aria-valuenow={displayedPosition}
+            className="h-1 flex-1 cursor-pointer accent-accent disabled:cursor-not-allowed disabled:opacity-40"
+          />
+          <span className="w-10 shrink-0 font-mono text-xs text-fg-muted">
+            {formatDuration(durationSeconds)}
+          </span>
         </div>
       </div>
 
