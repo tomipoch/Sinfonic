@@ -90,6 +90,13 @@ export const setVolume = (volume: number) =>
 export const setMuted = (muted: boolean) =>
   invoke<void>("set_muted", { muted });
 
+export interface EqBandPayload {
+  hz: number;
+  gainDb: number;
+}
+
+export const getEqBands = () => invoke<EqBandPayload[]>("get_eq_bands");
+
 export const setEqBand = (hz: number, gainDb: number) =>
   invoke<void>("set_eq_band", { band: { hz, gainDb } });
 
