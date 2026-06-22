@@ -84,6 +84,10 @@ impl ProviderCapabilities {
 impl LocalProvider {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
+        // Canonicalize so `path_for_track` can strip_prefix reliably
+        // on platforms where the parent dir is a symlink (macOS
+        // resolves `/tmp` -> `/private/tmp`, Linux is usually fine).
+        let root = root.canonicalize().unwrap_or(root);
         let identity = ProviderIdentity {
             provider_id: LOCAL_PROVIDER_ID.to_string(),
             server_id: ServerId::new(LOCAL_SERVER_ID),
@@ -530,9 +534,13 @@ fn paginate<T: Clone>(items: &[T], offset: usize, limit: usize) -> Vec<T> {
 /// recover the original relative path from a `track-` id. Only the
 /// subset of escapes the scanner emits is handled — anything else
 /// is treated as the literal char.
+///
+/// Decoding is byte-wise: the output may contain invalid UTF-8 if
+/// the input does, but real scanner output is well-formed because
+/// the encoder pushes each input char's UTF-8 bytes one at a time.
 fn percent_decode(input: &str) -> String {
     let bytes = input.as_bytes();
-    let mut out = String::with_capacity(input.len());
+    let mut out: Vec<u8> = Vec::with_capacity(input.len());
     let mut i = 0;
     while i < bytes.len() {
         let b = bytes[i];
@@ -540,16 +548,15 @@ fn percent_decode(input: &str) -> String {
             if let (Some(h), Some(l)) =
                 (hex_digit(bytes[i + 1]), hex_digit(bytes[i + 2]))
             {
-                let decoded = (h << 4) | l;
-                out.push(decoded as char);
+                out.push((h << 4) | l);
                 i += 3;
                 continue;
             }
         }
-        out.push(b as char);
+        out.push(b);
         i += 1;
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn hex_digit(byte: u8) -> Option<u8> {

@@ -826,7 +826,128 @@ pub async fn subsonic_login(
     })
 }
 
-/// Clear the active provider and remove its token from the keyring.
+// ─── Local-files provider (Phase 8) ───────────────────────────
+
+/// Response shape for `local_login` and `local_rescan`. Mirrors
+/// `LocalProvider::ScanStats` plus the active-server snapshot.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LocalScanResult {
+    pub server_id: String,
+    pub server_name: String,
+    pub root: String,
+    pub tracks: usize,
+    pub albums: usize,
+    pub artists: usize,
+    pub errors: usize,
+}
+
+/// Set the music root directory, scan it, install the `LocalProvider`
+/// as the active provider, and write the result to the SQLite cache.
+/// Unlike the Jellyfin / Subsonic logins this is also the "sync"
+/// step — there is no separate `provider_sync_library` for local
+/// because the scan already populates the in-memory snapshot that
+/// `library.replace_*` reads from.
+#[tauri::command]
+pub async fn local_login(
+    path: String,
+    state: SharedState<'_>,
+) -> Result<LocalScanResult, String> {
+    use sinfonic_source_local::LocalProvider;
+    let root = std::path::PathBuf::from(path.trim());
+    if !root.exists() {
+        return Err(format!("local: path does not exist: {root:?}"));
+    }
+    if !root.is_dir() {
+        return Err(format!("local: not a directory: {root:?}"));
+    }
+
+    let provider = LocalProvider::new(&root);
+
+    // Stop any currently-playing audio — the stream URI of the old
+    // provider will stop resolving after we swap providers.
+    {
+        let mut guard = state.lock().await;
+        guard.player.stop();
+        guard.playback.stop();
+    }
+
+    // Rescan synchronously (filesystem-bound, no .await). Replaces
+    // the in-memory snapshot under the provider's own lock; the
+    // SQLite write happens next under AppState.
+    let stats = provider.rescan().map_err(|e| format!("scan: {e}"))?;
+    let snapshot = provider.snapshot().ok_or_else(|| "scan produced no result".to_string())?;
+
+    let server_id = sinfonic_domain::ServerId::new(sinfonic_source_local::LOCAL_SERVER_ID);
+    let server_name = sinfonic_source_local::LOCAL_SERVER_NAME.to_string();
+    let root_display = root.display().to_string();
+
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .upsert_server(&server_id, "local", &server_name, &root_display)
+            .map_err(|e| format!("upsert server: {e}"))?;
+        guard
+            .library
+            .replace_albums(&server_id, &snapshot.albums)
+            .map_err(|e| format!("upsert albums: {e}"))?;
+        guard
+            .library
+            .replace_artists(&server_id, &snapshot.artists)
+            .map_err(|e| format!("upsert artists: {e}"))?;
+        guard
+            .library
+            .replace_tracks(&server_id, &snapshot.tracks)
+            .map_err(|e| format!("upsert tracks: {e}"))?;
+        let provider: Arc<dyn MusicProvider> = Arc::new(provider);
+        *guard.provider.lock().await = Some(provider);
+    }
+
+    Ok(LocalScanResult {
+        server_id: server_id.to_string(),
+        server_name,
+        root: root_display,
+        tracks: stats.tracks,
+        albums: stats.albums,
+        artists: stats.artists,
+        errors: stats.errors,
+    })
+}
+
+/// Re-scan the active local provider's root. Used by the
+/// "Rescan library" button once the user is connected.
+#[tauri::command]
+pub async fn local_rescan(
+    state: SharedState<'_>,
+) -> Result<LocalScanResult, String> {
+    // Read the root off the SQLite cache (it's stored there as the
+    // server's `base_url` so we can survive an app restart without
+    // serialising the provider). Cheaper than a downcast and
+    // exercises the same `local_login` code path on the Rust side.
+    let root = {
+        let guard = state.lock().await;
+        // Verify the active provider is local before we touch the
+        // local server row.
+        let provider_kind = guard
+            .provider
+            .lock()
+            .await
+            .as_ref()
+            .map(|p| p.identity().provider_id.clone());
+        if provider_kind.as_deref() != Some(sinfonic_source_local::LOCAL_PROVIDER_ID) {
+            return Err("local_rescan: active provider is not local".into());
+        }
+        let conn = guard.library.connection().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT base_url FROM servers WHERE server_id = ?1")
+            .map_err(|e| e.to_string())?;
+        stmt.query_row([sinfonic_source_local::LOCAL_SERVER_ID], |r| r.get::<_, String>(0))
+            .map_err(|e| format!("read root: {e}"))?
+    };
+    local_login(root, state).await
+}
+
+/// Clear the active provider (any kind) and remove its token from the keyring.
 /// Library data is left in place so the user can log back in
 /// without a full re-sync. Audio playback is stopped — the stream
 /// URL the rodio sink is consuming will no longer resolve after
