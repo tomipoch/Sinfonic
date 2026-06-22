@@ -664,6 +664,93 @@ impl Store {
         Ok(())
     }
 
+    // ─── Favorites (local cache only — Phase 9) ─────────────────
+
+    /// Updates the `favorite` flag on a track.
+    pub fn set_track_favorite(
+        &self,
+        server_id: &ServerId,
+        track_id: &TrackId,
+        favorite: bool,
+    ) -> LibraryResult<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            "UPDATE tracks SET favorite = ?3 WHERE server_id = ?1 AND track_id = ?2",
+            rusqlite::params![server_id.as_str(), track_id.as_str(), favorite as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Updates the `favorite` flag on an album.
+    pub fn set_album_favorite(
+        &self,
+        server_id: &ServerId,
+        album_id: &AlbumId,
+        favorite: bool,
+    ) -> LibraryResult<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            "UPDATE albums SET favorite = ?3 WHERE server_id = ?1 AND album_id = ?2",
+            rusqlite::params![server_id.as_str(), album_id.as_str(), favorite as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Updates the `favorite` flag on an artist.
+    pub fn set_artist_favorite(
+        &self,
+        server_id: &ServerId,
+        artist_id: &ArtistId,
+        favorite: bool,
+    ) -> LibraryResult<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            "UPDATE artists SET favorite = ?3 WHERE server_id = ?1 AND artist_id = ?2",
+            rusqlite::params![server_id.as_str(), artist_id.as_str(), favorite as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Returns all favorited tracks, albums, and artists for a server.
+    pub fn get_favorites(
+        &self,
+        server_id: &ServerId,
+    ) -> LibraryResult<(Vec<Track>, Vec<Album>, Vec<Artist>)> {
+        let conn = self.connection()?;
+
+        let mut track_stmt = conn.prepare(
+            "SELECT track_id, album_id, title, artist, artist_id, album,
+                    duration_seconds, track_number, disc_number, favorite,
+                    image_kind, image_tag
+             FROM tracks WHERE server_id = ?1 AND favorite = 1
+             ORDER BY title COLLATE NOCASE",
+        )?;
+        let tracks = track_stmt
+            .query_map(rusqlite::params![server_id.as_str()], rows::row_to_track)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut album_stmt = conn.prepare(
+            "SELECT album_id, title, artist, artist_id, year, track_count,
+                    duration_seconds, favorite, image_kind, image_tag
+             FROM albums WHERE server_id = ?1 AND favorite = 1
+             ORDER BY title COLLATE NOCASE",
+        )?;
+        let albums = album_stmt
+            .query_map(rusqlite::params![server_id.as_str()], rows::row_to_album)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut artist_stmt = conn.prepare(
+            "SELECT artist_id, name, album_count, track_count, favorite, image_kind, image_tag
+             FROM artists WHERE server_id = ?1 AND favorite = 1
+             ORDER BY name COLLATE NOCASE",
+        )?;
+        let artists = artist_stmt
+            .query_map(rusqlite::params![server_id.as_str()], rows::row_to_artist)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok((tracks, albums, artists))
+    }
+
     // ─── Search ──────────────────────────────────────────────────
 
     /// Search across the FTS5 index. Returns the first `limit`

@@ -169,6 +169,11 @@ pub fn run() {
             commands::add_playlist_tracks,
             commands::remove_playlist_entries,
             commands::move_playlist_entry,
+            // Favorites (Phase 9)
+            commands::set_track_favorite,
+            commands::set_album_favorite,
+            commands::set_artist_favorite,
+            commands::get_favorites,
             commands::set_repeat,
             commands::set_shuffle,
             commands::pause,

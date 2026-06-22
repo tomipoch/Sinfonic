@@ -41,7 +41,7 @@ use crate::events::{
 use crate::lastfm;
 use crate::state::AppState;
 use sinfonic_domain::{
-    Album, AlbumDetail, AlbumId, Artist, ImageKind, PagedResponse, Playlist, PlaylistDetail,
+    Album, AlbumDetail, AlbumId, Artist, ArtistId, ImageKind, PagedResponse, Playlist, PlaylistDetail,
     PlaylistId, QueueEntryId, QueueSnapshot, RepeatMode, SearchResults, ServerId, Track, TrackId,
 };
 use sinfonic_library::ImageCacheKey;
@@ -836,6 +836,75 @@ pub async fn move_playlist_entry(
     }
     emit_queue_changed(&app, &state).await;
     Ok(())
+}
+
+// ─── Favorites (Phase 9) ──────────────────────────────────────
+
+#[derive(Clone, Serialize)]
+pub struct FavoritesPayload {
+    pub tracks: Vec<Track>,
+    pub albums: Vec<Album>,
+    pub artists: Vec<Artist>,
+}
+
+/// Sets the favorite flag on a track.
+#[tauri::command]
+pub async fn set_track_favorite(
+    track_id: String,
+    favorite: bool,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let parsed: TrackId = track_id.into();
+    let guard = state.lock().await;
+    guard
+        .library
+        .set_track_favorite(&server_id, &parsed, favorite)
+        .map_err(|e| e.to_string())
+}
+
+/// Sets the favorite flag on an album.
+#[tauri::command]
+pub async fn set_album_favorite(
+    album_id: String,
+    favorite: bool,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let parsed: AlbumId = album_id.into();
+    let guard = state.lock().await;
+    guard
+        .library
+        .set_album_favorite(&server_id, &parsed, favorite)
+        .map_err(|e| e.to_string())
+}
+
+/// Sets the favorite flag on an artist.
+#[tauri::command]
+pub async fn set_artist_favorite(
+    artist_id: String,
+    favorite: bool,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let parsed: ArtistId = artist_id.into();
+    let guard = state.lock().await;
+    guard
+        .library
+        .set_artist_favorite(&server_id, &parsed, favorite)
+        .map_err(|e| e.to_string())
+}
+
+/// Returns all favorited tracks, albums, and artists for the active server.
+#[tauri::command]
+pub async fn get_favorites(state: SharedState<'_>) -> Result<FavoritesPayload, String> {
+    let server_id = active_server_id(&state).await;
+    let guard = state.lock().await;
+    let (tracks, albums, artists) = guard
+        .library
+        .get_favorites(&server_id)
+        .map_err(|e| e.to_string())?;
+    Ok(FavoritesPayload { tracks, albums, artists })
 }
 
 // ─── Search (Phase 2) ───────────────────────────────────────────

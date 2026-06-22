@@ -5,6 +5,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { FavoriteButton } from "../ui/FavoriteButton";
 import { useLibraryStore } from "../../stores/libraryStore";
 import { playTrack } from "../../lib/tauri";
 import { formatDuration } from "../../lib/format";
@@ -86,6 +87,7 @@ export function TracksTab() {
                 </button>
               </th>
             ))}
+            <th scope="col" className="w-10 px-3 py-2" />
           </tr>
         </thead>
         <tbody className="divide-y divide-bg-raised">
@@ -107,6 +109,9 @@ export function TracksTab() {
               <td className="px-3 py-2 text-fg-subtle">{track.album}</td>
               <td className="px-3 py-2 text-right text-fg-muted">
                 {formatDuration(track.durationSeconds)}
+              </td>
+              <td className="px-3 py-2">
+                <FavoriteButton kind="track" itemId={track.id} initialFavorite={track.favorite} />
               </td>
             </tr>
           ))}

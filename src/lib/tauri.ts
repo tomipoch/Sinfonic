@@ -112,6 +112,25 @@ export const removePlaylistEntries = (playlistId: string, entryIds: string[]) =>
 export const movePlaylistEntry = (playlistId: string, entryId: string, newIndex: number) =>
   invoke<void>("move_playlist_entry", { playlistId, entryId, newIndex });
 
+// ─── Favorites (Phase 9) ───────────────────────────────────────
+
+export interface FavoritesPayload {
+  tracks: Track[];
+  albums: Album[];
+  artists: Artist[];
+}
+
+export const setTrackFavorite = (trackId: string, favorite: boolean) =>
+  invoke<void>("set_track_favorite", { trackId, favorite });
+
+export const setAlbumFavorite = (albumId: string, favorite: boolean) =>
+  invoke<void>("set_album_favorite", { albumId, favorite });
+
+export const setArtistFavorite = (artistId: string, favorite: boolean) =>
+  invoke<void>("set_artist_favorite", { artistId, favorite });
+
+export const getFavorites = () => invoke<FavoritesPayload>("get_favorites");
+
 // ─── Repeat / shuffle ───────────────────────────────────────────
 
 export const setRepeat = (repeat: "off" | "one" | "all") =>

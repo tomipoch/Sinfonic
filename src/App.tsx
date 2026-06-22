@@ -16,6 +16,7 @@ import { ArtistDetailView } from "./components/views/ArtistDetailView";
 import { ArtistsTab } from "./components/views/ArtistsTab";
 import { HomeView } from "./components/views/HomeView";
 import { LibraryView } from "./components/views/LibraryView";
+import { FavoritesView } from "./components/views/FavoritesView";
 import { PlaylistDetailView } from "./components/views/PlaylistDetailView";
 import { PlaylistsView } from "./components/views/PlaylistsView";
 import { QueueView } from "./components/views/QueueView";
@@ -55,6 +56,7 @@ export default function App() {
           <Route path="settings" element={<SettingsView />} />
           <Route path="playlists" element={<PlaylistsView />} />
           <Route path="playlists/:id" element={<PlaylistDetailView />} />
+          <Route path="favorites" element={<FavoritesView />} />
           <Route path="*" element={<HomeView />} />
         </Route>
       </Routes>

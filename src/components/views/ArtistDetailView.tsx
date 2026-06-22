@@ -9,6 +9,7 @@ import { useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { AlbumCover } from "../ui/AlbumCover";
+import { FavoriteButton } from "../ui/FavoriteButton";
 import { useLibraryStore } from "../../stores/libraryStore";
 
 export function ArtistDetailView() {
@@ -51,10 +52,13 @@ export function ArtistDetailView() {
       <header className="flex flex-col gap-1">
         <div className="text-xs uppercase tracking-wide text-fg-subtle">Artist</div>
         <h1 className="truncate text-3xl font-semibold">{artist.name}</h1>
-        <div className="text-sm text-fg-subtle">
-          {artist.albumCount} {artist.albumCount === 1 ? "album" : "albums"}
-          {" · "}
-          {artist.trackCount} {artist.trackCount === 1 ? "track" : "tracks"}
+        <div className="flex items-center gap-3 text-sm text-fg-subtle">
+          <span>
+            {artist.albumCount} {artist.albumCount === 1 ? "album" : "albums"}
+            {" · "}
+            {artist.trackCount} {artist.trackCount === 1 ? "track" : "tracks"}
+          </span>
+          <FavoriteButton kind="artist" itemId={artist.id} initialFavorite={artist.favorite} />
         </div>
       </header>
 
