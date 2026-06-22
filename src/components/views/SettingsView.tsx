@@ -1,8 +1,13 @@
-// Settings — manage server connections (Jellyfin and Subsonic) and
-// trigger library sync. Phase 3 added the Jellyfin path; Phase 5
-// adds Subsonic with the same form layout but no discovery (the
-// Subsonic protocol has no UDP broadcast equivalent). Phase 7 adds
-// an optional Last.fm scrobble section below the server block.
+// Settings — manage server connections (Jellyfin, Subsonic, local
+// files) and trigger library sync. Phase 3 added the Jellyfin path;
+// Phase 5 adds Subsonic with the same form layout but no discovery
+// (the Subsonic protocol has no UDP broadcast equivalent). Phase 7
+// adds an optional Last.fm scrobble section. Phase 8 adds a local
+// files section: text input for a music root path + Scan/Rescan.
+//
+// The remote-login form and the local-files form are siblings
+// rather than tabbed because they have completely different fields
+// (URL/username/password vs. absolute path).
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -11,7 +16,10 @@ import {
   lastfmConnect,
   lastfmDisconnect,
   lastfmStatus,
+  localLogin,
+  localRescan,
   type LastFmStatus,
+  type LocalScanResult,
 } from "../../lib/tauri";
 import { useServerStore, type ServerKind } from "../../stores/serverStore";
 
@@ -35,6 +43,10 @@ export function SettingsView() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [discovering, setDiscovering] = useState(false);
+
+  const [localPath, setLocalPath] = useState("");
+  const [localBusy, setLocalBusy] = useState(false);
+  const [localStats, setLocalStats] = useState<LocalScanResult | null>(null);
 
   const [lastfm, setLastfm] = useState<LastFmStatus>({
     configured: false,
@@ -145,7 +157,42 @@ export function SettingsView() {
     }
   };
 
+  const onLocalScan = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setLocalBusy(true);
+    try {
+      const stats = await localLogin(localPath.trim());
+      setLocalStats(stats);
+      toast.success(
+        `Scanned ${stats.tracks} tracks / ${stats.albums} albums` +
+          (stats.errors > 0 ? ` (${stats.errors} file(s) skipped)` : ""),
+      );
+      await login({ kind: "local", path: localPath.trim() });
+    } catch (err) {
+      toast.error(`Local scan: ${(err as Error).message ?? String(err)}`);
+    } finally {
+      setLocalBusy(false);
+    }
+  };
+
+  const onLocalRescan = async () => {
+    setLocalBusy(true);
+    try {
+      const stats = await localRescan();
+      setLocalStats(stats);
+      toast.success(
+        `Rescanned ${stats.tracks} tracks / ${stats.albums} albums` +
+          (stats.errors > 0 ? ` (${stats.errors} file(s) skipped)` : ""),
+      );
+    } catch (err) {
+      toast.error(`Local rescan: ${(err as Error).message ?? String(err)}`);
+    } finally {
+      setLocalBusy(false);
+    }
+  };
+
   const activeServer = servers.find((s) => s.id === activeServerId);
+  const isLocalActive = activeServer?.kind === "local";
 
   return (
     <section className="mx-auto flex max-w-3xl flex-col gap-6 p-6">
@@ -339,6 +386,84 @@ export function SettingsView() {
               </li>
             ))}
           </ul>
+        )}
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-medium">Local files</h2>
+        {isLocalActive ? (
+          <div className="flex flex-col gap-3 rounded-md border border-bg-raised bg-bg-subtle p-4">
+            <div className="text-sm">
+              <span className="text-fg-subtle">Scanning:</span>{" "}
+              <span className="font-mono text-fg">{activeServer?.baseUrl}</span>
+            </div>
+            {localStats && (
+              <div className="text-xs text-fg-subtle">
+                {localStats.tracks} tracks · {localStats.albums} albums ·{" "}
+                {localStats.artists} artists
+                {localStats.errors > 0 && (
+                  <span className="text-yellow-400">
+                    {" "}
+                    · {localStats.errors} file(s) skipped
+                  </span>
+                )}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={onLocalRescan}
+                disabled={localBusy}
+                className="btn-secondary"
+              >
+                {localBusy ? "Rescanning…" : "Rescan library"}
+              </button>
+              <button
+                type="button"
+                onClick={onLogout}
+                disabled={busy}
+                className="btn-secondary"
+              >
+                Disconnect
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form
+            onSubmit={onLocalScan}
+            className="flex flex-col gap-3 rounded-md border border-bg-raised bg-bg-subtle p-4"
+          >
+            <p className="text-xs text-fg-subtle">
+              Point Sinfonic at a directory of audio files (MP3, FLAC,
+              OGG, Opus, MP4/M4A, WAV). The directory is walked
+              recursively; metadata comes from the file tags. Embedded
+              cover art is reused when no album image is available
+              from a remote provider.
+            </p>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-fg-subtle">Music folder</span>
+              <input
+                type="text"
+                value={localPath}
+                onChange={(e) => setLocalPath(e.currentTarget.value)}
+                placeholder="/Users/you/Music"
+                required
+                spellCheck={false}
+                autoCorrect="off"
+                autoCapitalize="off"
+                className="rounded-md border border-bg-raised bg-bg px-3 py-2 font-mono text-sm text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none"
+              />
+            </label>
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={localBusy}
+                className="btn-primary"
+              >
+                {localBusy ? "Scanning…" : "Scan library"}
+              </button>
+            </div>
+          </form>
         )}
       </section>
 

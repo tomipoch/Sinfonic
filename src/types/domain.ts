@@ -150,6 +150,10 @@ export interface SubsonicLoginRequest {
   password: string;
 }
 
+export interface LocalLoginRequest {
+  path: string;
+}
+
 export type LibrarySyncState = "started" | "complete" | "failed";
 
 export interface LibrarySyncStatus {

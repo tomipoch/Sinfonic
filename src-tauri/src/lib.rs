@@ -183,6 +183,9 @@ pub fn run() {
             commands::provider_sync_library,
             // Album art (Phase 7)
             commands::provider_image_bytes,
+            // Local files (Phase 8)
+            commands::local_login,
+            commands::local_rescan,
             // Last.fm (Phase 7)
             commands::lastfm_connect,
             commands::lastfm_disconnect,
