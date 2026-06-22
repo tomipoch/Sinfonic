@@ -26,6 +26,7 @@ pub mod error;
 pub mod rows;
 pub mod schema;
 pub mod search;
+pub mod smart_playlists;
 pub mod store;
 
 pub use album_art::{AlbumArtCache, CachedImage, CachedImageMeta, ImageCacheKey};

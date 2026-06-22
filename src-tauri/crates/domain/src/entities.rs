@@ -127,3 +127,74 @@ pub struct FolderDetail {
     pub path: String,
     pub entries: Vec<FolderEntry>,
 }
+
+// ─── Smart Playlists (Phase 9) ───────────────────────────────────
+
+/// Single-rule smart playlist definition.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SmartPlaylist {
+    pub id: super::ids::SmartPlaylistId,
+    pub name: String,
+    pub rule: SmartPlaylistRule,
+    pub sort_field: SmartPlaylistSortField,
+    pub sort_dir: SmartPlaylistSortDirection,
+    pub limit_n: u16,
+}
+
+/// One filter rule for smart playlist evaluation.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SmartPlaylistRule {
+    pub field: SmartPlaylistRuleField,
+    pub operator: SmartPlaylistRuleOperator,
+    pub value: String,
+}
+
+/// Fields that can be used in a smart playlist rule.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SmartPlaylistRuleField {
+    Title,
+    Artist,
+    Album,
+    Genre,
+    DurationSeconds,
+    TrackNumber,
+    Year,
+    Favorite,
+    PlayCount,
+}
+
+/// Operators for rule evaluation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SmartPlaylistRuleOperator {
+    Contains,
+    StartsWith,
+    EndsWith,
+    Equals,
+    LessThan,
+    GreaterThan,
+    NotContains,
+    NotEquals,
+}
+
+/// Sort fields for smart playlist results.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SmartPlaylistSortField {
+    Title,
+    Artist,
+    Album,
+    DurationSeconds,
+    Year,
+    Random,
+    DateAdded,
+}
+
+/// Sort direction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SmartPlaylistSortDirection {
+    Asc,
+    Desc,
+}
