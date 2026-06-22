@@ -40,6 +40,13 @@ keyring = "3"
 # Synchronisation primitives (faster, non-poisoning Mutexes for hot paths)
 parking_lot = "0.12"
 
+# Filesystem (Phase 8 — local-files provider)
+walkdir = "2"
+# Audio metadata parsing (Phase 8 — local-files provider). lofty 0.21 ships
+# MP3/FLAC/OGG/Opus/MP4/WAV behind default features; the only opt-in feature
+# is `id3v2_compression_support`, which we don't need for a reader.
+lofty = "0.21"
+
 # Tauri
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
