@@ -14,7 +14,7 @@
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when appending a migration.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// One versioned schema change.
 #[derive(Clone, Copy, Debug)]
@@ -25,11 +25,18 @@ pub struct Migration {
 }
 
 /// Migrations in version order. Append-only.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "initial_schema",
-    sql: INITIAL_SCHEMA,
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "initial_schema",
+        sql: INITIAL_SCHEMA,
+    },
+    Migration {
+        version: 2,
+        name: "add_year_and_smart_playlists",
+        sql: MIGRATION_V2,
+    },
+];
 
 const INITIAL_SCHEMA: &str = r#"
 -- `schema_migrations` is created by `run_migrations` before any
@@ -157,6 +164,28 @@ CREATE VIRTUAL TABLE library_fts USING fts5(
 );
 "#;
 
+const MIGRATION_V2: &str = r#"
+-- Add year column to tracks (denormalised from album for rule evaluation).
+ALTER TABLE tracks ADD COLUMN year INTEGER;
+
+-- Smart playlists (Phase 9): single-rule evaluation stored in SQLite.
+CREATE TABLE smart_playlists (
+    server_id   TEXT NOT NULL,
+    sp_id       TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    field       TEXT NOT NULL,
+    operator    TEXT NOT NULL,
+    value       TEXT NOT NULL,
+    sort_field  TEXT NOT NULL DEFAULT 'title',
+    sort_dir    TEXT NOT NULL DEFAULT 'asc',
+    limit_n     INTEGER NOT NULL DEFAULT 50,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (server_id, sp_id)
+);
+CREATE INDEX idx_smart_playlists_server ON smart_playlists(server_id);
+"#;
+
 /// Apply every migration in `MIGRATIONS` that has not been applied
 /// yet, recording each in `schema_migrations` inside a single
 /// transaction. Idempotent: running twice does nothing on the second
@@ -243,7 +272,7 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
     }
 
     #[test]
@@ -260,6 +289,7 @@ mod tests {
             "playlist_tracks",
             "genres",
             "library_fts",
+            "smart_playlists",
         ] {
             let exists: i64 = conn
                 .query_row(
