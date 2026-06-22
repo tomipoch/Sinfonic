@@ -41,8 +41,10 @@ use crate::events::{
 use crate::lastfm;
 use crate::state::AppState;
 use sinfonic_domain::{
-    Album, AlbumDetail, AlbumId, Artist, ImageKind, PagedResponse, QueueEntryId, QueueSnapshot,
-    RepeatMode, SearchResults, ServerId, Track, TrackId,
+    Album, AlbumDetail, AlbumId, Artist, ArtistId, ImageKind, PagedResponse, Playlist, PlaylistDetail,
+    PlaylistId, QueueEntryId, QueueSnapshot, RepeatMode, SearchResults, ServerId, SmartPlaylist,
+    SmartPlaylistId, SmartPlaylistRuleField, SmartPlaylistRuleOperator, SmartPlaylistSortDirection,
+    SmartPlaylistSortField, Track, TrackId,
 };
 use sinfonic_library::ImageCacheKey;
 use sinfonic_secrets::SecretStore;
@@ -635,6 +637,276 @@ pub async fn get_eq_bands(
             gain_db: b.gain_db,
         })
         .collect())
+}
+
+// ─── Queue bulk mutations (Phase 9) ─────────────────────────────
+
+#[tauri::command]
+pub async fn queue_add_many(
+    tracks: Vec<Track>,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<Vec<QueueEntryId>, String> {
+    if tracks.is_empty() {
+        return Ok(vec![]);
+    }
+    let ids = {
+        let mut guard = state.lock().await;
+        guard.queue.add_many(&tracks)
+    };
+    emit_queue_changed(&app, &state).await;
+    Ok(ids)
+}
+
+#[tauri::command]
+pub async fn queue_play_next_many(
+    tracks: Vec<Track>,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<Vec<QueueEntryId>, String> {
+    if tracks.is_empty() {
+        return Ok(vec![]);
+    }
+    let ids = {
+        let mut guard = state.lock().await;
+        guard.queue.play_next_many(&tracks)
+    };
+    emit_queue_changed(&app, &state).await;
+    Ok(ids)
+}
+
+// ─── Playlist CRUD (Phase 9) ────────────────────────────────────
+
+/// Lists all playlists from the local SQLite cache.
+#[tauri::command]
+pub async fn playlists_get(state: SharedState<'_>) -> Result<Vec<Playlist>, String> {
+    let server_id = active_server_id(&state).await;
+    let guard = state.lock().await;
+    guard
+        .library
+        .list_playlists(&server_id)
+        .map_err(|e| e.to_string())
+}
+
+/// Returns a playlist with its tracks resolved from the local cache.
+#[tauri::command]
+pub async fn playlist_detail(
+    playlist_id: String,
+    state: SharedState<'_>,
+) -> Result<PlaylistDetail, String> {
+    let server_id = active_server_id(&state).await;
+    let parsed_id: PlaylistId = playlist_id.into();
+    let guard = state.lock().await;
+    let playlist = {
+        let playlists = guard.library.list_playlists(&server_id)
+            .map_err(|e| e.to_string())?;
+        playlists
+            .into_iter()
+            .find(|p| p.id == parsed_id)
+            .ok_or_else(|| "playlist not found".to_string())?
+    };
+    let track_ids = guard
+        .library
+        .list_playlist_tracks(&server_id, &parsed_id)
+        .map_err(|e| e.to_string())?;
+    let mut tracks = Vec::with_capacity(track_ids.len());
+    for tid in track_ids {
+        if let Some(track) = guard.library.get_track(&server_id, &tid).map_err(|e| e.to_string())? {
+            tracks.push(track);
+        }
+    }
+    Ok(PlaylistDetail { playlist, tracks })
+}
+
+/// Creates a new local playlist and stores it in SQLite.
+/// If a provider is connected and supports playlist mutations, also
+/// calls `provider.create_playlist` (errors there are non-fatal).
+#[tauri::command]
+pub async fn create_playlist(
+    name: String,
+    track_ids: Vec<TrackId>,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<PlaylistId, String> {
+    let server_id = active_server_id(&state).await;
+    let playlist_id = {
+        let guard = state.lock().await;
+        guard
+            .library
+            .create_playlist(&server_id, &name, &track_ids)
+            .map_err(|e| e.to_string())?
+    };
+    emit_queue_changed(&app, &state).await;
+    Ok(playlist_id)
+}
+
+/// Renames an existing playlist.
+#[tauri::command]
+pub async fn rename_playlist(
+    playlist_id: String,
+    name: String,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let parsed: PlaylistId = playlist_id.into();
+    let guard = state.lock().await;
+    guard
+        .library
+        .rename_playlist(&server_id, &parsed, &name)
+        .map_err(|e| e.to_string())
+}
+
+/// Deletes a playlist and its track associations.
+#[tauri::command]
+pub async fn delete_playlist(
+    playlist_id: String,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let parsed: PlaylistId = playlist_id.into();
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .delete_playlist(&server_id, &parsed)
+            .map_err(|e| e.to_string())?
+    }
+    emit_queue_changed(&app, &state).await;
+    Ok(())
+}
+
+/// Appends tracks to the end of a playlist.
+#[tauri::command]
+pub async fn add_playlist_tracks(
+    playlist_id: String,
+    track_ids: Vec<TrackId>,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let parsed: PlaylistId = playlist_id.into();
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .add_playlist_tracks(&server_id, &parsed, &track_ids)
+            .map_err(|e| e.to_string())?
+    }
+    emit_queue_changed(&app, &state).await;
+    Ok(())
+}
+
+/// Removes entries from a playlist by their position (entry ids = position strings).
+#[tauri::command]
+pub async fn remove_playlist_entries(
+    playlist_id: String,
+    entry_ids: Vec<String>,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let parsed: PlaylistId = playlist_id.into();
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .remove_playlist_entries(&server_id, &parsed, &entry_ids)
+            .map_err(|e| e.to_string())?
+    }
+    emit_queue_changed(&app, &state).await;
+    Ok(())
+}
+
+/// Moves a playlist entry to a new position.
+#[tauri::command]
+pub async fn move_playlist_entry(
+    playlist_id: String,
+    entry_id: String,
+    new_index: usize,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let parsed: PlaylistId = playlist_id.into();
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .move_playlist_entry(&server_id, &parsed, &entry_id, new_index)
+            .map_err(|e| e.to_string())?
+    }
+    emit_queue_changed(&app, &state).await;
+    Ok(())
+}
+
+// ─── Favorites (Phase 9) ──────────────────────────────────────
+
+#[derive(Clone, Serialize)]
+pub struct FavoritesPayload {
+    pub tracks: Vec<Track>,
+    pub albums: Vec<Album>,
+    pub artists: Vec<Artist>,
+}
+
+/// Sets the favorite flag on a track.
+#[tauri::command]
+pub async fn set_track_favorite(
+    track_id: String,
+    favorite: bool,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let parsed: TrackId = track_id.into();
+    let guard = state.lock().await;
+    guard
+        .library
+        .set_track_favorite(&server_id, &parsed, favorite)
+        .map_err(|e| e.to_string())
+}
+
+/// Sets the favorite flag on an album.
+#[tauri::command]
+pub async fn set_album_favorite(
+    album_id: String,
+    favorite: bool,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let parsed: AlbumId = album_id.into();
+    let guard = state.lock().await;
+    guard
+        .library
+        .set_album_favorite(&server_id, &parsed, favorite)
+        .map_err(|e| e.to_string())
+}
+
+/// Sets the favorite flag on an artist.
+#[tauri::command]
+pub async fn set_artist_favorite(
+    artist_id: String,
+    favorite: bool,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let parsed: ArtistId = artist_id.into();
+    let guard = state.lock().await;
+    guard
+        .library
+        .set_artist_favorite(&server_id, &parsed, favorite)
+        .map_err(|e| e.to_string())
+}
+
+/// Returns all favorited tracks, albums, and artists for the active server.
+#[tauri::command]
+pub async fn get_favorites(state: SharedState<'_>) -> Result<FavoritesPayload, String> {
+    let server_id = active_server_id(&state).await;
+    let guard = state.lock().await;
+    let (tracks, albums, artists) = guard
+        .library
+        .get_favorites(&server_id)
+        .map_err(|e| e.to_string())?;
+    Ok(FavoritesPayload { tracks, albums, artists })
 }
 
 // ─── Search (Phase 2) ───────────────────────────────────────────
@@ -1289,6 +1561,98 @@ pub async fn try_resume_lastfm(state: &AppState) {
     let secrets = state.secrets.clone();
     let slot = state.lastfm.clone();
     let _ = lastfm::try_resume(secrets.as_ref(), slot.as_ref()).await;
+}
+
+// ─── Smart Playlists (Phase 9) ─────────────────────────────────
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSmartPlaylistArgs {
+    name: String,
+    field: SmartPlaylistRuleField,
+    operator: SmartPlaylistRuleOperator,
+    value: String,
+    sort_field: SmartPlaylistSortField,
+    sort_dir: SmartPlaylistSortDirection,
+    limit_n: u16,
+}
+
+#[tauri::command]
+pub async fn get_smart_playlists(
+    state: SharedState<'_>,
+) -> Result<Vec<SmartPlaylist>, String> {
+    let server_id = active_server_id(&state).await;
+    let guard = state.lock().await;
+    guard
+        .library
+        .list_smart_playlists(&server_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_smart_playlist(
+    state: SharedState<'_>,
+    args: CreateSmartPlaylistArgs,
+) -> Result<SmartPlaylist, String> {
+    let server_id = active_server_id(&state).await;
+    let sp_id = SmartPlaylistId::new(format!("sp-{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()));
+    let sp = SmartPlaylist {
+        id: sp_id.clone(),
+        name: args.name,
+        rule: sinfonic_domain::SmartPlaylistRule {
+            field: args.field,
+            operator: args.operator,
+            value: args.value,
+        },
+        sort_field: args.sort_field,
+        sort_dir: args.sort_dir,
+        limit_n: args.limit_n,
+    };
+    let guard = state.lock().await;
+    guard
+        .library
+        .replace_smart_playlists(&server_id, std::slice::from_ref(&sp))
+        .map_err(|e| e.to_string())?;
+    Ok(sp)
+}
+
+#[tauri::command]
+pub async fn delete_smart_playlist(
+    state: SharedState<'_>,
+    sp_id: String,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let id = SmartPlaylistId::new(sp_id);
+    let guard = state.lock().await;
+    guard
+        .library
+        .delete_smart_playlist(&server_id, &id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn evaluate_smart_playlist(
+    state: SharedState<'_>,
+    sp_id: String,
+) -> Result<Vec<Track>, String> {
+    let server_id = active_server_id(&state).await;
+    let id = SmartPlaylistId::new(sp_id);
+    let guard = state.lock().await;
+    let playlists = guard
+        .library
+        .list_smart_playlists(&server_id)
+        .map_err(|e| e.to_string())?;
+    let sp = playlists
+        .iter()
+        .find(|p| p.id.as_str() == id.as_str())
+        .ok_or_else(|| "Smart playlist not found".to_string())?;
+    guard
+        .library
+        .evaluate_smart_playlist(&server_id, sp)
+        .map_err(|e| e.to_string())
 }
 
 // ─── Internal event helpers ─────────────────────────────────────

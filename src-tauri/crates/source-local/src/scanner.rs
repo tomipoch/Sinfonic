@@ -184,12 +184,26 @@ fn scan_one(path: &Path, root: &Path) -> Result<TrackOutcome, String> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "Unknown artist".to_string());
+
+    /// Derives an album name from the parent directory when no tag provides one.
+    fn dir_album(path: &Path, root: &Path) -> String {
+        path.strip_prefix(root)
+            .ok()
+            .and_then(|p| p.parent().or(Some(p)))
+            .and_then(|p| p.file_name())
+            .and_then(|n| {
+                let s = n.to_string_lossy();
+                if s.is_empty() { None } else { Some(s.into_owned()) }
+            })
+            .unwrap_or_else(|| "Unknown album".to_string())
+    }
+
     let album = tag
         .as_ref()
         .and_then(|t| t.album())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "Unknown album".to_string());
+        .unwrap_or_else(|| dir_album(path, root));
     let title = tag
         .as_ref()
         .and_then(|t| t.title())

@@ -7,6 +7,9 @@ import { cn } from "../../lib/cn";
 const links: ReadonlyArray<{ to: string; label: string; end?: boolean }> = [
   { to: "/", label: "Home", end: true },
   { to: "/library", label: "Library" },
+  { to: "/playlists", label: "Playlists" },
+  { to: "/favorites", label: "Favorites" },
+  { to: "/smart-playlists", label: "Smart Playlists" },
   { to: "/queue", label: "Queue" },
   { to: "/search", label: "Search" },
   { to: "/settings", label: "Settings" },

@@ -3,8 +3,11 @@
 import { Outlet } from "react-router-dom";
 import { PlayerBar } from "./PlayerBar";
 import { Sidebar } from "./Sidebar";
+import { useKeyboardShortcuts } from "../../hooks/useKeyboardShortcuts";
 
 export function Layout() {
+  useKeyboardShortcuts();
+
   return (
     <div className="flex h-full w-full">
       <Sidebar />

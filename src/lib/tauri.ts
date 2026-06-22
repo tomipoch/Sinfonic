@@ -15,6 +15,7 @@ import type {
   DiscoveredServer,
   PagedResponse,
   PlaybackStatePayload,
+  Playlist,
   QueueSnapshot,
   SearchResults,
   Track,
@@ -73,6 +74,113 @@ export const queueMove = (entryId: string, targetIndex: number) =>
   invoke<void>("queue_move", { entryId, targetIndex });
 
 export const queueClear = () => invoke<void>("queue_clear");
+
+// ─── Queue bulk + Playlist CRUD (Phase 9) ───────────────────────
+
+export const queueAddMany = (tracks: Track[]) =>
+  invoke<string[]>("queue_add_many", { tracks });
+
+export const queuePlayNextMany = (tracks: Track[]) =>
+  invoke<string[]>("queue_play_next_many", { tracks });
+
+export const playlistsGet = () =>
+  invoke<Playlist[]>("playlists_get");
+
+export interface PlaylistDetail {
+  playlist: Playlist;
+  tracks: Track[];
+}
+
+export const playlistDetail = (playlistId: string) =>
+  invoke<PlaylistDetail>("playlist_detail", { playlistId });
+
+export const createPlaylist = (name: string, trackIds: string[]) =>
+  invoke<string>("create_playlist", { name, trackIds });
+
+export const renamePlaylist = (playlistId: string, name: string) =>
+  invoke<void>("rename_playlist", { playlistId, name });
+
+export const deletePlaylist = (playlistId: string) =>
+  invoke<void>("delete_playlist", { playlistId });
+
+export const addPlaylistTracks = (playlistId: string, trackIds: string[]) =>
+  invoke<void>("add_playlist_tracks", { playlistId, trackIds });
+
+export const removePlaylistEntries = (playlistId: string, entryIds: string[]) =>
+  invoke<void>("remove_playlist_entries", { playlistId, entryIds });
+
+export const movePlaylistEntry = (playlistId: string, entryId: string, newIndex: number) =>
+  invoke<void>("move_playlist_entry", { playlistId, entryId, newIndex });
+
+// ─── Favorites (Phase 9) ───────────────────────────────────────
+
+export interface FavoritesPayload {
+  tracks: Track[];
+  albums: Album[];
+  artists: Artist[];
+}
+
+export const setTrackFavorite = (trackId: string, favorite: boolean) =>
+  invoke<void>("set_track_favorite", { trackId, favorite });
+
+export const setAlbumFavorite = (albumId: string, favorite: boolean) =>
+  invoke<void>("set_album_favorite", { albumId, favorite });
+
+export const setArtistFavorite = (artistId: string, favorite: boolean) =>
+  invoke<void>("set_artist_favorite", { artistId, favorite });
+
+export const getFavorites = () => invoke<FavoritesPayload>("get_favorites");
+
+// ─── Smart Playlists (Phase 9) ────────────────────────────────
+
+export type SmartPlaylistRuleField =
+  | "title" | "artist" | "album" | "genre"
+  | "duration_seconds" | "track_number" | "year" | "favorite" | "play_count";
+
+export type SmartPlaylistRuleOperator =
+  | "contains" | "starts_with" | "ends_with" | "equals"
+  | "less_than" | "greater_than" | "not_contains" | "not_equals";
+
+export type SmartPlaylistSortField =
+  | "title" | "artist" | "album" | "duration_seconds" | "year" | "random" | "date_added";
+
+export type SmartPlaylistSortDirection = "asc" | "desc";
+
+export interface SmartPlaylistRule {
+  field: SmartPlaylistRuleField;
+  operator: SmartPlaylistRuleOperator;
+  value: string;
+}
+
+export interface SmartPlaylist {
+  id: string;
+  name: string;
+  rule: SmartPlaylistRule;
+  sortField: SmartPlaylistSortField;
+  sortDir: SmartPlaylistSortDirection;
+  limitN: number;
+}
+
+export interface CreateSmartPlaylistArgs {
+  name: string;
+  field: SmartPlaylistRuleField;
+  operator: SmartPlaylistRuleOperator;
+  value: string;
+  sortField: SmartPlaylistSortField;
+  sortDir: SmartPlaylistSortDirection;
+  limitN: number;
+}
+
+export const getSmartPlaylists = () => invoke<SmartPlaylist[]>("get_smart_playlists");
+
+export const createSmartPlaylist = (args: CreateSmartPlaylistArgs) =>
+  invoke<SmartPlaylist>("create_smart_playlist", { args });
+
+export const deleteSmartPlaylist = (spId: string) =>
+  invoke<void>("delete_smart_playlist", { spId });
+
+export const evaluateSmartPlaylist = (spId: string) =>
+  invoke<Track[]>("evaluate_smart_playlist", { spId });
 
 // ─── Repeat / shuffle ───────────────────────────────────────────
 

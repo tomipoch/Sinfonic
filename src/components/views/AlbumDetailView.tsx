@@ -13,9 +13,12 @@ import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 
 import { AlbumCover } from "../ui/AlbumCover";
+import { FavoriteButton } from "../ui/FavoriteButton";
 import { getAlbumDetail, playAlbum, playTrack } from "../../lib/tauri";
 import { useServerStore } from "../../stores/serverStore";
 import { formatDuration } from "../../lib/format";
+import { encodeDragData } from "../../lib/queueDnD";
+import { cn } from "../../lib/cn";
 import type { Album, Track } from "../../types/domain";
 
 interface AlbumDetailData {
@@ -31,6 +34,7 @@ export function AlbumDetailView() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -127,7 +131,7 @@ export function AlbumDetailView() {
             {" · "}
             {formatDuration(album.durationSeconds)}
           </div>
-          <div className="mt-3">
+          <div className="mt-3 flex items-center gap-3">
             <button
               type="button"
               onClick={onPlayAlbum}
@@ -136,36 +140,48 @@ export function AlbumDetailView() {
             >
               Play album
             </button>
+            <FavoriteButton kind="album" itemId={album.id} initialFavorite={album.favorite} />
           </div>
         </div>
       </header>
 
-      <ol className="divide-y divide-bg-raised rounded-md border border-bg-raised">
-        {tracks.map((track) => (
-          <li
-            key={track.id}
-            className="grid grid-cols-[2.5rem_1fr_auto] items-center gap-3 px-3 py-2 text-sm"
-          >
-            <div className="text-right font-mono text-xs text-fg-muted">
-              {track.trackNumber || "—"}
-            </div>
-            <div className="min-w-0">
-              <button
-                type="button"
-                onClick={() => void onPlayTrack(track)}
-                disabled={busy}
-                className="block w-full truncate text-left font-medium text-fg hover:text-white focus:outline-none"
+          <ol className="divide-y divide-bg-raised rounded-md border border-bg-raised">
+            {tracks.map((track) => (
+              <li
+                key={track.id}
+                draggable
+                onDragStart={(e) => {
+                  setDraggingId(track.id);
+                  e.dataTransfer.setData("application/json", encodeDragData({ tracks: [track], source: "album-detail" }));
+                  e.dataTransfer.effectAllowed = "copy";
+                }}
+                onDragEnd={() => setDraggingId(null)}
+                className={cn(
+                  "grid grid-cols-[2.5rem_1fr_auto_auto] items-center gap-3 px-3 py-2 text-sm",
+                  draggingId === track.id && "opacity-30",
+                )}
               >
-                {track.title}
-              </button>
-              <div className="truncate text-xs text-fg-subtle">{track.artist}</div>
-            </div>
-            <div className="text-xs text-fg-muted">
-              {formatDuration(track.durationSeconds)}
-            </div>
-          </li>
-        ))}
-      </ol>
+                <div className="text-right font-mono text-xs text-fg-muted">
+                  {track.trackNumber || "—"}
+                </div>
+                <div className="min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => void onPlayTrack(track)}
+                    disabled={busy}
+                    className="block w-full truncate text-left font-medium text-fg hover:text-white focus:outline-none"
+                  >
+                    {track.title}
+                  </button>
+                  <div className="truncate text-xs text-fg-subtle">{track.artist}</div>
+                </div>
+                <div className="text-xs text-fg-muted">
+                  {formatDuration(track.durationSeconds)}
+                </div>
+                <FavoriteButton kind="track" itemId={track.id} initialFavorite={track.favorite} />
+              </li>
+            ))}
+          </ol>
     </section>
   );
 }

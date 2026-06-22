@@ -26,12 +26,14 @@ import {
   seek,
   setMuted,
   setVolume,
+  queueAddMany,
 } from "../../lib/tauri";
 import { usePlaybackStore } from "../../stores/playbackStore";
 import { useQueueStore } from "../../stores/queueStore";
 import { cn } from "../../lib/cn";
 import { formatDuration } from "../../lib/format";
 import { EqPanel } from "../views/EqPanel";
+import { useDropTarget } from "../../hooks/useDropTarget";
 
 const VOLUME_STEP = 0.05;
 const VOLUME_MIN = 0;
@@ -150,9 +152,25 @@ export function PlayerBar() {
     return () => window.removeEventListener("keydown", onKey);
   }, [eqOpen]);
 
+  const { dragOver, droppableProps } = useDropTarget({
+    onDrop: async (tracks) => {
+      if (tracks.length === 0) return;
+      try {
+        await queueAddMany(tracks);
+        toast.success(`Added ${tracks.length} track${tracks.length !== 1 ? "s" : ""} to queue`);
+      } catch (err) {
+        toast.error(`Couldn't add to queue: ${(err as Error).message}`);
+      }
+    },
+  });
+
   return (
     <footer
-      className="relative flex h-20 shrink-0 items-center justify-between gap-4 border-t border-bg-raised bg-bg-subtle px-4"
+      {...droppableProps}
+      className={cn(
+        "relative flex h-20 shrink-0 items-center justify-between gap-4 border-t border-bg-raised bg-bg-subtle px-4 transition-colors",
+        dragOver && "border-accent bg-accent/10",
+      )}
       role="contentinfo"
       aria-label="Player controls"
     >

@@ -467,6 +467,290 @@ impl Store {
         Ok(items)
     }
 
+    /// Fetch a single track by id, or `None` if not found.
+    pub fn get_track(&self, server_id: &ServerId, track_id: &TrackId) -> LibraryResult<Option<Track>> {
+        let conn = self.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT track_id, album_id, title, artist, artist_id, album,
+                    duration_seconds, track_number, disc_number, favorite,
+                    image_kind, image_tag
+             FROM tracks
+             WHERE server_id = ?1 AND track_id = ?2",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![server_id.as_str(), track_id.as_str()])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(rows::row_to_track(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Creates a new local playlist with the given name and track ids.
+    /// Returns the generated `PlaylistId`.
+    pub fn create_playlist(
+        &self,
+        server_id: &ServerId,
+        name: &str,
+        track_ids: &[TrackId],
+    ) -> LibraryResult<PlaylistId> {
+        let mut conn = self.connection()?;
+        let tx = conn.transaction()?;
+        let playlist_id = PlaylistId::new(format!("playlist-local-{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)));
+        let (track_count, duration_seconds) = {
+            let mut total_dur = 0u32;
+            let mut count = 0u32;
+            let mut stmt = tx.prepare("SELECT duration_seconds FROM tracks WHERE server_id = ?1 AND track_id = ?2")?;
+            for tid in track_ids {
+                if let Ok(dur) = stmt.query_row(rusqlite::params![server_id.as_str(), tid.as_str()], |r| r.get::<_, i64>(0)) {
+                    total_dur += dur as u32;
+                    count += 1;
+                }
+            }
+            (count, total_dur)
+        };
+        tx.execute(
+            "INSERT INTO playlists (server_id, playlist_id, name, track_count, duration_seconds, owner, public)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, 1)",
+            rusqlite::params![
+                server_id.as_str(),
+                playlist_id.as_str(),
+                name,
+                track_count as i64,
+                duration_seconds as i64,
+            ],
+        )?;
+        for (pos, tid) in track_ids.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO playlist_tracks (server_id, playlist_id, position, track_id) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![server_id.as_str(), playlist_id.as_str(), pos as i64, tid.as_str()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(playlist_id)
+    }
+
+    /// Deletes a playlist and all its tracks.
+    pub fn delete_playlist(&self, server_id: &ServerId, playlist_id: &PlaylistId) -> LibraryResult<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            "DELETE FROM playlists WHERE server_id = ?1 AND playlist_id = ?2",
+            rusqlite::params![server_id.as_str(), playlist_id.as_str()],
+        )?;
+        Ok(())
+    }
+
+    /// Renames an existing playlist.
+    pub fn rename_playlist(
+        &self,
+        server_id: &ServerId,
+        playlist_id: &PlaylistId,
+        name: &str,
+    ) -> LibraryResult<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            "UPDATE playlists SET name = ?3 WHERE server_id = ?1 AND playlist_id = ?2",
+            rusqlite::params![server_id.as_str(), playlist_id.as_str(), name],
+        )?;
+        Ok(())
+    }
+
+    /// Appends tracks to the end of a playlist.
+    pub fn add_playlist_tracks(
+        &self,
+        server_id: &ServerId,
+        playlist_id: &PlaylistId,
+        track_ids: &[TrackId],
+    ) -> LibraryResult<()> {
+        let mut conn = self.connection()?;
+        let tx = conn.transaction()?;
+        let max_pos: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(position), -1) FROM playlist_tracks WHERE server_id = ?1 AND playlist_id = ?2",
+            rusqlite::params![server_id.as_str(), playlist_id.as_str()],
+            |r| r.get(0),
+        )?;
+        let mut added_dur = 0i64;
+        for (new_pos, tid) in (max_pos + 1..).zip(track_ids.iter()) {
+            let dur: i64 = tx.query_row(
+                "SELECT COALESCE(duration_seconds, 0) FROM tracks WHERE server_id = ?1 AND track_id = ?2",
+                rusqlite::params![server_id.as_str(), tid.as_str()],
+                |r| r.get(0),
+            ).unwrap_or(0);
+            added_dur += dur;
+            tx.execute(
+                "INSERT INTO playlist_tracks (server_id, playlist_id, position, track_id) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![server_id.as_str(), playlist_id.as_str(), new_pos, tid.as_str()],
+            )?;
+        }
+        tx.execute(
+            "UPDATE playlists SET track_count = track_count + ?3, duration_seconds = duration_seconds + ?4
+             WHERE server_id = ?1 AND playlist_id = ?2",
+            rusqlite::params![server_id.as_str(), playlist_id.as_str(), track_ids.len() as i64, added_dur],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Removes playlist entries by their position (entry id = position as string).
+    pub fn remove_playlist_entries(
+        &self,
+        server_id: &ServerId,
+        playlist_id: &PlaylistId,
+        entry_ids: &[String],
+    ) -> LibraryResult<()> {
+        let mut conn = self.connection()?;
+        let tx = conn.transaction()?;
+        for entry_id in entry_ids {
+            if let Ok(pos) = entry_id.parse::<i64>() {
+                tx.execute(
+                    "DELETE FROM playlist_tracks WHERE server_id = ?1 AND playlist_id = ?2 AND position = ?3",
+                    rusqlite::params![server_id.as_str(), playlist_id.as_str(), pos],
+                )?;
+            }
+        }
+        tx.execute(
+            "UPDATE playlists SET track_count = (SELECT COUNT(*) FROM playlist_tracks WHERE server_id = ?1 AND playlist_id = ?2),
+             duration_seconds = (SELECT COALESCE(SUM(t.duration_seconds), 0) FROM playlist_tracks pt JOIN tracks t ON t.track_id = pt.track_id AND t.server_id = pt.server_id WHERE pt.server_id = ?1 AND pt.playlist_id = ?2)
+             WHERE server_id = ?1 AND playlist_id = ?2",
+            rusqlite::params![server_id.as_str(), playlist_id.as_str()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Moves a playlist entry to a new position.
+    pub fn move_playlist_entry(
+        &self,
+        server_id: &ServerId,
+        playlist_id: &PlaylistId,
+        entry_id: &str,
+        new_index: usize,
+    ) -> LibraryResult<()> {
+        let from: i64 = entry_id.parse().map_err(|_| {
+            LibraryError::Validation(format!("invalid entry id: {entry_id}"))
+        })?;
+        let mut conn = self.connection()?;
+        let tx = conn.transaction()?;
+        let max_pos: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(position), 0) FROM playlist_tracks WHERE server_id = ?1 AND playlist_id = ?2",
+            rusqlite::params![server_id.as_str(), playlist_id.as_str()],
+            |r| r.get(0),
+        )?;
+        let to = (new_index as i64).min(max_pos);
+        if from == to {
+            tx.commit()?;
+            return Ok(());
+        }
+        if from < to {
+            tx.execute(
+                "UPDATE playlist_tracks SET position = position - 1
+                 WHERE server_id = ?1 AND playlist_id = ?2 AND position > ?3 AND position <= ?4",
+                rusqlite::params![server_id.as_str(), playlist_id.as_str(), from, to],
+            )?;
+        } else {
+            tx.execute(
+                "UPDATE playlist_tracks SET position = position + 1
+                 WHERE server_id = ?1 AND playlist_id = ?2 AND position >= ?4 AND position < ?3",
+                rusqlite::params![server_id.as_str(), playlist_id.as_str(), from, to],
+            )?;
+        }
+        tx.execute(
+            "UPDATE playlist_tracks SET position = ?3
+             WHERE server_id = ?1 AND playlist_id = ?2 AND position = ?4",
+            rusqlite::params![server_id.as_str(), playlist_id.as_str(), to, from],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    // ─── Favorites (local cache only — Phase 9) ─────────────────
+
+    /// Updates the `favorite` flag on a track.
+    pub fn set_track_favorite(
+        &self,
+        server_id: &ServerId,
+        track_id: &TrackId,
+        favorite: bool,
+    ) -> LibraryResult<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            "UPDATE tracks SET favorite = ?3 WHERE server_id = ?1 AND track_id = ?2",
+            rusqlite::params![server_id.as_str(), track_id.as_str(), favorite as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Updates the `favorite` flag on an album.
+    pub fn set_album_favorite(
+        &self,
+        server_id: &ServerId,
+        album_id: &AlbumId,
+        favorite: bool,
+    ) -> LibraryResult<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            "UPDATE albums SET favorite = ?3 WHERE server_id = ?1 AND album_id = ?2",
+            rusqlite::params![server_id.as_str(), album_id.as_str(), favorite as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Updates the `favorite` flag on an artist.
+    pub fn set_artist_favorite(
+        &self,
+        server_id: &ServerId,
+        artist_id: &ArtistId,
+        favorite: bool,
+    ) -> LibraryResult<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            "UPDATE artists SET favorite = ?3 WHERE server_id = ?1 AND artist_id = ?2",
+            rusqlite::params![server_id.as_str(), artist_id.as_str(), favorite as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Returns all favorited tracks, albums, and artists for a server.
+    pub fn get_favorites(
+        &self,
+        server_id: &ServerId,
+    ) -> LibraryResult<(Vec<Track>, Vec<Album>, Vec<Artist>)> {
+        let conn = self.connection()?;
+
+        let mut track_stmt = conn.prepare(
+            "SELECT track_id, album_id, title, artist, artist_id, album,
+                    duration_seconds, track_number, disc_number, favorite,
+                    image_kind, image_tag
+             FROM tracks WHERE server_id = ?1 AND favorite = 1
+             ORDER BY title COLLATE NOCASE",
+        )?;
+        let tracks = track_stmt
+            .query_map(rusqlite::params![server_id.as_str()], rows::row_to_track)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut album_stmt = conn.prepare(
+            "SELECT album_id, title, artist, artist_id, year, track_count,
+                    duration_seconds, favorite, image_kind, image_tag
+             FROM albums WHERE server_id = ?1 AND favorite = 1
+             ORDER BY title COLLATE NOCASE",
+        )?;
+        let albums = album_stmt
+            .query_map(rusqlite::params![server_id.as_str()], rows::row_to_album)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut artist_stmt = conn.prepare(
+            "SELECT artist_id, name, album_count, track_count, favorite, image_kind, image_tag
+             FROM artists WHERE server_id = ?1 AND favorite = 1
+             ORDER BY name COLLATE NOCASE",
+        )?;
+        let artists = artist_stmt
+            .query_map(rusqlite::params![server_id.as_str()], rows::row_to_artist)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok((tracks, albums, artists))
+    }
+
     // ─── Search ──────────────────────────────────────────────────
 
     /// Search across the FTS5 index. Returns the first `limit`
