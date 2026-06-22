@@ -102,7 +102,15 @@ pub fn scan(root: &Path) -> Result<ScanResult, ScanError> {
     let walker = WalkDir::new(root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|entry| !is_hidden(entry.path()));
+        .filter_entry(|entry| {
+            // Always descend into the root itself (its file_name may
+            // start with a dot — tempfile uses `.tmpXXXX` dirs on
+            // macOS — but the user explicitly asked us to scan it).
+            if entry.path() == root {
+                return true;
+            }
+            !is_hidden(entry.path())
+        });
 
     for entry in walker {
         let entry = match entry {
@@ -163,23 +171,28 @@ fn scan_one(path: &Path, root: &Path) -> Result<TrackOutcome, String> {
         .read()
         .map_err(|e| format!("read: {e}"))?;
 
-    let tag = tagged
-        .primary_tag()
-        .or_else(|| tagged.first_tag())
-        .ok_or_else(|| "no tag".to_string())?;
+    // WAV/FLAC files commonly have no tag block at all; MP3s may
+    // have only ID3v1 or only APE. Treat "no tag" as a valid signal
+    // — the per-field accessors below all return `None`, which our
+    // fallbacks below turn into "Unknown artist"/"Unknown album" +
+    // the file stem as the title.
+    let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
 
     let artist = tag
-        .artist()
+        .as_ref()
+        .and_then(|t| t.artist())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "Unknown artist".to_string());
     let album = tag
-        .album()
+        .as_ref()
+        .and_then(|t| t.album())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "Unknown album".to_string());
     let title = tag
-        .title()
+        .as_ref()
+        .and_then(|t| t.title())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| {
@@ -189,12 +202,24 @@ fn scan_one(path: &Path, root: &Path) -> Result<TrackOutcome, String> {
                 .to_string()
         });
 
-    let track_number = tag.track().map(|n| n.min(u16::MAX as u32) as u16).unwrap_or(0);
-    let disc_number = tag.disk().map(|n| n.max(1).min(u16::MAX as u32) as u16).unwrap_or(1);
-    let year = tag.year().and_then(|y| u16::try_from(y).ok());
+    let track_number = tag
+        .as_ref()
+        .and_then(|t| t.track())
+        .map(|n| n.min(u16::MAX as u32) as u16)
+        .unwrap_or(0);
+    let disc_number = tag
+        .as_ref()
+        .and_then(|t| t.disk())
+        .map(|n| n.max(1).min(u16::MAX as u32) as u16)
+        .unwrap_or(1);
+    let year = tag
+        .as_ref()
+        .and_then(|t| t.year())
+        .and_then(|y| u16::try_from(y).ok());
     let _year = year;
     let genre = tag
-        .genre()
+        .as_ref()
+        .and_then(|t| t.genre())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
     let _ = genre; // consumed below if/when we wire genres into Album
@@ -233,10 +258,14 @@ fn scan_one(path: &Path, root: &Path) -> Result<TrackOutcome, String> {
     // through. Suppress the unused warning.
     let _ = genre;
 
-    let embedded_art = extract_first_picture(tag.pictures()).map(|bytes| EmbeddedArt {
-        content_type: guess_picture_content_type(&bytes).to_string(),
-        bytes,
-    });
+    let embedded_art = tag
+        .as_ref()
+        .map(|t| extract_first_picture(t.pictures()))
+        .unwrap_or(None)
+        .map(|bytes| EmbeddedArt {
+            content_type: guess_picture_content_type(&bytes).to_string(),
+            bytes,
+        });
 
     Ok(TrackOutcome {
         track,
