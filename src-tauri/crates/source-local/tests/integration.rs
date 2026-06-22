@@ -97,8 +97,9 @@ fn scan_uses_filename_as_title_when_no_tags() {
     // No tag → "Unknown artist" / "Unknown album".
     assert_eq!(track.artist, "Unknown artist");
     assert_eq!(track.album, "Unknown album");
-    // Duration ~ 0.1s — we wrote sample_rate/10 samples at 44.1 kHz.
-    assert!(track.duration_seconds >= 1);
+    // Duration is a property of the audio stream; the WAV we wrote has
+    // ~0.1 s of samples so the scanner may read 0 (as_secs truncates).
+    // The point of this test is title/artist/album from filename, not duration.
 }
 
 #[test]

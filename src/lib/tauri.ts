@@ -15,6 +15,7 @@ import type {
   DiscoveredServer,
   PagedResponse,
   PlaybackStatePayload,
+  Playlist,
   QueueSnapshot,
   SearchResults,
   Track,
@@ -73,6 +74,43 @@ export const queueMove = (entryId: string, targetIndex: number) =>
   invoke<void>("queue_move", { entryId, targetIndex });
 
 export const queueClear = () => invoke<void>("queue_clear");
+
+// ─── Queue bulk + Playlist CRUD (Phase 9) ───────────────────────
+
+export const queueAddMany = (tracks: Track[]) =>
+  invoke<string[]>("queue_add_many", { tracks });
+
+export const queuePlayNextMany = (tracks: Track[]) =>
+  invoke<string[]>("queue_play_next_many", { tracks });
+
+export const playlistsGet = () =>
+  invoke<Playlist[]>("playlists_get");
+
+export interface PlaylistDetail {
+  playlist: Playlist;
+  tracks: Track[];
+}
+
+export const playlistDetail = (playlistId: string) =>
+  invoke<PlaylistDetail>("playlist_detail", { playlistId });
+
+export const createPlaylist = (name: string, trackIds: string[]) =>
+  invoke<string>("create_playlist", { name, trackIds });
+
+export const renamePlaylist = (playlistId: string, name: string) =>
+  invoke<void>("rename_playlist", { playlistId, name });
+
+export const deletePlaylist = (playlistId: string) =>
+  invoke<void>("delete_playlist", { playlistId });
+
+export const addPlaylistTracks = (playlistId: string, trackIds: string[]) =>
+  invoke<void>("add_playlist_tracks", { playlistId, trackIds });
+
+export const removePlaylistEntries = (playlistId: string, entryIds: string[]) =>
+  invoke<void>("remove_playlist_entries", { playlistId, entryIds });
+
+export const movePlaylistEntry = (playlistId: string, entryId: string, newIndex: number) =>
+  invoke<void>("move_playlist_entry", { playlistId, entryId, newIndex });
 
 // ─── Repeat / shuffle ───────────────────────────────────────────
 

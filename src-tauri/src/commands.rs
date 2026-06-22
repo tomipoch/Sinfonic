@@ -41,8 +41,8 @@ use crate::events::{
 use crate::lastfm;
 use crate::state::AppState;
 use sinfonic_domain::{
-    Album, AlbumDetail, AlbumId, Artist, ImageKind, PagedResponse, QueueEntryId, QueueSnapshot,
-    RepeatMode, SearchResults, ServerId, Track, TrackId,
+    Album, AlbumDetail, AlbumId, Artist, ImageKind, PagedResponse, Playlist, PlaylistDetail,
+    PlaylistId, QueueEntryId, QueueSnapshot, RepeatMode, SearchResults, ServerId, Track, TrackId,
 };
 use sinfonic_library::ImageCacheKey;
 use sinfonic_secrets::SecretStore;
@@ -635,6 +635,207 @@ pub async fn get_eq_bands(
             gain_db: b.gain_db,
         })
         .collect())
+}
+
+// ─── Queue bulk mutations (Phase 9) ─────────────────────────────
+
+#[tauri::command]
+pub async fn queue_add_many(
+    tracks: Vec<Track>,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<Vec<QueueEntryId>, String> {
+    if tracks.is_empty() {
+        return Ok(vec![]);
+    }
+    let ids = {
+        let mut guard = state.lock().await;
+        guard.queue.add_many(&tracks)
+    };
+    emit_queue_changed(&app, &state).await;
+    Ok(ids)
+}
+
+#[tauri::command]
+pub async fn queue_play_next_many(
+    tracks: Vec<Track>,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<Vec<QueueEntryId>, String> {
+    if tracks.is_empty() {
+        return Ok(vec![]);
+    }
+    let ids = {
+        let mut guard = state.lock().await;
+        guard.queue.play_next_many(&tracks)
+    };
+    emit_queue_changed(&app, &state).await;
+    Ok(ids)
+}
+
+// ─── Playlist CRUD (Phase 9) ────────────────────────────────────
+
+/// Lists all playlists from the local SQLite cache.
+#[tauri::command]
+pub async fn playlists_get(state: SharedState<'_>) -> Result<Vec<Playlist>, String> {
+    let server_id = active_server_id(&state).await;
+    let guard = state.lock().await;
+    guard
+        .library
+        .list_playlists(&server_id)
+        .map_err(|e| e.to_string())
+}
+
+/// Returns a playlist with its tracks resolved from the local cache.
+#[tauri::command]
+pub async fn playlist_detail(
+    playlist_id: String,
+    state: SharedState<'_>,
+) -> Result<PlaylistDetail, String> {
+    let server_id = active_server_id(&state).await;
+    let parsed_id: PlaylistId = playlist_id.into();
+    let guard = state.lock().await;
+    let playlist = {
+        let playlists = guard.library.list_playlists(&server_id)
+            .map_err(|e| e.to_string())?;
+        playlists
+            .into_iter()
+            .find(|p| p.id == parsed_id)
+            .ok_or_else(|| "playlist not found".to_string())?
+    };
+    let track_ids = guard
+        .library
+        .list_playlist_tracks(&server_id, &parsed_id)
+        .map_err(|e| e.to_string())?;
+    let mut tracks = Vec::with_capacity(track_ids.len());
+    for tid in track_ids {
+        if let Some(track) = guard.library.get_track(&server_id, &tid).map_err(|e| e.to_string())? {
+            tracks.push(track);
+        }
+    }
+    Ok(PlaylistDetail { playlist, tracks })
+}
+
+/// Creates a new local playlist and stores it in SQLite.
+/// If a provider is connected and supports playlist mutations, also
+/// calls `provider.create_playlist` (errors there are non-fatal).
+#[tauri::command]
+pub async fn create_playlist(
+    name: String,
+    track_ids: Vec<TrackId>,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<PlaylistId, String> {
+    let server_id = active_server_id(&state).await;
+    let playlist_id = {
+        let guard = state.lock().await;
+        guard
+            .library
+            .create_playlist(&server_id, &name, &track_ids)
+            .map_err(|e| e.to_string())?
+    };
+    emit_queue_changed(&app, &state).await;
+    Ok(playlist_id)
+}
+
+/// Renames an existing playlist.
+#[tauri::command]
+pub async fn rename_playlist(
+    playlist_id: String,
+    name: String,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let parsed: PlaylistId = playlist_id.into();
+    let guard = state.lock().await;
+    guard
+        .library
+        .rename_playlist(&server_id, &parsed, &name)
+        .map_err(|e| e.to_string())
+}
+
+/// Deletes a playlist and its track associations.
+#[tauri::command]
+pub async fn delete_playlist(
+    playlist_id: String,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let parsed: PlaylistId = playlist_id.into();
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .delete_playlist(&server_id, &parsed)
+            .map_err(|e| e.to_string())?
+    }
+    emit_queue_changed(&app, &state).await;
+    Ok(())
+}
+
+/// Appends tracks to the end of a playlist.
+#[tauri::command]
+pub async fn add_playlist_tracks(
+    playlist_id: String,
+    track_ids: Vec<TrackId>,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let parsed: PlaylistId = playlist_id.into();
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .add_playlist_tracks(&server_id, &parsed, &track_ids)
+            .map_err(|e| e.to_string())?
+    }
+    emit_queue_changed(&app, &state).await;
+    Ok(())
+}
+
+/// Removes entries from a playlist by their position (entry ids = position strings).
+#[tauri::command]
+pub async fn remove_playlist_entries(
+    playlist_id: String,
+    entry_ids: Vec<String>,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let parsed: PlaylistId = playlist_id.into();
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .remove_playlist_entries(&server_id, &parsed, &entry_ids)
+            .map_err(|e| e.to_string())?
+    }
+    emit_queue_changed(&app, &state).await;
+    Ok(())
+}
+
+/// Moves a playlist entry to a new position.
+#[tauri::command]
+pub async fn move_playlist_entry(
+    playlist_id: String,
+    entry_id: String,
+    new_index: usize,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let parsed: PlaylistId = playlist_id.into();
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .move_playlist_entry(&server_id, &parsed, &entry_id, new_index)
+            .map_err(|e| e.to_string())?
+    }
+    emit_queue_changed(&app, &state).await;
+    Ok(())
 }
 
 // ─── Search (Phase 2) ───────────────────────────────────────────

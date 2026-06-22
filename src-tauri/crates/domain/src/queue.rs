@@ -332,6 +332,49 @@ impl QueueEngine {
         id
     }
 
+    /// Appends `tracks` to the end of the queue in order.
+    /// Returns the `QueueEntryId`s of every entry created.
+    pub fn add_many(&mut self, tracks: &[Track]) -> Vec<QueueEntryId> {
+        let base_seq = self.next_entry_seq;
+        let mut ids = Vec::with_capacity(tracks.len());
+        for (i, track) in tracks.iter().enumerate() {
+            let id = self.alloc_entry_id();
+            let entry_seq = base_seq + i as u64;
+            self.next_entry_seq = entry_seq + 1;
+            let origin = QueueEntryOrigin::Manual { shuffle_key: entry_seq };
+            self.entries.push(QueueEntry::new(id.clone(), entry_seq, track, origin));
+            ids.push(id);
+        }
+        ids
+    }
+
+    /// Inserts `tracks` immediately after the current entry, preserving
+    /// order. If no track is current, appends to the end.
+    /// Returns the `QueueEntryId`s of every entry created.
+    pub fn play_next_many(&mut self, tracks: &[Track]) -> Vec<QueueEntryId> {
+        let insert_at = match self.current_index {
+            Some(i) => (i + 1).min(self.entries.len()),
+            None => self.entries.len(),
+        };
+        let base_seq = self.next_entry_seq;
+        let mut ids = Vec::with_capacity(tracks.len());
+        for (i, track) in tracks.iter().enumerate() {
+            let id = self.alloc_entry_id();
+            let entry_seq = base_seq + i as u64;
+            self.next_entry_seq = entry_seq + 1;
+            let origin = QueueEntryOrigin::Manual { shuffle_key: entry_seq };
+            let entry = QueueEntry::new(id.clone(), entry_seq, track, origin);
+            self.entries.insert(insert_at + i, entry);
+            ids.push(id);
+        }
+        if insert_at <= self.current_index.unwrap_or(0) {
+            if let Some(idx) = self.current_index {
+                self.current_index = Some(idx + tracks.len());
+            }
+        }
+        ids
+    }
+
     /// Removes the entry with the given id. Returns `true` if found.
     /// Adjusts `current_index` to remain on the same entry when
     /// possible.
@@ -875,6 +918,72 @@ mod tests {
         e.reshuffle(0xDEAD_BEEF);
         let second_order: Vec<String> = e.entries().iter().map(|x| x.id.as_str().to_string()).collect();
         assert_ne!(first_order, second_order);
+    }
+
+    // ── add_many / play_next_many ─────────────────────────────
+
+    #[test]
+    fn add_many_appends_all_in_order() {
+        let mut e = filled_engine(2);
+        let ids = e.add_many(&[track("a", "A", 1), track("b", "B", 1)]);
+        assert_eq!(ids.len(), 2);
+        assert_eq!(e.len(), 4);
+        assert_eq!(e.entries()[2].title, "A");
+        assert_eq!(e.entries()[3].title, "B");
+        assert_eq!(ids[0].as_str(), "queue-2");
+        assert_eq!(ids[1].as_str(), "queue-3");
+    }
+
+    #[test]
+    fn add_many_with_empty_input_returns_empty() {
+        let mut e = filled_engine(2);
+        let ids = e.add_many(&[]);
+        assert!(ids.is_empty());
+        assert_eq!(e.len(), 2);
+    }
+
+    #[test]
+    fn add_many_preserves_current_index() {
+        let mut e = filled_engine(3);
+        let target = e.entries()[1].id.clone();
+        e.jump_to(&target);
+        assert_eq!(e.current_index(), Some(1));
+        e.add_many(&[track("x", "X", 1), track("y", "Y", 1)]);
+        assert_eq!(e.current_index(), Some(1));
+    }
+
+    #[test]
+    fn play_next_many_inserts_after_current() {
+        let mut e = filled_engine(3);
+        let target = e.entries()[1].id.clone();
+        e.jump_to(&target);
+        let ids = e.play_next_many(&[track("x", "X", 1), track("y", "Y", 1)]);
+        assert_eq!(ids.len(), 2);
+        assert_eq!(e.entries()[2].title, "X");
+        assert_eq!(e.entries()[3].title, "Y");
+        assert_eq!(ids[0].as_str(), "queue-3");
+        assert_eq!(ids[1].as_str(), "queue-4");
+        assert_eq!(e.current_index(), Some(1));
+    }
+
+    #[test]
+    fn play_next_many_appends_when_no_current() {
+        let mut e = engine();
+        let ids = e.play_next_many(&[track("a", "A", 1), track("b", "B", 1)]);
+        assert_eq!(ids.len(), 2);
+        assert_eq!(e.len(), 2);
+        assert_eq!(e.entries()[0].title, "A");
+        assert_eq!(e.entries()[1].title, "B");
+    }
+
+    #[test]
+    fn play_next_many_does_not_shift_current_when_inserting_after() {
+        let mut e = filled_engine(3);
+        let target = e.entries()[0].id.clone();
+        e.jump_to(&target);
+        assert_eq!(e.current_index(), Some(0));
+        e.play_next_many(&[track("x", "X", 1), track("y", "Y", 1)]);
+        assert_eq!(e.current_index(), Some(0));
     }
 
     #[test]
