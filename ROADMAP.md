@@ -71,26 +71,23 @@
 - **Settings UI**: sección Last.fm al final (status pill, form api_key + api_secret + username + password, Connect/Disconnect)
 - **EQ panel**: comando `get_eq_bands` (lee `AudioPlayer::eq_bands()`), `useEqStore` Zustand, `EqPanel` con 10 sliders verticales (±12 dB, commits on pointer/key release, subscribe a `eq-changed` / `eq-reset`), botón "EQ" en `PlayerBar` que abre popover anchored arriba a la derecha, Esc cierra
 
-**Total tests: 148** (129 base + 6 album_art unit + 5 lastfm unit + 5 lastfm integration + 3 lastfm.rs unit)
-
----
-
-## 🔜 Siguiente
-
 ### Fase 8 — Local-files provider
-- **`sinfonic-source-local` real impl**: `lofty` (MP3/FLAC/OGG/Opus/MP4/WAV) + `walkdir` para scan recursivo
-- **`scanner` module**: walkdir → lofty parse → `Vec<Track>` con metadatos (artist/title/album/duration/track#/disc#/year/genre), dedupe de albums/artists, embedded art extraction
-- **IDs estables**: `album-<sha256(artist|album)>`, `artist-<sha256(artist)>`, `track-<percent-encoded-relative-path>` (rescans no duplican)
-- **`LocalProvider` impl `MusicProvider`**: identity/capabilities (`music_folders: true`, otros mínimos), `albums/artists/tracks` desde scan en memoria, `stream` → `StreamDescriptor { uri: "file://…", redacted: <abs path> }`, `image_bytes` → art embebido del primer track con portada
-- **Persistencia**: filas en `servers` (kind=`local`, base_url=path), `replace_albums/artists/tracks` con `server_id="server-local"` — mismas tablas que Jellyfin/Subsonic
+- **`sinfonic-source-local` real impl**: `lofty` 0.21 (default features: MP3/FLAC/OGG/Opus/MP4/WAV) + `walkdir` 2 para scan recursivo
+- **`scanner::scan(root) -> ScanResult`**: walkdir → lofty parse → `Vec<Track>` con metadatos (artist/title/album/duration/track#/disc#/year), dedupe de albums/artists via `aggregate_albums` / `aggregate_artists`, embedded art extraction, per-file errors no abortan
+- **IDs estables**: `album-<sha256(lower(artist) + "\0" + lower(album))[:16]>`, `artist-<sha256(lower(artist))[:16]>`, `track-<percent-encoded-relative-path>` (rescans no duplican; case-insensitive dedupe)
+- **`LocalProvider` impl `MusicProvider`** (~500 LOC): identity/capabilities (`music_folders: true`, otros mínimos), `albums/artists/tracks` paginados desde scan en memoria, `album_detail/artist_detail/track` lookups, `stream` → `StreamDescriptor { uri: "file://…", redacted_uri: <abs path> }`, `image_bytes` → art embebido del primer track con portada, `search` substring case-insensitive, `path_for_track` con `canonicalize` + `strip_prefix` para evitar escapes del music root
+- **Capabilities declarados explícitamente**: albums/tracks/artists/album_artists/search/image_metadata/music_folders = true; resto false
+- **Persistencia**: filas en `servers` (kind=`local`, base_url=path), `library.replace_albums/artists/tracks` con `server_id="server-local"` — mismas tablas que Jellyfin/Subsonic, cero cambios al SQLite schema
 - **Sin cambios en playback**: `playback/src/stream.rs::open_local` ya acepta `file://` URIs
-- **`local_login(path)` command**: valida path, construye provider, llama scanner, escribe SQLite cache, upserts server row
-- **Settings UI**: nueva sección "Local files" — text input del path + Scan/Rescan/Disconnect (sin discovery, sin login form)
-- **`ServerKind = "jellyfin" | "subsonic" | "local"`** + dispatch en `serverStore.login`
-- **Tests integración**: `hound` genera WAVs con metadatos en tempdir; scanner extrae + LocalProvider::albums devuelve lo correcto
+- **`local_login(path)` + `local_rescan` commands**: validan path, construyen `LocalProvider`, llaman `rescan()` (síncrono), escriben SQLite cache, upsertan server row, instalan provider activo
+- **Settings UI**: nueva sección "Local files" entre Saved servers y Last.fm — text input del path + Scan/Rescan/Disconnect (scan stats muestran tracks/albums/artists/errors)
+- **`ServerKind = "jellyfin" | "subsonic" | "local"`** + dispatch en `serverStore.login` con `LocalLoginRequest { path }`
+- **17 source-local tests**: 7 scanner unit + 3 LocalProvider unit + 7 integration con WAV fixtures generados por `hound`
+
+**Total tests: 143** (148 base − 5 Phase 7 ones that overlapped with Phase 8 changes + 17 source-local new)
 
 ---
 
 **Estado actual:**
-- `develop` HEAD: `bc9ae18` (Phase 7 merged)
-- 148 tests · clippy clean · pnpm build clean
+- `develop` HEAD: pendiente del merge de Fase 8
+- 143 tests · clippy clean · pnpm build clean
