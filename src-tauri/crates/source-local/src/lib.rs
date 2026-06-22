@@ -1,11 +1,15 @@
-//! Local-files `MusicProvider` (v0.3).
+//! Local-files `MusicProvider` (Phase 8).
 //!
-//! Phase 0: skeleton. Real implementation lands in Phase 3 (post-MVP).
-//! Heavy dependencies (`lofty`, `notify`, `walkdir`) ship with the impl.
+//! Walk a music directory with `walkdir`, parse metadata with
+//! `lofty`, and serve the deduplicated snapshot through the
+//! `MusicProvider` trait. No remote API, no auth — just the
+//! filesystem and the same SQLite cache the other providers use.
 
 #![allow(dead_code)]
 
-pub mod client;
+pub mod scanner;
+
+pub use scanner::{scan, EmbeddedArt, FileError, ScanResult};
 
 use async_trait::async_trait;
 use sinfonic_domain::{
