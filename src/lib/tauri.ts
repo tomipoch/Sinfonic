@@ -131,6 +131,57 @@ export const setArtistFavorite = (artistId: string, favorite: boolean) =>
 
 export const getFavorites = () => invoke<FavoritesPayload>("get_favorites");
 
+// ─── Smart Playlists (Phase 9) ────────────────────────────────
+
+export type SmartPlaylistRuleField =
+  | "title" | "artist" | "album" | "genre"
+  | "duration_seconds" | "track_number" | "year" | "favorite" | "play_count";
+
+export type SmartPlaylistRuleOperator =
+  | "contains" | "starts_with" | "ends_with" | "equals"
+  | "less_than" | "greater_than" | "not_contains" | "not_equals";
+
+export type SmartPlaylistSortField =
+  | "title" | "artist" | "album" | "duration_seconds" | "year" | "random" | "date_added";
+
+export type SmartPlaylistSortDirection = "asc" | "desc";
+
+export interface SmartPlaylistRule {
+  field: SmartPlaylistRuleField;
+  operator: SmartPlaylistRuleOperator;
+  value: string;
+}
+
+export interface SmartPlaylist {
+  id: string;
+  name: string;
+  rule: SmartPlaylistRule;
+  sortField: SmartPlaylistSortField;
+  sortDir: SmartPlaylistSortDirection;
+  limitN: number;
+}
+
+export interface CreateSmartPlaylistArgs {
+  name: string;
+  field: SmartPlaylistRuleField;
+  operator: SmartPlaylistRuleOperator;
+  value: string;
+  sortField: SmartPlaylistSortField;
+  sortDir: SmartPlaylistSortDirection;
+  limitN: number;
+}
+
+export const getSmartPlaylists = () => invoke<SmartPlaylist[]>("get_smart_playlists");
+
+export const createSmartPlaylist = (args: CreateSmartPlaylistArgs) =>
+  invoke<SmartPlaylist>("create_smart_playlist", { args });
+
+export const deleteSmartPlaylist = (spId: string) =>
+  invoke<void>("delete_smart_playlist", { spId });
+
+export const evaluateSmartPlaylist = (spId: string) =>
+  invoke<Track[]>("evaluate_smart_playlist", { spId });
+
 // ─── Repeat / shuffle ───────────────────────────────────────────
 
 export const setRepeat = (repeat: "off" | "one" | "all") =>

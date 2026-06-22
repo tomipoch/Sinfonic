@@ -42,7 +42,9 @@ use crate::lastfm;
 use crate::state::AppState;
 use sinfonic_domain::{
     Album, AlbumDetail, AlbumId, Artist, ArtistId, ImageKind, PagedResponse, Playlist, PlaylistDetail,
-    PlaylistId, QueueEntryId, QueueSnapshot, RepeatMode, SearchResults, ServerId, Track, TrackId,
+    PlaylistId, QueueEntryId, QueueSnapshot, RepeatMode, SearchResults, ServerId, SmartPlaylist,
+    SmartPlaylistId, SmartPlaylistRuleField, SmartPlaylistRuleOperator, SmartPlaylistSortDirection,
+    SmartPlaylistSortField, Track, TrackId,
 };
 use sinfonic_library::ImageCacheKey;
 use sinfonic_secrets::SecretStore;
@@ -1559,6 +1561,98 @@ pub async fn try_resume_lastfm(state: &AppState) {
     let secrets = state.secrets.clone();
     let slot = state.lastfm.clone();
     let _ = lastfm::try_resume(secrets.as_ref(), slot.as_ref()).await;
+}
+
+// ─── Smart Playlists (Phase 9) ─────────────────────────────────
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSmartPlaylistArgs {
+    name: String,
+    field: SmartPlaylistRuleField,
+    operator: SmartPlaylistRuleOperator,
+    value: String,
+    sort_field: SmartPlaylistSortField,
+    sort_dir: SmartPlaylistSortDirection,
+    limit_n: u16,
+}
+
+#[tauri::command]
+pub async fn get_smart_playlists(
+    state: SharedState<'_>,
+) -> Result<Vec<SmartPlaylist>, String> {
+    let server_id = active_server_id(&state).await;
+    let guard = state.lock().await;
+    guard
+        .library
+        .list_smart_playlists(&server_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn create_smart_playlist(
+    state: SharedState<'_>,
+    args: CreateSmartPlaylistArgs,
+) -> Result<SmartPlaylist, String> {
+    let server_id = active_server_id(&state).await;
+    let sp_id = SmartPlaylistId::new(format!("sp-{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()));
+    let sp = SmartPlaylist {
+        id: sp_id.clone(),
+        name: args.name,
+        rule: sinfonic_domain::SmartPlaylistRule {
+            field: args.field,
+            operator: args.operator,
+            value: args.value,
+        },
+        sort_field: args.sort_field,
+        sort_dir: args.sort_dir,
+        limit_n: args.limit_n,
+    };
+    let guard = state.lock().await;
+    guard
+        .library
+        .replace_smart_playlists(&server_id, std::slice::from_ref(&sp))
+        .map_err(|e| e.to_string())?;
+    Ok(sp)
+}
+
+#[tauri::command]
+pub async fn delete_smart_playlist(
+    state: SharedState<'_>,
+    sp_id: String,
+) -> Result<(), String> {
+    let server_id = active_server_id(&state).await;
+    let id = SmartPlaylistId::new(sp_id);
+    let guard = state.lock().await;
+    guard
+        .library
+        .delete_smart_playlist(&server_id, &id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn evaluate_smart_playlist(
+    state: SharedState<'_>,
+    sp_id: String,
+) -> Result<Vec<Track>, String> {
+    let server_id = active_server_id(&state).await;
+    let id = SmartPlaylistId::new(sp_id);
+    let guard = state.lock().await;
+    let playlists = guard
+        .library
+        .list_smart_playlists(&server_id)
+        .map_err(|e| e.to_string())?;
+    let sp = playlists
+        .iter()
+        .find(|p| p.id.as_str() == id.as_str())
+        .ok_or_else(|| "Smart playlist not found".to_string())?;
+    guard
+        .library
+        .evaluate_smart_playlist(&server_id, sp)
+        .map_err(|e| e.to_string())
 }
 
 // ─── Internal event helpers ─────────────────────────────────────

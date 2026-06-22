@@ -174,6 +174,11 @@ pub fn run() {
             commands::set_album_favorite,
             commands::set_artist_favorite,
             commands::get_favorites,
+            // Smart Playlists (Phase 9)
+            commands::get_smart_playlists,
+            commands::create_smart_playlist,
+            commands::delete_smart_playlist,
+            commands::evaluate_smart_playlist,
             commands::set_repeat,
             commands::set_shuffle,
             commands::pause,

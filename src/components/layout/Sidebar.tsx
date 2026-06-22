@@ -9,6 +9,7 @@ const links: ReadonlyArray<{ to: string; label: string; end?: boolean }> = [
   { to: "/library", label: "Library" },
   { to: "/playlists", label: "Playlists" },
   { to: "/favorites", label: "Favorites" },
+  { to: "/smart-playlists", label: "Smart Playlists" },
   { to: "/queue", label: "Queue" },
   { to: "/search", label: "Search" },
   { to: "/settings", label: "Settings" },
