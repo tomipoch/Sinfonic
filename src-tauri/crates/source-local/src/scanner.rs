@@ -60,7 +60,7 @@ const AUDIO_EXTENSIONS: &[&str] = &[
     "mp3", "flac", "ogg", "oga", "opus", "m4a", "mp4", "wav", "aif", "aiff",
 ];
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ScanResult {
     pub root: PathBuf,
     pub tracks: Vec<Track>,

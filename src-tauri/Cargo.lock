@@ -3984,6 +3984,7 @@ name = "sinfonic-source-local"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures",
  "hound",
  "lofty",
  "parking_lot",
@@ -3994,6 +3995,7 @@ dependencies = [
  "sinfonic-source",
  "tempfile",
  "thiserror 1.0.69",
+ "tokio",
  "walkdir",
 ]
 
