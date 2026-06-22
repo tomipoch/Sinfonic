@@ -8,6 +8,8 @@ import { toast } from "sonner";
 import { usePlaylistsStore } from "../../stores/playlistsStore";
 import { formatDuration } from "../../lib/format";
 import { playTrack } from "../../lib/tauri";
+import { encodeDragData } from "../../lib/queueDnD";
+import { cn } from "../../lib/cn";
 import type { Track } from "../../types/domain";
 
 export function PlaylistDetailView() {
@@ -19,6 +21,7 @@ export function PlaylistDetailView() {
   const [renaming, setRenaming] = useState(false);
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (id) void loadPlaylistDetail(decodeURIComponent(id));
@@ -159,7 +162,17 @@ export function PlaylistDetailView() {
           {tracks.map((track, index) => (
             <li
               key={track.id}
-              className="grid grid-cols-[2.5rem_1fr_auto_auto] items-center gap-3 px-3 py-2 text-sm"
+              draggable
+              onDragStart={(e) => {
+                setDraggingId(track.id);
+                e.dataTransfer.setData("application/json", encodeDragData({ tracks: [track], source: "playlist-detail" }));
+                e.dataTransfer.effectAllowed = "copy";
+              }}
+              onDragEnd={() => setDraggingId(null)}
+              className={cn(
+                "grid grid-cols-[2.5rem_1fr_auto_auto] items-center gap-3 px-3 py-2 text-sm",
+                draggingId === track.id && "opacity-30",
+              )}
             >
               <div className="text-right font-mono text-xs text-fg-muted">{index + 1}</div>
               <button

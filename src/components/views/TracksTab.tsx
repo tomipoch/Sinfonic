@@ -9,6 +9,8 @@ import { FavoriteButton } from "../ui/FavoriteButton";
 import { useLibraryStore } from "../../stores/libraryStore";
 import { playTrack } from "../../lib/tauri";
 import { formatDuration } from "../../lib/format";
+import { encodeDragData } from "../../lib/queueDnD";
+import { cn } from "../../lib/cn";
 import type { Track } from "../../types/domain";
 
 type SortKey = "title" | "artist" | "album" | "durationSeconds";
@@ -25,6 +27,7 @@ export function TracksTab() {
 
   const [sortKey, setSortKey] = useState<SortKey>("title");
   const [busy, setBusy] = useState(false);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
 
   if (loading && tracks.length === 0) {
     return (
@@ -92,7 +95,17 @@ export function TracksTab() {
         </thead>
         <tbody className="divide-y divide-bg-raised">
           {sorted.map((track) => (
-            <tr key={track.id} className="hover:bg-bg-subtle">
+            <tr
+              key={track.id}
+              draggable
+              onDragStart={(e) => {
+                setDraggingId(track.id);
+                e.dataTransfer.setData("application/json", encodeDragData({ tracks: [track], source: "tracks-tab" }));
+                e.dataTransfer.effectAllowed = "copy";
+              }}
+              onDragEnd={() => setDraggingId(null)}
+              className={cn("hover:bg-bg-subtle", draggingId === track.id && "opacity-30")}
+            >
               <td className="px-2 py-2 text-right">
                 <button
                   type="button"

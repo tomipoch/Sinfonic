@@ -8,6 +8,8 @@ import { FavoriteButton } from "../ui/FavoriteButton";
 import { getFavorites } from "../../lib/tauri";
 import { useServerStore } from "../../stores/serverStore";
 import { formatDuration } from "../../lib/format";
+import { encodeDragData } from "../../lib/queueDnD";
+import { cn } from "../../lib/cn";
 import type { Album, Artist, Track } from "../../types/domain";
 
 type FavoritesTab = "tracks" | "albums" | "artists";
@@ -24,6 +26,7 @@ export function FavoritesView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<FavoritesTab>("tracks");
+  const [draggingId, setDraggingId] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -99,7 +102,20 @@ export function FavoritesView() {
         ) : (
           <ol className="divide-y divide-bg-raised rounded-md border border-bg-raised">
             {data.tracks.map((track) => (
-              <li key={track.id} className="grid grid-cols-[2.5rem_1fr_auto_auto] items-center gap-3 px-3 py-2 text-sm">
+              <li
+                key={track.id}
+                draggable
+                onDragStart={(e) => {
+                  setDraggingId(track.id);
+                  e.dataTransfer.setData("application/json", encodeDragData({ tracks: [track], source: "favorites" }));
+                  e.dataTransfer.effectAllowed = "copy";
+                }}
+                onDragEnd={() => setDraggingId(null)}
+                className={cn(
+                  "grid grid-cols-[2.5rem_1fr_auto_auto] items-center gap-3 px-3 py-2 text-sm",
+                  draggingId === track.id && "opacity-30",
+                )}
+              >
                 <div className="text-right font-mono text-xs text-fg-muted">{track.trackNumber || "—"}</div>
                 <div className="min-w-0">
                   <div className="truncate font-medium text-fg">{track.title}</div>

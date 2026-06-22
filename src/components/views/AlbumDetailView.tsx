@@ -17,6 +17,8 @@ import { FavoriteButton } from "../ui/FavoriteButton";
 import { getAlbumDetail, playAlbum, playTrack } from "../../lib/tauri";
 import { useServerStore } from "../../stores/serverStore";
 import { formatDuration } from "../../lib/format";
+import { encodeDragData } from "../../lib/queueDnD";
+import { cn } from "../../lib/cn";
 import type { Album, Track } from "../../types/domain";
 
 interface AlbumDetailData {
@@ -32,6 +34,7 @@ export function AlbumDetailView() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -146,7 +149,17 @@ export function AlbumDetailView() {
             {tracks.map((track) => (
               <li
                 key={track.id}
-                className="grid grid-cols-[2.5rem_1fr_auto_auto] items-center gap-3 px-3 py-2 text-sm"
+                draggable
+                onDragStart={(e) => {
+                  setDraggingId(track.id);
+                  e.dataTransfer.setData("application/json", encodeDragData({ tracks: [track], source: "album-detail" }));
+                  e.dataTransfer.effectAllowed = "copy";
+                }}
+                onDragEnd={() => setDraggingId(null)}
+                className={cn(
+                  "grid grid-cols-[2.5rem_1fr_auto_auto] items-center gap-3 px-3 py-2 text-sm",
+                  draggingId === track.id && "opacity-30",
+                )}
               >
                 <div className="text-right font-mono text-xs text-fg-muted">
                   {track.trackNumber || "—"}
