@@ -5,6 +5,7 @@ import { create } from "zustand";
 import {
   jellyfinDiscover,
   jellyfinLogin,
+  localLogin as localLoginCmd,
   providerActiveServer,
   providerLogout,
   providerServers,
@@ -15,6 +16,7 @@ import type {
   ConnectedServer,
   DiscoveredServer,
   JellyfinLoginRequest,
+  LocalLoginRequest,
   SubsonicLoginRequest,
 } from "../types/domain";
 
@@ -30,11 +32,10 @@ export interface Server {
 
 export type SyncStatus = "idle" | "syncing" | "success" | "error";
 
-export type LoginRequest = {
-  kind: "jellyfin";
-} & JellyfinLoginRequest | {
-  kind: "subsonic";
-} & SubsonicLoginRequest;
+export type LoginRequest =
+  | ({ kind: "jellyfin" } & JellyfinLoginRequest)
+  | ({ kind: "subsonic" } & SubsonicLoginRequest)
+  | ({ kind: "local" } & LocalLoginRequest);
 
 export interface ServerStore {
   servers: Server[];
@@ -92,17 +93,31 @@ export const useServerStore = create<ServerStore>((set, get) => ({
   login: async (req) => {
     set({ error: null });
     try {
-      const connected = req.kind === "jellyfin"
-        ? await jellyfinLogin({
-            baseUrl: req.baseUrl,
-            username: req.username,
-            password: req.password,
-          })
-        : await subsonicLogin({
-            baseUrl: req.baseUrl,
-            username: req.username,
-            password: req.password,
-          });
+      let connected: ConnectedServer;
+      if (req.kind === "jellyfin") {
+        connected = await jellyfinLogin({
+          baseUrl: req.baseUrl,
+          username: req.username,
+          password: req.password,
+        });
+      } else if (req.kind === "subsonic") {
+        connected = await subsonicLogin({
+          baseUrl: req.baseUrl,
+          username: req.username,
+          password: req.password,
+        });
+      } else {
+        // Local: no `ConnectedServer` is returned (the scan result
+        // carries stats, not server metadata), so synthesise one
+        // from the canonical local server id.
+        await localLoginCmd(req.path);
+        connected = {
+          serverId: "server-local",
+          kind: "local",
+          name: "Local files",
+          baseUrl: req.path,
+        };
+      }
       set({ activeServerId: connected.serverId });
       // Refresh the full list so the Settings view can show it.
       await get().refreshServers();

@@ -137,6 +137,23 @@ export const providerActiveServer = () =>
 export const providerSyncLibrary = () =>
   invoke<void>("provider_sync_library");
 
+// ─── Local files (Phase 8) ─────────────────────────────────────
+
+export interface LocalScanResult {
+  serverId: string;
+  serverName: string;
+  root: string;
+  tracks: number;
+  albums: number;
+  artists: number;
+  errors: number;
+}
+
+export const localLogin = (path: string) =>
+  invoke<LocalScanResult>("local_login", { path });
+
+export const localRescan = () => invoke<LocalScanResult>("local_rescan");
+
 // ─── Album art (Phase 7) ────────────────────────────────────────
 
 export interface AlbumArtResponse {
