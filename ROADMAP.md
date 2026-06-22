@@ -84,10 +84,25 @@
 - **`ServerKind = "jellyfin" | "subsonic" | "local"`** + dispatch en `serverStore.login` con `LocalLoginRequest { path }`
 - **17 source-local tests**: 7 scanner unit + 3 LocalProvider unit + 7 integration con WAV fixtures generados por `hound`
 
-**Total tests: 143** (148 base − 5 Phase 7 ones that overlapped with Phase 8 changes + 17 source-local new)
+### Fase 9 — Cierre (Playlists + Favoritos + Smart Playlists + UX)
+- **Playlist CRUD**: `create_playlist/rename_playlist/delete_playlist/add_playlist_tracks/remove_playlist_entries/move_playlist_entry` + Tauri commands + TS wrappers
+- **`PlaylistsView` + `PlaylistDetailView`**: grid de playlists, formulario inline de creación, vista de detalle con lista de tracks + acciones (play/rename/delete)
+- **`QueueEngine::add_many()` + `queue_play_next_many()`**: bulk append/insert para DnD
+- **Favoritos locales**: `set_track_favorite/set_album_favorite/set_artist_favorite/get_favorites` (local SQLite cache, sin sync al provider)
+- **`FavoritesView`**: tabs tracks/albums/artists con inline favorite toggle
+- **`FavoriteButton`**: componente reutilizable heart toggle
+- **Drag-and-drop**: `useDropTarget` hook, `useKeyboardShortcuts` hook, `queueDnD.ts` helpers; tracks draggable en AlbumsTab/AlbumDetailView/TracksTab/PlaylistDetailView/FavoritesView; drop target en PlayerBar (append)
+- **Keyboard shortcuts**: `space` play/pause, `←/→` prev/next, `↑/↓` volume ±5%, `m` mute — ignorando inputs/contentEditable/modifiers
+- **Schema v2**: `ALTER TABLE tracks ADD year`, `smart_playlists` table (field/operator/value/sort_field/sort_dir/limit_n)
+- **Smart playlists rule engine** (`library/src/smart_playlists.rs`): SQL parametrized WHERE + ORDER BY + LIMIT evaluation, single-rule only
+- **Domain entities**: `SmartPlaylist`, `SmartPlaylistRule`, enums `SmartPlaylistRuleField/Operator`, `SmartPlaylistSortField/Direction`
+- **Smart playlist Tauri commands**: `get_smart_playlists/create_smart_playlist/delete_smart_playlist/evaluate_smart_playlist`
+- **SmartPlaylistsView + SmartPlaylistDetailView**: formulario de creación con field/operator/value/sort/limit, grid de cards, detalle con tracks evaluados
+
+**Total tests: 7** (lib) + **5** (library integration) · clippy clean · pnpm build clean
 
 ---
 
 **Estado actual:**
-- `develop` HEAD: pendiente del merge de Fase 8
-- 143 tests · clippy clean · pnpm build clean
+- `feature/fase-9-cierre` HEAD: listo para merge a `develop`
+- clippy clean · pnpm build clean
