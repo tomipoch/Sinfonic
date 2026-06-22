@@ -78,12 +78,19 @@
 ## 🔜 Siguiente
 
 ### Fase 8 — Local-files provider
-- Scan recursivo de `~/Music` con `lofty` (MP3/FLAC/OGG/Opus/MP4)
-- Persistencia en la misma tabla SQLite que Fase 2 (server-scope = `local`)
-- Stream `file://` URI al `AudioPlayer` sin cambios en playback
+- **`sinfonic-source-local` real impl**: `lofty` (MP3/FLAC/OGG/Opus/MP4/WAV) + `walkdir` para scan recursivo
+- **`scanner` module**: walkdir → lofty parse → `Vec<Track>` con metadatos (artist/title/album/duration/track#/disc#/year/genre), dedupe de albums/artists, embedded art extraction
+- **IDs estables**: `album-<sha256(artist|album)>`, `artist-<sha256(artist)>`, `track-<percent-encoded-relative-path>` (rescans no duplican)
+- **`LocalProvider` impl `MusicProvider`**: identity/capabilities (`music_folders: true`, otros mínimos), `albums/artists/tracks` desde scan en memoria, `stream` → `StreamDescriptor { uri: "file://…", redacted: <abs path> }`, `image_bytes` → art embebido del primer track con portada
+- **Persistencia**: filas en `servers` (kind=`local`, base_url=path), `replace_albums/artists/tracks` con `server_id="server-local"` — mismas tablas que Jellyfin/Subsonic
+- **Sin cambios en playback**: `playback/src/stream.rs::open_local` ya acepta `file://` URIs
+- **`local_login(path)` command**: valida path, construye provider, llama scanner, escribe SQLite cache, upserts server row
+- **Settings UI**: nueva sección "Local files" — text input del path + Scan/Rescan/Disconnect (sin discovery, sin login form)
+- **`ServerKind = "jellyfin" | "subsonic" | "local"`** + dispatch en `serverStore.login`
+- **Tests integración**: `hound` genera WAVs con metadatos en tempdir; scanner extrae + LocalProvider::albums devuelve lo correcto
 
 ---
 
 **Estado actual:**
-- `develop` HEAD: pendiente del merge de Fase 7
+- `develop` HEAD: `bc9ae18` (Phase 7 merged)
 - 148 tests · clippy clean · pnpm build clean
