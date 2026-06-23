@@ -9,6 +9,11 @@
     @apply h-full w-full;
   }
 
+  html,
+  body {
+    overscroll-behavior: none;
+  }
+
   body {
     @apply bg-background text-foreground font-sans antialiased;
   }
@@ -30,6 +35,56 @@
 
   .card {
     @apply rounded-lg bg-card text-card-foreground p-4 shadow-sm;
+  }
+
+  /* PlayerBar range slider — keep the native control for a11y/keyboard
+     but hide its visuals. The fill is drawn by a sibling element so
+     the colors stay bound to the theme variables. */
+  .player-range {
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  .player-range::-webkit-slider-runnable-track {
+    background: transparent;
+    height: 4px;
+  }
+
+  .player-range::-moz-range-track {
+    background: transparent;
+    height: 4px;
+    border: none;
+  }
+
+  .player-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 9999px;
+    background: var(--primary);
+    border: 2px solid var(--card);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    cursor: pointer;
+    margin-top: -5px;
+  }
+
+  .player-range::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 9999px;
+    background: var(--primary);
+    border: 2px solid var(--card);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    cursor: pointer;
+  }
+
+  .player-range:focus-visible::-webkit-slider-thumb {
+    box-shadow: 0 0 0 2px var(--ring);
+  }
+
+  .player-range:focus-visible::-moz-range-thumb {
+    box-shadow: 0 0 0 2px var(--ring);
   }
 }
 

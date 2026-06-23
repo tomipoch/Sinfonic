@@ -1,23 +1,27 @@
-// Sidebar — left navigation rail.
+// Sidebar — left navigation rail inspired by Apple Music.
 //
-// Structure:
-//   Home
-//   Library (collapsible, expanded by default)
-//     Albums, Artists, Genres, Songs
-//   Smart Playlists
-//   Playlist (Favorites)
-//   SourceSelector (fixed bottom)
+// Structure (expanded):
+//   Home (direct link with icon)
+//   BIBLIOTECA  (collapsible header)
+//     Canciones, Álbumes, Artistas, Géneros
+//   PLAYLISTS   (collapsible header)
+//     Todas las playlists, Canciones favoritas, Smart Playlists
+//
+// Structure (collapsed):
+//   Icon-only rail. Items without icons are hidden.
+//   Headers become invisible but the row spacing is preserved so the
+//   icon column stays aligned with the expanded layout.
 
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import {
+  Album01Icon,
   AlbumIcon,
   ArrowDown01Icon,
   ArrowRight01Icon,
-  FileMusicIcon,
-  HeartCheckIcon,
   Home01Icon,
-  Playlist03Icon,
+  SparklesIcon,
+  StarIcon,
   TagIcon,
   UserIcon,
 } from "@hugeicons/core-free-icons";
@@ -30,76 +34,121 @@ type NavItem = {
   to: string;
   label: string;
   end?: boolean;
-  sub?: readonly NavItem[];
   icon?: typeof Home01Icon;
 };
 
-const NAV_ITEMS: NavItem[] = [
-  { to: "/", label: "Home", end: true, icon: Home01Icon },
+type Section = {
+  title: string;
+  defaultExpanded?: boolean;
+  items: NavItem[];
+};
+
+const HOME_ITEM: NavItem = { to: "/", label: "Home", end: true, icon: Home01Icon };
+
+const SECTIONS: Section[] = [
   {
-    to: "/library",
-    label: "Library",
-    icon: Playlist03Icon,
-    sub: [
-      { to: "/library/albums", label: "Albums", icon: AlbumIcon },
+    title: "Library",
+    defaultExpanded: true,
+    items: [
+      { to: "/library/songs", label: "Songs", icon: AlbumIcon },
+      { to: "/library/albums", label: "Albums", icon: Album01Icon },
       { to: "/library/artists", label: "Artists", icon: UserIcon },
       { to: "/library/genres", label: "Genres", icon: TagIcon },
-      { to: "/library/songs", label: "Songs", icon: FileMusicIcon },
     ],
   },
   {
-    to: "/smart-playlists",
-    label: "Smart Playlists",
-    icon: Playlist03Icon,
-    sub: [
-      { to: "/smart-playlists", label: "All Smart Playlists" },
-    ],
-  },
-  {
-    to: "/favorites",
-    label: "Playlist",
-    icon: HeartCheckIcon,
-    sub: [
-      { to: "/favorites", label: "Favorites" },
-      { to: "/favorites/recent", label: "Recently Added" },
+    title: "Playlists",
+    defaultExpanded: true,
+    items: [
+      { to: "/playlists", label: "All Playlists", icon: Album01Icon },
+      { to: "/favorites", label: "Favorite Songs", icon: StarIcon },
+      { to: "/smart-playlists", label: "Smart Playlists", icon: SparklesIcon },
     ],
   },
 ];
 
-type CollapsibleSectionProps = {
-  title: string;
-  icon?: typeof Home01Icon;
-  children: ReactNode;
-  defaultExpanded?: boolean;
+type ItemLinkProps = {
+  item: NavItem;
+  collapsed: boolean;
 };
 
-function CollapsibleSection({
-  title,
-  icon,
-  children,
-  defaultExpanded = true,
-}: CollapsibleSectionProps) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
+function ItemLink({ item, collapsed }: ItemLinkProps) {
+  // In collapsed mode, items without an icon are hidden (Apple Music-like).
+  if (collapsed && !item.icon) return null;
+
+  const iconSize = collapsed ? 18 : 14;
 
   return (
-    <div>
+    <NavLink
+      to={item.to}
+      end={item.end}
+      title={collapsed ? item.label : undefined}
+      className={({ isActive }) =>
+        cn(
+          "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+          collapsed && "justify-center px-0 py-2",
+          isActive
+            ? "bg-primary text-primary-foreground"
+            : "text-muted-foreground hover:bg-muted hover:text-foreground",
+        )
+      }
+    >
+      {item.icon && (
+        <HugeiconsIcon
+          icon={item.icon}
+          size={iconSize}
+          strokeWidth={1.75}
+          className="shrink-0"
+        />
+      )}
+      {!collapsed && item.label}
+    </NavLink>
+  );
+}
+
+type SectionBlockProps = {
+  section: Section;
+  collapsed: boolean;
+};
+
+function SectionBlock({ section, collapsed }: SectionBlockProps) {
+  const [expanded, setExpanded] = useState(section.defaultExpanded ?? true);
+
+  // In collapsed mode, hide the header but keep the row spacing.
+  if (collapsed) {
+    const visibleItems = section.items.filter((it) => it.icon);
+    if (visibleItems.length === 0) return null;
+    return (
+      <div className="flex flex-col gap-0.5">
+        {visibleItems.map((item) => (
+          <ItemLink key={item.to} item={item} collapsed={collapsed} />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-0.5">
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center gap-1.5 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
         aria-expanded={expanded}
+        className="flex w-full items-center gap-1.5 px-3 pt-3 pb-1 text-left text-[11px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
       >
         <HugeiconsIcon
           icon={expanded ? ArrowDown01Icon : ArrowRight01Icon}
-          size={11}
+          size={10}
           strokeWidth={2.5}
         />
-        {icon && (
-          <HugeiconsIcon icon={icon} size={11} strokeWidth={2.5} />
-        )}
-        {title}
+        {section.title}
       </button>
-      {expanded && children}
+      {expanded && (
+        <div className="flex flex-col gap-0.5">
+          {section.items.map((item) => (
+            <ItemLink key={item.to} item={item} collapsed={collapsed} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -108,71 +157,21 @@ type Props = {
   collapsed?: boolean;
 };
 
-function NavItemLink({ item, collapsed }: { item: NavItem; collapsed?: boolean }) {
-  if (item.sub) {
-    return (
-      <CollapsibleSection title={item.label} icon={item.icon} defaultExpanded={true}>
-        <nav className="flex flex-col gap-0.5 pl-3">
-          {item.sub.map((sub) => (
-            <NavLink
-              key={sub.to}
-              to={sub.to}
-              end={sub.end}
-              className={({ isActive }) =>
-                cn(
-                  "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                )
-              }
-            >
-              {sub.icon && !collapsed && (
-                <HugeiconsIcon icon={sub.icon} size={15} strokeWidth={1.75} />
-              )}
-              {collapsed ? sub.label.charAt(0) : sub.label}
-            </NavLink>
-          ))}
-        </nav>
-      </CollapsibleSection>
-    );
-  }
-
-  return (
-    <NavLink
-      to={item.to}
-      end={item.end}
-      className={({ isActive }) =>
-        cn(
-          "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-          collapsed && "px-2",
-          isActive
-            ? "bg-primary text-primary-foreground"
-            : "text-muted-foreground hover:bg-muted hover:text-foreground",
-        )
-      }
-    >
-      {item.icon && !collapsed && (
-        <HugeiconsIcon icon={item.icon} size={15} strokeWidth={1.75} />
-      )}
-      {collapsed ? item.label.charAt(0) : item.label}
-    </NavLink>
-  );
-}
-
 export function Sidebar({ collapsed = false }: Props) {
   return (
     <aside
       className={cn(
-        "flex h-full flex-col gap-1 border-r border-border bg-card p-3 transition-all duration-200",
-        collapsed ? "w-12 items-center" : "w-56",
+        "flex h-full flex-col gap-1 overflow-y-auto border-r border-border bg-card p-3 transition-all duration-200 [overscroll-behavior:contain]",
+        collapsed ? "w-14 items-center" : "w-56",
       )}
     >
       <nav className="flex flex-col gap-0.5">
-        {NAV_ITEMS.map((item) => (
-          <NavItemLink key={item.to} item={item} collapsed={collapsed} />
-        ))}
+        <ItemLink item={HOME_ITEM} collapsed={collapsed} />
       </nav>
+
+      {SECTIONS.map((section) => (
+        <SectionBlock key={section.title} section={section} collapsed={collapsed} />
+      ))}
 
       <div className="flex-1" />
 

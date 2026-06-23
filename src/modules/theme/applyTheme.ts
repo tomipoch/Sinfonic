@@ -98,7 +98,8 @@ function writeTerminal(root: HTMLElement, t: TerminalPalette): void {
   if (t.selection) root.style.setProperty("--terminal-selection", t.selection);
   if (t.ansi) {
     for (let i = 0; i < ANSI_VARS.length && i < t.ansi.length; i++) {
-      root.style.setProperty(ANSI_VARS[i], t.ansi[i]);
+      const value = t.ansi[i];
+      if (value) root.style.setProperty(ANSI_VARS[i]!, value);
     }
   }
 }

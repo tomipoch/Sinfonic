@@ -28,7 +28,7 @@ export function Layout() {
             queueOpen && "mr-80",
           )}
         >
-          <div className="flex-1 overflow-auto">
+          <div className="flex-1 overflow-auto [overscroll-behavior:contain]">
             <Outlet />
           </div>
           <PlayerBar

@@ -4,6 +4,13 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
+import {
+  Delete03Icon,
+  RepeatIcon,
+  RepeatOne01Icon,
+  ShuffleIcon,
+} from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 
 import {
   queueClear,
@@ -91,7 +98,7 @@ export function QueuePanel({ onClose }: Props) {
               shuffle && "bg-primary/20 text-primary",
             )}
           >
-            <span className="text-xs">🔀</span>
+            <HugeiconsIcon icon={ShuffleIcon} size={16} strokeWidth={1.75} />
           </button>
           <button
             type="button"
@@ -103,7 +110,11 @@ export function QueuePanel({ onClose }: Props) {
               repeat !== "off" && "bg-primary/20 text-primary",
             )}
           >
-            <span className="text-xs">{repeat === "one" ? "🔂" : "🔁"}</span>
+            <HugeiconsIcon
+              icon={repeat === "one" ? RepeatOne01Icon : RepeatIcon}
+              size={16}
+              strokeWidth={1.75}
+            />
           </button>
           <button
             type="button"
@@ -112,7 +123,7 @@ export function QueuePanel({ onClose }: Props) {
             aria-label="Clear queue"
             className="size-7 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30"
           >
-            <span className="text-xs">🗑</span>
+            <HugeiconsIcon icon={Delete03Icon} size={16} strokeWidth={1.75} />
           </button>
           <button
             type="button"

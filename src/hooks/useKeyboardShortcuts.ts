@@ -44,10 +44,10 @@ export function useKeyboardShortcuts() {
           try {
             if (isPlaying) {
               await pause();
-              usePlaybackStore.getState().setState({ ...usePlaybackStore.getState(), isPlaying: false });
+              usePlaybackStore.getState().setIsPlaying(false);
             } else {
               await resume();
-              usePlaybackStore.getState().setState({ ...usePlaybackStore.getState(), isPlaying: true });
+              usePlaybackStore.getState().setIsPlaying(true);
             }
           } catch (err) {
             toast.error(`Playback: ${(err as Error).message}`);

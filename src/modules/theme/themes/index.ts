@@ -45,5 +45,5 @@ export function getBuiltinTheme(id: string): Theme | undefined {
 }
 
 export function getDefaultTheme(): Theme {
-  return BY_ID.get(DEFAULT_THEME_ID) ?? BUILTIN[0];
+  return BY_ID.get(DEFAULT_THEME_ID) ?? BUILTIN[0]!;
 }

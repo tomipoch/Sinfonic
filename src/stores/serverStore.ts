@@ -64,7 +64,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
   refreshServers: async () => {
     try {
       const servers = await providerServers();
-      set({ servers: servers as unknown as Server[] });
+      set({ servers: servers.map((s) => ({ id: s.serverId, kind: s.kind as ServerKind, name: s.name, baseUrl: s.baseUrl })) });
     } catch (e) {
       set({ error: (e as Error).message });
     }
