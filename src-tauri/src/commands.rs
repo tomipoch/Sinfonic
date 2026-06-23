@@ -1742,6 +1742,7 @@ pub async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
         .inner_size(720.0, 540.0)
         .min_inner_size(600.0, 400.0)
         .center()
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
         .build()
         .map_err(|e| e.to_string())?;
 

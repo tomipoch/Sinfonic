@@ -1,8 +1,7 @@
 // SettingsApp — top-level shell for the standalone Settings window.
 //
 // Layout:
-//   ┌─ Header (drag region) ─────────────────────────────────┐
-//   │           [ traffic lights │ centered tabs ]           │
+//   ┌─ Header (native traffic lights + centered tabs) ────────┐
 //   ├─ Content ──────────────────────────────────────────────┤
 //   │  SettingsTitle                                          │
 //   │  SettingsSection(s) → Cards                             │
@@ -63,21 +62,15 @@ export function SettingsApp() {
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground select-none">
       <header
         data-tauri-drag-region
-        className="flex h-11 shrink-0 items-center justify-center border-b border-border bg-background pl-[80px] pr-2"
+        className="flex h-11 shrink-0 items-center justify-center border-b border-border bg-background px-4"
       >
-        {/* `pl-[80px]` reserves room for the macOS traffic lights so
-            the centered tabs line up with the visual midline of the
-            window, not its geometric midline. On non-macOS the
-            padding is harmless. */}
         <Tabs
           value={active}
           onValueChange={(v: string) => setActive(v as SettingsTab)}
           orientation="horizontal"
-          data-tauri-drag-region
         >
           <TabsList
             className="h-7 gap-0.5 bg-muted/40 px-1"
-            data-tauri-drag-region
           >
             {TABS.map((t) => (
               <TabsTrigger

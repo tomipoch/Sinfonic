@@ -15,7 +15,7 @@
         "title": "sinfonic",
         "width": 800,
         "height": 600,
-        "titleBarStyle": "inline"
+        "titleBarStyle": "overlay"
       }
     ],
     "security": {

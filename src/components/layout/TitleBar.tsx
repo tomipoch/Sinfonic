@@ -55,11 +55,19 @@ export function TitleBar({ sidebarCollapsed, onToggleSidebar }: Props) {
     <div
       className={cn(
         "relative flex h-10 shrink-0 items-center border-b border-border bg-card select-none",
-        IS_MAC ? "pl-[100px]" : "pl-2",
+        IS_MAC ? "pl-2" : "pl-2",
       )}
     >
-      {/* Navigation arrows */}
+      {/* Sidebar toggle + Navigation arrows */}
       <div className="flex shrink-0 items-center gap-0.5">
+        <TitleBarButton
+          ariaLabel="Toggle sidebar"
+          onClick={onToggleSidebar}
+          className={cn(sidebarCollapsed && "text-muted-foreground/50")}
+        >
+          <HugeiconsIcon icon={SidebarLeftIcon} size={18} strokeWidth={1.75} />
+        </TitleBarButton>
+
         <TitleBarButton
           ariaLabel="Go back"
           onClick={() => navigate(-1)}
@@ -90,14 +98,6 @@ export function TitleBar({ sidebarCollapsed, onToggleSidebar }: Props) {
 
       {/* Action buttons */}
       <div className="flex shrink-0 items-center gap-0.5 pr-2">
-        <TitleBarButton
-          ariaLabel="Toggle sidebar"
-          onClick={onToggleSidebar}
-          className={cn(sidebarCollapsed && "text-muted-foreground/50")}
-        >
-          <HugeiconsIcon icon={SidebarLeftIcon} size={18} strokeWidth={1.75} />
-        </TitleBarButton>
-
         <TitleBarButton ariaLabel="Search" onClick={() => {}}>
           <HugeiconsIcon icon={Search01Icon} size={15} strokeWidth={1.75} />
         </TitleBarButton>
