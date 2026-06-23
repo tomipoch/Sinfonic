@@ -3,7 +3,7 @@
 // Opens inline from empty states or SourceSelector when no server is
 // connected. Shares form logic with ServerManager via `useServerForms`.
 
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   HardDriveIcon,
   Link04Icon,
@@ -13,6 +13,7 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 
 import { useServerForms } from "@/hooks/useServerForms";
+import { useServerStore } from "@/stores/serverStore";
 import {
   ChoiceCard,
   SettingsCard,
@@ -52,11 +53,19 @@ export function LoginDialog({ open, onClose }: Props) {
     activeServer,
     isLocalSource,
     activeServerId,
+    error,
     onDiscover,
     onRemoteLogin,
     onLocalScan,
+    onPickLocalPath,
     onLogout,
   } = useServerForms();
+
+  // Clear stale errors when the user switches source tabs so a failed
+  // Jellyfin attempt doesn't bleed into the Subsonic form.
+  useEffect(() => {
+    useServerStore.getState().clearError();
+  }, [source]);
 
   if (!open || dismissed) return null;
 
@@ -160,16 +169,30 @@ export function LoginDialog({ open, onClose }: Props) {
                       </div>
                       <label className="flex flex-col gap-1 text-sm">
                         <span className="text-muted-foreground">Music folder</span>
-                        <input
-                          type="text"
-                          value={localPath}
-                          onChange={(e) => setLocalPath(e.currentTarget.value)}
-                          placeholder="/Users/you/Music"
-                          required
-                          spellCheck={false}
-                          className="rounded-md border border-input bg-background px-3 py-2 font-mono text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none"
-                        />
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={localPath}
+                            onChange={(e) => setLocalPath(e.currentTarget.value)}
+                            placeholder="/Users/you/Music"
+                            required
+                            spellCheck={false}
+                            className="flex-1 rounded-md border border-input bg-background px-3 py-2 font-mono text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void onPickLocalPath()}
+                            className="shrink-0 rounded-md border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+                          >
+                            Browse…
+                          </button>
+                        </div>
                       </label>
+                      {error && (
+                        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                          {error.replace(/^local scan:\s*/i, "")}
+                        </div>
+                      )}
                       <button
                         type="submit"
                         disabled={localBusy}
@@ -228,6 +251,18 @@ export function LoginDialog({ open, onClose }: Props) {
                           />
                         </label>
                       </div>
+                      {error && (
+                        <div
+                          role="alert"
+                          className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+                        >
+                          {error
+                            .replace(/^login failed:\s*/i, "")
+                            .replace(/^save token:\s*/i, "Token storage: ")
+                            .replace(/^build provider:\s*/i, "Provider: ")
+                            .replace(/^upsert server:\s*/i, "Server record: ")}
+                        </div>
+                      )}
                       <button
                         type="submit"
                         disabled={busy}

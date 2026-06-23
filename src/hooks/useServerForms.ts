@@ -3,6 +3,7 @@
 // and LoginDialog (inline connection from empty states / SourceSelector).
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 
 import {
@@ -17,6 +18,26 @@ import {
 import { useServerStore, type ServerKind } from "@/stores/serverStore";
 
 export type Source = Exclude<ServerKind, "local"> | "local";
+
+function labelFor(source: Source): string {
+  switch (source) {
+    case "jellyfin":
+      return "Jellyfin";
+    case "subsonic":
+      return "Subsonic";
+    case "local":
+      return "Local files";
+  }
+}
+
+/// Prepend `http://` if the user typed a bare host (e.g. `192.168.1.10:8096`).
+/// `Url::parse` on the Rust side rejects inputs without a scheme, so we
+/// normalise the value client-side first. Existing scheme is preserved.
+function normaliseBaseUrl(raw: string): string {
+  if (!raw) return raw;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return raw;
+  return `http://${raw}`;
+}
 
 export function useServerForms() {
   const servers = useServerStore((s) => s.servers);
@@ -81,19 +102,46 @@ export function useServerForms() {
       event.preventDefault();
       setBusy(true);
       try {
-        await login({
+        const normalisedUrl = normaliseBaseUrl(baseUrl.trim());
+        const connected = await login({
           kind: source,
-          baseUrl: baseUrl.trim(),
+          baseUrl: normalisedUrl,
           username,
           password,
         } as Parameters<typeof login>[0]);
         setPassword("");
+        toast.success(
+          `Connected to ${connected.name}`,
+        );
+      } catch (err) {
+        const message = (err as Error).message || "login failed";
+        // Trim the redundant "login failed: " prefix that the Tauri
+        // command wraps on. The base error is more useful to show.
+        const clean = message.replace(/^login failed:\s*/i, "");
+        toast.error(`${labelFor(source)} login failed: ${clean}`);
       } finally {
         setBusy(false);
       }
     },
     [source, baseUrl, username, password, login],
   );
+
+  const onPickLocalPath = useCallback(async () => {
+    try {
+      const picked = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Select your music folder",
+      });
+      if (typeof picked === "string" && picked.length > 0) {
+        setLocalPath(picked);
+      }
+    } catch (err) {
+      toast.error(
+        `Couldn't open folder picker: ${(err as Error).message ?? String(err)}`,
+      );
+    }
+  }, []);
 
   const onLocalScan = useCallback(
     async (event: FormEvent) => {
@@ -195,6 +243,7 @@ export function useServerForms() {
   const isLocalSource = source === "local";
 
   return {
+    servers,
     source,
     setSource,
     baseUrl,
@@ -230,6 +279,7 @@ export function useServerForms() {
     onRemoteLogin,
     onLocalScan,
     onLocalRescan,
+    onPickLocalPath,
     onLogout,
     onSync,
     onLastfmConnect,
