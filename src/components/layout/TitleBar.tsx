@@ -87,14 +87,6 @@ export function TitleBar({ sidebarCollapsed, onToggleSidebar }: Props) {
         </TitleBarButton>
       </div>
 
-      {/* View title (drag region) */}
-      <div
-        className="ml-3 mr-2 min-w-0 truncate text-sm font-medium text-foreground data-tauri-drag-region"
-        data-tauri-drag-region
-      >
-        {title}
-      </div>
-
       {/* Spacer */}
       <div className="flex-1" data-tauri-drag-region />
 
