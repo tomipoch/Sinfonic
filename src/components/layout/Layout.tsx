@@ -1,15 +1,18 @@
-// Layout — TitleBar + Sidebar + main outlet + PlayerBar.
+// Layout — TitleBar + Sidebar + main outlet + PlayerBar + QueuePanel.
 
 import { useState } from "react";
 import { Outlet } from "react-router-dom";
 import { PlayerBar } from "./PlayerBar";
+import { QueuePanel } from "./QueuePanel";
 import { Sidebar } from "./Sidebar";
 import { TitleBar } from "./TitleBar";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { cn } from "@/lib/cn";
 
 export function Layout() {
   useKeyboardShortcuts();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
 
   return (
     <div className="flex h-full w-full flex-col">
@@ -17,14 +20,25 @@ export function Layout() {
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed((c) => !c)}
       />
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden">
         <Sidebar collapsed={sidebarCollapsed} />
-        <main className="flex min-w-0 flex-1 flex-col">
+        <main
+          className={cn(
+            "flex min-w-0 flex-1 flex-col transition-all duration-200",
+            queueOpen && "mr-80",
+          )}
+        >
           <div className="flex-1 overflow-auto">
             <Outlet />
           </div>
-          <PlayerBar />
+          <PlayerBar
+            queueOpen={queueOpen}
+            onToggleQueue={() => setQueueOpen((v) => !v)}
+          />
         </main>
+        {queueOpen && (
+          <QueuePanel onClose={() => setQueueOpen(false)} />
+        )}
       </div>
     </div>
   );

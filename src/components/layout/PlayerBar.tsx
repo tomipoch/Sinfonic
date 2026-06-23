@@ -72,7 +72,12 @@ function NextIcon({ className }: { className?: string }) {
   );
 }
 
-export function PlayerBar() {
+type Props = {
+  queueOpen: boolean;
+  onToggleQueue: () => void;
+};
+
+export function PlayerBar({ queueOpen, onToggleQueue }: Props) {
   const currentTrack = usePlaybackStore((s) => s.currentTrack);
   const isPlaying = usePlaybackStore((s) => s.isPlaying);
   const volume = usePlaybackStore((s) => s.volume);
@@ -289,6 +294,21 @@ export function PlayerBar() {
           aria-label="Volume"
           className="h-1 w-24 cursor-pointer accent-primary"
         />
+        <button
+          type="button"
+          onClick={onToggleQueue}
+          aria-label="Toggle queue"
+          aria-expanded={queueOpen}
+          aria-pressed={queueOpen}
+          className={cn(
+            "rounded-md px-2 py-1 text-xs",
+            queueOpen
+              ? "bg-primary/20 text-primary"
+              : "text-muted-foreground hover:bg-card hover:text-foreground",
+          )}
+        >
+          Queue
+        </button>
         <button
           type="button"
           onClick={() => setEqOpen((open) => !open)}
