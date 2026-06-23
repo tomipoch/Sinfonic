@@ -29,7 +29,7 @@
 //!   `provider.albums(...).await`.
 
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, State};
+use tauri::{Emitter, Manager, State};
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -1722,3 +1722,28 @@ fn emit_track_changed_from_entry(
 // from the queue entry (e.g., the entry was restored without metadata).
 #[allow(dead_code)]
 fn _ensure_track_id_used(_: TrackId) {}
+
+/// Open the settings window. Idempotent — if the window is already open,
+/// this brings it to the foreground instead of creating a duplicate.
+#[tauri::command]
+pub async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::WebviewWindowBuilder;
+    use tauri::WebviewUrl;
+
+    const LABEL: &str = "settings";
+
+    if let Some(win) = app.get_webview_window(LABEL) {
+        win.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::App("settings.html".into()))
+        .title("Settings")
+        .inner_size(720.0, 540.0)
+        .min_inner_size(600.0, 400.0)
+        .center()
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}

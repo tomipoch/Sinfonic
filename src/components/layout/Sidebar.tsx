@@ -35,8 +35,21 @@ const NAV_ITEMS: NavItem[] = [
       { to: "/library/songs", label: "Songs" },
     ],
   },
-  { to: "/smart-playlists", label: "Smart Playlists" },
-  { to: "/favorites", label: "Playlist" },
+  {
+    to: "/smart-playlists",
+    label: "Smart Playlists",
+    sub: [
+      { to: "/smart-playlists", label: "All Smart Playlists" },
+    ],
+  },
+  {
+    to: "/favorites",
+    label: "Playlist",
+    sub: [
+      { to: "/favorites", label: "Favorites" },
+      { to: "/favorites/recent", label: "Recently Added" },
+    ],
+  },
 ];
 
 type CollapsibleSectionProps = {

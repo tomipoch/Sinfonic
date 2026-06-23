@@ -213,6 +213,7 @@ pub fn run() {
             commands::lastfm_connect,
             commands::lastfm_disconnect,
             commands::lastfm_status,
+            commands::open_settings_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
