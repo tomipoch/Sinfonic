@@ -2,7 +2,7 @@
 //
 // Layout: [←][→] [title (drag region)] [Search] [Settings]
 
-import { IS_MAC } from "@/lib/platform";
+import { IS_LINUX, IS_MAC, IS_WINDOWS } from "@/lib/platform";
 import { cn } from "@/lib/cn";
 import {
   ArrowLeft01Icon,
@@ -55,7 +55,9 @@ export function TitleBar({ sidebarCollapsed, onToggleSidebar }: Props) {
     <div
       className={cn(
         "relative flex h-10 shrink-0 items-center border-b border-border bg-card select-none",
-        IS_MAC ? "pl-2" : "pl-2",
+        IS_MAC && "pl-20",
+        IS_WINDOWS && "pr-20",
+        IS_LINUX && "px-20",
       )}
     >
       {/* Sidebar toggle + Navigation arrows */}
