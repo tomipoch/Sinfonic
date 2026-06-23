@@ -7,8 +7,8 @@
 
 import { useEffect } from "react";
 
-import { useLibraryStore } from "../stores/libraryStore";
-import { useServerStore } from "../stores/serverStore";
+import { useLibraryStore } from "@/stores/libraryStore";
+import { useServerStore } from "@/stores/serverStore";
 
 export function useLibraryAutoLoad(): void {
   const activeServerId = useServerStore((s) => s.activeServerId);

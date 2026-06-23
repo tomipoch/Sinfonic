@@ -10,14 +10,14 @@
 import { useEffect } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-import { getPlaybackState, getQueue } from "../lib/tauri";
-import { usePlaybackStore } from "../stores/playbackStore";
-import { useQueueStore } from "../stores/queueStore";
+import { getPlaybackState, getQueue } from "@/lib/tauri";
+import { usePlaybackStore } from "@/stores/playbackStore";
+import { useQueueStore } from "@/stores/queueStore";
 import type {
   PlaybackStatePayload,
   QueueSnapshotPayload,
   TrackChangedPayload,
-} from "../types/domain";
+} from "@/types/domain";
 
 export function usePlaybackEvents(): void {
   useEffect(() => {

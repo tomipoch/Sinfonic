@@ -27,13 +27,13 @@ import {
   setMuted,
   setVolume,
   queueAddMany,
-} from "../../lib/tauri";
-import { usePlaybackStore } from "../../stores/playbackStore";
-import { useQueueStore } from "../../stores/queueStore";
-import { cn } from "../../lib/cn";
-import { formatDuration } from "../../lib/format";
-import { EqPanel } from "../views/EqPanel";
-import { useDropTarget } from "../../hooks/useDropTarget";
+} from "@/lib/tauri";
+import { usePlaybackStore } from "@/stores/playbackStore";
+import { useQueueStore } from "@/stores/queueStore";
+import { cn } from "@/lib/cn";
+import { formatDuration } from "@/lib/format";
+import { EqPanel } from "@/components/views/EqPanel";
+import { useDropTarget } from "@/hooks/useDropTarget";
 
 const VOLUME_STEP = 0.05;
 const VOLUME_MIN = 0;
@@ -168,8 +168,8 @@ export function PlayerBar() {
     <footer
       {...droppableProps}
       className={cn(
-        "relative flex h-20 shrink-0 items-center justify-between gap-4 border-t border-bg-raised bg-bg-subtle px-4 transition-colors",
-        dragOver && "border-accent bg-accent/10",
+        "relative flex h-20 shrink-0 items-center justify-between gap-4 border-t border-border bg-muted px-4 transition-colors",
+        dragOver && "border-primary bg-primary/10",
       )}
       role="contentinfo"
       aria-label="Player controls"
@@ -181,16 +181,16 @@ export function PlayerBar() {
       )}
       <div className="flex min-w-0 items-center gap-3">
         <div
-          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-bg-raised text-lg font-bold text-white/80"
+          className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-card text-lg font-bold text-white/80"
           aria-hidden
         >
           {currentTrack?.title?.trim().charAt(0).toUpperCase() ?? "♪"}
         </div>
         <div className="min-w-0">
-          <div className="truncate text-sm font-medium text-fg">
+          <div className="truncate text-sm font-medium text-foreground">
             {currentTrack?.title ?? "Nothing playing"}
           </div>
-          <div className="truncate text-xs text-fg-subtle">
+          <div className="truncate text-xs text-muted-foreground">
             {currentTrack?.artist ?? "—"}
           </div>
         </div>
@@ -203,7 +203,7 @@ export function PlayerBar() {
             onClick={onPrev}
             disabled={transportDisabled || queueLength === 0}
             aria-label="Previous track"
-            className="rounded-full p-2 text-fg-subtle hover:bg-bg-raised hover:text-fg focus:outline-none disabled:opacity-40"
+            className="rounded-full p-2 text-muted-foreground hover:bg-card hover:text-foreground focus:outline-none disabled:opacity-40"
           >
             <PrevIcon className="h-5 w-5" />
           </button>
@@ -212,7 +212,7 @@ export function PlayerBar() {
             onClick={onTogglePlay}
             disabled={transportDisabled}
             aria-label={isPlaying ? "Pause" : "Play"}
-            className="rounded-full bg-fg p-2 text-bg hover:bg-white focus:outline-none disabled:opacity-40"
+            className="rounded-full bg-foreground p-2 text-background hover:bg-white focus:outline-none disabled:opacity-40"
           >
             {isPlaying ? (
               <PauseIcon className="h-5 w-5" />
@@ -225,13 +225,13 @@ export function PlayerBar() {
             onClick={onNext}
             disabled={transportDisabled || queueLength === 0}
             aria-label="Next track"
-            className="rounded-full p-2 text-fg-subtle hover:bg-bg-raised hover:text-fg focus:outline-none disabled:opacity-40"
+            className="rounded-full p-2 text-muted-foreground hover:bg-card hover:text-foreground focus:outline-none disabled:opacity-40"
           >
             <NextIcon className="h-5 w-5" />
           </button>
         </div>
         <div className="flex w-full items-center gap-2">
-          <span className="w-10 shrink-0 text-right font-mono text-xs text-fg-muted">
+          <span className="w-10 shrink-0 text-right font-mono text-xs text-muted">
             {formatDuration(displayedPosition)}
           </span>
           <input
@@ -256,9 +256,9 @@ export function PlayerBar() {
             aria-valuemin={0}
             aria-valuemax={durationSeconds}
             aria-valuenow={displayedPosition}
-            className="h-1 flex-1 cursor-pointer accent-accent disabled:cursor-not-allowed disabled:opacity-40"
+            className="h-1 flex-1 cursor-pointer accent-primary disabled:cursor-not-allowed disabled:opacity-40"
           />
-          <span className="w-10 shrink-0 font-mono text-xs text-fg-muted">
+          <span className="w-10 shrink-0 font-mono text-xs text-muted">
             {formatDuration(durationSeconds)}
           </span>
         </div>
@@ -273,8 +273,8 @@ export function PlayerBar() {
           className={cn(
             "rounded-md px-2 py-1 text-xs",
             muted
-              ? "bg-accent/20 text-accent"
-              : "text-fg-subtle hover:bg-bg-raised hover:text-fg",
+              ? "bg-primary/20 text-primary"
+              : "text-muted-foreground hover:bg-card hover:text-foreground",
           )}
         >
           {muted ? "Muted" : "Mute"}
@@ -287,7 +287,7 @@ export function PlayerBar() {
           value={effectiveVolume}
           onChange={(e) => void onVolumeChange(Number(e.currentTarget.value))}
           aria-label="Volume"
-          className="h-1 w-24 cursor-pointer accent-accent"
+          className="h-1 w-24 cursor-pointer accent-primary"
         />
         <button
           type="button"
@@ -298,8 +298,8 @@ export function PlayerBar() {
           className={cn(
             "rounded-md px-2 py-1 text-xs",
             eqOpen
-              ? "bg-accent/20 text-accent"
-              : "text-fg-subtle hover:bg-bg-raised hover:text-fg",
+              ? "bg-primary/20 text-primary"
+              : "text-muted-foreground hover:bg-card hover:text-foreground",
           )}
         >
           EQ

@@ -3,7 +3,7 @@
 
 import { Link } from "react-router-dom";
 
-import { useLibraryStore } from "../../stores/libraryStore";
+import { useLibraryStore } from "@/stores/libraryStore";
 
 export function ArtistsTab() {
   const artists = useLibraryStore((s) => s.artists);
@@ -12,7 +12,7 @@ export function ArtistsTab() {
 
   if (loading && artists.length === 0) {
     return (
-      <p className="text-fg-subtle text-sm" role="status">
+      <p className="text-muted-foreground text-sm" role="status">
         Loading artists…
       </p>
     );
@@ -20,7 +20,7 @@ export function ArtistsTab() {
 
   if (loaded && artists.length === 0) {
     return (
-      <p className="text-fg-subtle text-sm">
+      <p className="text-muted-foreground text-sm">
         No artists in the library yet. Sync your library to populate it.
       </p>
     );
@@ -28,25 +28,25 @@ export function ArtistsTab() {
 
   return (
     <ul
-      className="divide-y divide-bg-raised rounded-md border border-bg-raised"
+      className="divide-y divide-border rounded-md border border-border"
       aria-label="Artists"
     >
       {artists.map((artist) => (
         <li key={artist.id}>
           <Link
             to={`/library/artist/${encodeURIComponent(artist.id)}`}
-            className="flex items-center justify-between gap-3 px-3 py-2 hover:bg-bg-subtle"
+            className="flex items-center justify-between gap-3 px-3 py-2 hover:bg-muted"
           >
             <div className="min-w-0">
-              <div className="truncate text-sm font-medium text-fg">{artist.name}</div>
-              <div className="truncate text-xs text-fg-subtle">
+              <div className="truncate text-sm font-medium text-foreground">{artist.name}</div>
+              <div className="truncate text-xs text-muted-foreground">
                 {artist.albumCount} {artist.albumCount === 1 ? "album" : "albums"}
                 {" · "}
                 {artist.trackCount} {artist.trackCount === 1 ? "track" : "tracks"}
               </div>
             </div>
             {artist.favorite && (
-              <span className="text-xs text-accent" aria-label="Favorite">
+              <span className="text-xs text-primary" aria-label="Favorite">
                 ★
               </span>
             )}

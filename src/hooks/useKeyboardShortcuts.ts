@@ -7,8 +7,8 @@ import {
   resume,
   setMuted,
   setVolume,
-} from "../lib/tauri";
-import { usePlaybackStore } from "../stores/playbackStore";
+} from "@/lib/tauri";
+import { usePlaybackStore } from "@/stores/playbackStore";
 
 const VOLUME_STEP = 0.05;
 

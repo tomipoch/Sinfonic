@@ -1,5 +1,5 @@
 // DnD data shape for track drag operations.
-import type { Track } from "../types/domain";
+import type { Track } from "@/types/domain";
 
 export interface TrackDragData {
   tracks: Track[];

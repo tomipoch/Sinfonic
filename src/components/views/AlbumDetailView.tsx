@@ -12,14 +12,14 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 
-import { AlbumCover } from "../ui/AlbumCover";
-import { FavoriteButton } from "../ui/FavoriteButton";
-import { getAlbumDetail, playAlbum, playTrack } from "../../lib/tauri";
-import { useServerStore } from "../../stores/serverStore";
-import { formatDuration } from "../../lib/format";
-import { encodeDragData } from "../../lib/queueDnD";
-import { cn } from "../../lib/cn";
-import type { Album, Track } from "../../types/domain";
+import { AlbumCover } from "@/components/ui/AlbumCover";
+import { FavoriteButton } from "@/components/ui/FavoriteButton";
+import { getAlbumDetail, playAlbum, playTrack } from "@/lib/tauri";
+import { useServerStore } from "@/stores/serverStore";
+import { formatDuration } from "@/lib/format";
+import { encodeDragData } from "@/lib/queueDnD";
+import { cn } from "@/lib/cn";
+import type { Album, Track } from "@/types/domain";
 
 interface AlbumDetailData {
   album: Album;
@@ -66,12 +66,12 @@ export function AlbumDetailView() {
   }, [id, activeServerId]);
 
   if (!id) {
-    return <p className="text-fg-subtle text-sm">Missing album id.</p>;
+    return <p className="text-muted-foreground text-sm">Missing album id.</p>;
   }
 
   if (loading) {
     return (
-      <p className="text-fg-subtle text-sm" role="status">
+      <p className="text-muted-foreground text-sm" role="status">
         Loading album…
       </p>
     );
@@ -79,9 +79,9 @@ export function AlbumDetailView() {
 
   if (notFound || !data) {
     return (
-      <div className="flex flex-col items-start gap-3 rounded-md border border-bg-raised bg-bg-subtle p-6">
-        <div className="text-base font-medium text-fg">Album not found</div>
-        <p className="text-sm text-fg-subtle">
+      <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
+        <div className="text-base font-medium text-foreground">Album not found</div>
+        <p className="text-sm text-muted-foreground">
           The library cache doesn't have this album. Try syncing your library.
         </p>
       </div>
@@ -120,13 +120,13 @@ export function AlbumDetailView() {
           <AlbumCover album={album} />
         </div>
         <div className="flex min-w-0 flex-col gap-1">
-          <div className="text-xs uppercase tracking-wide text-fg-subtle">Album</div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Album</div>
           <h1 className="truncate text-3xl font-semibold">{album.title}</h1>
-          <div className="text-base text-fg-subtle">
+          <div className="text-base text-muted-foreground">
             {album.artist}
             {album.year ? ` · ${album.year}` : ""}
           </div>
-          <div className="text-xs text-fg-muted">
+          <div className="text-xs text-muted">
             {tracks.length} {tracks.length === 1 ? "track" : "tracks"}
             {" · "}
             {formatDuration(album.durationSeconds)}
@@ -145,7 +145,7 @@ export function AlbumDetailView() {
         </div>
       </header>
 
-          <ol className="divide-y divide-bg-raised rounded-md border border-bg-raised">
+          <ol className="divide-y divide-border rounded-md border border-border">
             {tracks.map((track) => (
               <li
                 key={track.id}
@@ -161,7 +161,7 @@ export function AlbumDetailView() {
                   draggingId === track.id && "opacity-30",
                 )}
               >
-                <div className="text-right font-mono text-xs text-fg-muted">
+                <div className="text-right font-mono text-xs text-muted">
                   {track.trackNumber || "—"}
                 </div>
                 <div className="min-w-0">
@@ -169,13 +169,13 @@ export function AlbumDetailView() {
                     type="button"
                     onClick={() => void onPlayTrack(track)}
                     disabled={busy}
-                    className="block w-full truncate text-left font-medium text-fg hover:text-white focus:outline-none"
+                    className="block w-full truncate text-left font-medium text-foreground hover:text-white focus:outline-none"
                   >
                     {track.title}
                   </button>
-                  <div className="truncate text-xs text-fg-subtle">{track.artist}</div>
+                  <div className="truncate text-xs text-muted-foreground">{track.artist}</div>
                 </div>
-                <div className="text-xs text-fg-muted">
+                <div className="text-xs text-muted">
                   {formatDuration(track.durationSeconds)}
                 </div>
                 <FavoriteButton kind="track" itemId={track.id} initialFavorite={track.favorite} />

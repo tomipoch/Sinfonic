@@ -5,13 +5,13 @@
 import { useState } from "react";
 import { toast } from "sonner";
 
-import { FavoriteButton } from "../ui/FavoriteButton";
-import { useLibraryStore } from "../../stores/libraryStore";
-import { playTrack } from "../../lib/tauri";
-import { formatDuration } from "../../lib/format";
-import { encodeDragData } from "../../lib/queueDnD";
-import { cn } from "../../lib/cn";
-import type { Track } from "../../types/domain";
+import { FavoriteButton } from "@/components/ui/FavoriteButton";
+import { useLibraryStore } from "@/stores/libraryStore";
+import { playTrack } from "@/lib/tauri";
+import { formatDuration } from "@/lib/format";
+import { encodeDragData } from "@/lib/queueDnD";
+import { cn } from "@/lib/cn";
+import type { Track } from "@/types/domain";
 
 type SortKey = "title" | "artist" | "album" | "durationSeconds";
 
@@ -31,7 +31,7 @@ export function TracksTab() {
 
   if (loading && tracks.length === 0) {
     return (
-      <p className="text-fg-subtle text-sm" role="status">
+      <p className="text-muted-foreground text-sm" role="status">
         Loading tracks…
       </p>
     );
@@ -39,7 +39,7 @@ export function TracksTab() {
 
   if (loaded && tracks.length === 0) {
     return (
-      <p className="text-fg-subtle text-sm">
+      <p className="text-muted-foreground text-sm">
         No tracks in the library yet. Sync your library to populate it.
       </p>
     );
@@ -66,9 +66,9 @@ export function TracksTab() {
   ];
 
   return (
-    <div className="overflow-hidden rounded-md border border-bg-raised">
+    <div className="overflow-hidden rounded-md border border-border">
       <table className="w-full text-sm">
-        <thead className="bg-bg-subtle text-xs uppercase tracking-wide text-fg-subtle">
+        <thead className="bg-muted text-xs uppercase tracking-wide text-muted-foreground">
           <tr>
             <th className="w-10 px-2 py-2 text-right" aria-label="Play" />
             {headers.map((h) => (
@@ -81,8 +81,8 @@ export function TracksTab() {
                   type="button"
                   onClick={() => setSortKey(h.key)}
                   className={
-                    "font-medium hover:text-fg focus:outline-none " +
-                    (sortKey === h.key ? "text-fg" : "text-fg-subtle")
+                    "font-medium hover:text-foreground focus:outline-none " +
+                    (sortKey === h.key ? "text-foreground" : "text-muted-foreground")
                   }
                 >
                   {h.label}
@@ -93,7 +93,7 @@ export function TracksTab() {
             <th scope="col" className="w-10 px-3 py-2" />
           </tr>
         </thead>
-        <tbody className="divide-y divide-bg-raised">
+        <tbody className="divide-y divide-border">
           {sorted.map((track) => (
             <tr
               key={track.id}
@@ -104,7 +104,7 @@ export function TracksTab() {
                 e.dataTransfer.effectAllowed = "copy";
               }}
               onDragEnd={() => setDraggingId(null)}
-              className={cn("hover:bg-bg-subtle", draggingId === track.id && "opacity-30")}
+              className={cn("hover:bg-muted", draggingId === track.id && "opacity-30")}
             >
               <td className="px-2 py-2 text-right">
                 <button
@@ -112,15 +112,15 @@ export function TracksTab() {
                   onClick={() => void onPlay(track)}
                   disabled={busy}
                   aria-label={`Play ${track.title}`}
-                  className="rounded p-1 text-fg-subtle hover:bg-bg-raised hover:text-fg focus:outline-none"
+                  className="rounded p-1 text-muted-foreground hover:bg-card hover:text-foreground focus:outline-none"
                 >
                   ▶
                 </button>
               </td>
-              <td className="px-3 py-2 text-fg">{track.title}</td>
-              <td className="px-3 py-2 text-fg-subtle">{track.artist}</td>
-              <td className="px-3 py-2 text-fg-subtle">{track.album}</td>
-              <td className="px-3 py-2 text-right text-fg-muted">
+              <td className="px-3 py-2 text-foreground">{track.title}</td>
+              <td className="px-3 py-2 text-muted-foreground">{track.artist}</td>
+              <td className="px-3 py-2 text-muted-foreground">{track.album}</td>
+              <td className="px-3 py-2 text-right text-foreground-muted">
                 {formatDuration(track.durationSeconds)}
               </td>
               <td className="px-3 py-2">

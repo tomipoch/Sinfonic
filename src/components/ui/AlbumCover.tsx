@@ -13,8 +13,8 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 
-import { providerImageBytes } from "../../lib/tauri";
-import type { Album } from "../../types/domain";
+import { providerImageBytes } from "@/lib/tauri";
+import type { Album } from "@/types/domain";
 
 const PALETTE: ReadonlyArray<readonly [number, number]> = [
   [260, 25],

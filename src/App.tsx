@@ -9,24 +9,23 @@
 
 import { Route, Routes } from "react-router-dom";
 
-import { Layout } from "./components/layout/Layout";
-import { AlbumDetailView } from "./components/views/AlbumDetailView";
-import { AlbumsTab } from "./components/views/AlbumsTab";
-import { ArtistDetailView } from "./components/views/ArtistDetailView";
-import { ArtistsTab } from "./components/views/ArtistsTab";
-import { HomeView } from "./components/views/HomeView";
-import { LibraryView } from "./components/views/LibraryView";
-import { FavoritesView } from "./components/views/FavoritesView";
-import { PlaylistDetailView } from "./components/views/PlaylistDetailView";
-import { PlaylistsView } from "./components/views/PlaylistsView";
-import { QueueView } from "./components/views/QueueView";
-import { SearchView } from "./components/views/SearchView";
-import { SettingsView } from "./components/views/SettingsView";
-import { SmartPlaylistDetailView } from "./components/views/SmartPlaylistDetailView";
-import { SmartPlaylistsView } from "./components/views/SmartPlaylistsView";
-import { TracksTab } from "./components/views/TracksTab";
-import { useAlbumArtPrewarm } from "./hooks/useAlbumArtPrewarm";
-import { usePlaybackEvents } from "./hooks/usePlaybackEvents";
+import { Layout } from "@/components/layout/Layout";
+import { AlbumDetailView } from "@/components/views/AlbumDetailView";
+import { AlbumsTab } from "@/components/views/AlbumsTab";
+import { ArtistDetailView } from "@/components/views/ArtistDetailView";
+import { ArtistsTab } from "@/components/views/ArtistsTab";
+import { HomeView } from "@/components/views/HomeView";
+import { LibraryView } from "@/components/views/LibraryView";
+import { FavoritesView } from "@/components/views/FavoritesView";
+import { PlaylistDetailView } from "@/components/views/PlaylistDetailView";
+import { PlaylistsView } from "@/components/views/PlaylistsView";
+import { QueueView } from "@/components/views/QueueView";
+import { SearchView } from "@/components/views/SearchView";
+import { SmartPlaylistDetailView } from "@/components/views/SmartPlaylistDetailView";
+import { SmartPlaylistsView } from "@/components/views/SmartPlaylistsView";
+import { TracksTab } from "@/components/views/TracksTab";
+import { useAlbumArtPrewarm } from "@/hooks/useAlbumArtPrewarm";
+import { usePlaybackEvents } from "@/hooks/usePlaybackEvents";
 
 function PlaybackEventsBridge(): null {
   usePlaybackEvents();
@@ -55,7 +54,6 @@ export default function App() {
           </Route>
           <Route path="queue" element={<QueueView />} />
           <Route path="search" element={<SearchView />} />
-          <Route path="settings" element={<SettingsView />} />
           <Route path="playlists" element={<PlaylistsView />} />
           <Route path="playlists/:id" element={<PlaylistDetailView />} />
           <Route path="favorites" element={<FavoritesView />} />

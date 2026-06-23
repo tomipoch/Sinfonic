@@ -3,14 +3,14 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { AlbumCover } from "../ui/AlbumCover";
-import { FavoriteButton } from "../ui/FavoriteButton";
-import { getFavorites } from "../../lib/tauri";
-import { useServerStore } from "../../stores/serverStore";
-import { formatDuration } from "../../lib/format";
-import { encodeDragData } from "../../lib/queueDnD";
-import { cn } from "../../lib/cn";
-import type { Album, Artist, Track } from "../../types/domain";
+import { AlbumCover } from "@/components/ui/AlbumCover";
+import { FavoriteButton } from "@/components/ui/FavoriteButton";
+import { getFavorites } from "@/lib/tauri";
+import { useServerStore } from "@/stores/serverStore";
+import { formatDuration } from "@/lib/format";
+import { encodeDragData } from "@/lib/queueDnD";
+import { cn } from "@/lib/cn";
+import type { Album, Artist, Track } from "@/types/domain";
 
 type FavoritesTab = "tracks" | "albums" | "artists";
 
@@ -47,15 +47,15 @@ export function FavoritesView() {
 
   if (!activeServerId) {
     return (
-      <div className="flex flex-col items-start gap-3 rounded-md border border-bg-raised bg-bg-subtle p-6">
-        <div className="text-base font-medium text-fg">No server connected</div>
-        <p className="text-sm text-fg-subtle">Connect a server in Settings to see favorites.</p>
+      <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
+        <div className="text-base font-medium text-foreground">No server connected</div>
+        <p className="text-sm text-foreground-subtle">Connect a server in Settings to see favorites.</p>
       </div>
     );
   }
 
   if (loading) {
-    return <p className="text-fg-subtle text-sm" role="status">Loading favorites…</p>;
+    return <p className="text-foreground-subtle text-sm" role="status">Loading favorites…</p>;
   }
 
   if (error) {
@@ -80,17 +80,17 @@ export function FavoritesView() {
     <section className="flex flex-col gap-4 p-6">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-2xl font-semibold">Favorites</h1>
-        <div className="flex gap-1 rounded-md border border-bg-raised bg-bg-subtle p-1">
+        <div className="flex gap-1 rounded-md border border-border bg-muted p-1">
           {tabs.map((t) => (
             <button
               key={t.key}
               type="button"
               onClick={() => setTab(t.key)}
               className={`rounded px-3 py-1 text-sm transition-colors ${
-                tab === t.key ? "bg-bg-raised text-fg" : "text-fg-subtle hover:text-fg"
+                tab === t.key ? "bg-card text-foreground" : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              {t.label} <span className="ml-1 text-fg-muted">({t.count})</span>
+              {t.label} <span className="ml-1 text-foreground-muted">({t.count})</span>
             </button>
           ))}
         </div>
@@ -100,7 +100,7 @@ export function FavoritesView() {
         data.tracks.length === 0 ? (
           <EmptyState message="No favorited tracks yet." />
         ) : (
-          <ol className="divide-y divide-bg-raised rounded-md border border-bg-raised">
+          <ol className="divide-y divide-border rounded-md border border-border">
             {data.tracks.map((track) => (
               <li
                 key={track.id}
@@ -116,12 +116,12 @@ export function FavoritesView() {
                   draggingId === track.id && "opacity-30",
                 )}
               >
-                <div className="text-right font-mono text-xs text-fg-muted">{track.trackNumber || "—"}</div>
+                <div className="text-right font-mono text-xs text-foreground-muted">{track.trackNumber || "—"}</div>
                 <div className="min-w-0">
-                  <div className="truncate font-medium text-fg">{track.title}</div>
-                  <div className="truncate text-xs text-fg-subtle">{track.artist}</div>
+                  <div className="truncate font-medium text-foreground">{track.title}</div>
+                  <div className="truncate text-xs text-foreground-subtle">{track.artist}</div>
                 </div>
-                <div className="text-xs text-fg-muted">{formatDuration(track.durationSeconds)}</div>
+                <div className="text-xs text-foreground-muted">{formatDuration(track.durationSeconds)}</div>
                 <FavoriteButton kind="track" itemId={track.id} initialFavorite={track.favorite} />
               </li>
             ))}
@@ -138,15 +138,15 @@ export function FavoritesView() {
               <Link
                 key={album.id}
                 to={`/library/album/${encodeURIComponent(album.id)}`}
-                className="flex flex-col gap-2 rounded-md border border-bg-raised bg-bg-subtle p-4 transition-colors hover:border-accent/50 hover:bg-bg-raised"
+                className="flex flex-col gap-2 rounded-md border border-border bg-muted p-4 transition-colors hover:border-primary/50 hover:bg-card"
               >
                 <AlbumCover album={album} />
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-medium text-fg">{album.title}</div>
-                  <div className="truncate text-xs text-fg-subtle">{album.artist}</div>
+                  <div className="truncate text-sm font-medium text-foreground">{album.title}</div>
+                  <div className="truncate text-xs text-foreground-subtle">{album.artist}</div>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-fg-muted">
+                  <span className="text-xs text-foreground-muted">
                     {album.trackCount} tracks · {formatDuration(album.durationSeconds)}
                   </span>
                   <FavoriteButton kind="album" itemId={album.id} initialFavorite={album.favorite} />
@@ -166,13 +166,13 @@ export function FavoritesView() {
               <Link
                 key={artist.id}
                 to={`/library/artist/${encodeURIComponent(artist.id)}`}
-                className="flex flex-col items-center gap-2 rounded-md border border-bg-raised bg-bg-subtle p-4 transition-colors hover:border-accent/50 hover:bg-bg-raised"
+                className="flex flex-col items-center gap-2 rounded-md border border-border bg-muted p-4 transition-colors hover:border-primary/50 hover:bg-card"
               >
-                <div className="flex h-24 w-24 items-center justify-center rounded-full bg-bg-raised text-3xl font-bold text-white/40">
+                <div className="flex h-24 w-24 items-center justify-center rounded-full bg-card text-3xl font-bold text-white/40">
                   {artist.name.charAt(0).toUpperCase()}
                 </div>
-                <div className="text-center text-sm font-medium text-fg">{artist.name}</div>
-                <div className="text-xs text-fg-muted">
+                <div className="text-center text-sm font-medium text-foreground">{artist.name}</div>
+                <div className="text-xs text-foreground-muted">
                   {artist.albumCount} albums · {artist.trackCount} tracks
                 </div>
                 <FavoriteButton kind="artist" itemId={artist.id} initialFavorite={artist.favorite} />
@@ -187,8 +187,8 @@ export function FavoritesView() {
 
 function EmptyState({ message }: { message: string }) {
   return (
-    <div className="flex flex-col items-start gap-3 rounded-md border border-bg-raised bg-bg-subtle p-6">
-      <div className="text-base font-medium text-fg">{message}</div>
+    <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
+      <div className="text-base font-medium text-foreground">{message}</div>
     </div>
   );
 }

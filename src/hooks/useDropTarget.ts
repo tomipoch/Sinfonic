@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import { decodeDragData } from "../lib/queueDnD";
-import type { Track } from "../types/domain";
+import { decodeDragData } from "@/lib/queueDnD";
+import type { Track } from "@/types/domain";
 
 interface UseDropTargetOptions {
   onDrop: (tracks: Track[], insertIndex: number) => void | Promise<void>;

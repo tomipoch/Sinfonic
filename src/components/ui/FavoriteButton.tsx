@@ -8,7 +8,7 @@ import {
   setTrackFavorite,
   setAlbumFavorite,
   setArtistFavorite,
-} from "../../lib/tauri";
+} from "@/lib/tauri";
 
 type FavoriteKind = "track" | "album" | "artist";
 

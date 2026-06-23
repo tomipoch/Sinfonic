@@ -11,8 +11,8 @@ import {
   getAlbums,
   getArtists,
   getTracks,
-} from "../lib/tauri";
-import type { Album, Artist, Track } from "../types/domain";
+} from "@/lib/tauri";
+import type { Album, Artist, Track } from "@/types/domain";
 
 const PAGE_SIZE = 200;
 

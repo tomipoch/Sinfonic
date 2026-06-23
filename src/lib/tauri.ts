@@ -13,13 +13,14 @@ import type {
   Artist,
   ConnectedServer,
   DiscoveredServer,
+  EqBandPayload,
   PagedResponse,
   PlaybackStatePayload,
   Playlist,
   QueueSnapshot,
   SearchResults,
   Track,
-} from "../types/domain";
+} from "@/types/domain";
 
 interface AlbumDetail {
   album: Album;
@@ -198,10 +199,7 @@ export const setVolume = (volume: number) =>
 export const setMuted = (muted: boolean) =>
   invoke<void>("set_muted", { muted });
 
-export interface EqBandPayload {
-  hz: number;
-  gainDb: number;
-}
+export type { EqBandPayload } from "@/types/domain";
 
 export const getEqBands = () => invoke<EqBandPayload[]>("get_eq_bands");
 

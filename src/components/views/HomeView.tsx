@@ -5,7 +5,7 @@ export function HomeView() {
   return (
     <section className="p-6">
       <h1 className="mb-4 text-2xl font-semibold">Home</h1>
-      <p className="text-fg-subtle">
+      <p className="text-muted-foreground">
         Welcome to Sinfonic. Connect a Jellyfin server in the Library to get
         started.
       </p>

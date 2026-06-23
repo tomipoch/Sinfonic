@@ -4,9 +4,9 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
-import { usePlaylistsStore } from "../../stores/playlistsStore";
-import { useServerStore } from "../../stores/serverStore";
-import { formatDuration } from "../../lib/format";
+import { usePlaylistsStore } from "@/stores/playlistsStore";
+import { useServerStore } from "@/stores/serverStore";
+import { formatDuration } from "@/lib/format";
 
 export function PlaylistsView() {
   const navigate = useNavigate();
@@ -36,15 +36,15 @@ export function PlaylistsView() {
 
   if (!activeServerId) {
     return (
-      <div className="flex flex-col items-start gap-3 rounded-md border border-bg-raised bg-bg-subtle p-6">
-        <div className="text-base font-medium text-fg">No server connected</div>
-        <p className="text-sm text-fg-subtle">Connect a server in Settings to see playlists.</p>
+      <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
+        <div className="text-base font-medium text-foreground">No server connected</div>
+        <p className="text-sm text-muted-foreground">Connect a server in Settings to see playlists.</p>
       </div>
     );
   }
 
   if (loading && playlists.length === 0) {
-    return <p className="text-fg-subtle text-sm" role="status">Loading playlists…</p>;
+    return <p className="text-muted-foreground text-sm" role="status">Loading playlists…</p>;
   }
 
   if (error) {
@@ -64,7 +64,7 @@ export function PlaylistsView() {
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-2xl font-semibold">Playlists</h1>
-          <p className="text-sm text-fg-subtle">
+          <p className="text-sm text-muted-foreground">
             {playlists.length === 0 ? "No playlists yet" : `${playlists.length} playlists`}
           </p>
         </div>
@@ -81,7 +81,7 @@ export function PlaylistsView() {
                 }}
                 placeholder="Playlist name"
                 autoFocus
-                className="rounded-md border border-bg-raised bg-bg-subtle px-3 py-2 text-sm text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none"
+                className="rounded-md border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted focus:border-primary focus:outline-none"
               />
               <button type="button" onClick={() => void onCreate()} className="btn-primary text-sm">
                 Create
@@ -99,9 +99,9 @@ export function PlaylistsView() {
       </header>
 
       {playlists.length === 0 && !creating ? (
-        <div className="flex flex-col items-start gap-3 rounded-md border border-bg-raised bg-bg-subtle p-6">
-          <div className="text-base font-medium text-fg">No playlists yet</div>
-          <p className="text-sm text-fg-subtle">Create a playlist to organize your music.</p>
+        <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
+          <div className="text-base font-medium text-foreground">No playlists yet</div>
+          <p className="text-sm text-muted-foreground">Create a playlist to organize your music.</p>
           <button type="button" onClick={() => setCreating(true)} className="btn-primary text-sm">
             Create playlist
           </button>
@@ -112,14 +112,14 @@ export function PlaylistsView() {
             <Link
               key={pl.id}
               to={`/playlists/${encodeURIComponent(pl.id)}`}
-              className="flex flex-col gap-2 rounded-md border border-bg-raised bg-bg-subtle p-4 transition-colors hover:border-accent/50 hover:bg-bg-raised"
+              className="flex flex-col gap-2 rounded-md border border-border bg-muted p-4 transition-colors hover:border-primary/50 hover:bg-card"
             >
-              <div className="flex h-24 w-full items-center justify-center rounded-md bg-bg-raised text-4xl font-bold text-white/40">
+              <div className="flex h-24 w-full items-center justify-center rounded-md bg-card text-4xl font-bold text-white/40">
                 🎵
               </div>
               <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-fg">{pl.name}</div>
-                <div className="truncate text-xs text-fg-subtle">
+                <div className="truncate text-sm font-medium text-foreground">{pl.name}</div>
+                <div className="truncate text-xs text-muted-foreground">
                   {pl.trackCount} {pl.trackCount === 1 ? "track" : "tracks"} · {formatDuration(pl.durationSeconds)}
                 </div>
               </div>

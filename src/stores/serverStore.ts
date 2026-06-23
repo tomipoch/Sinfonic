@@ -5,20 +5,20 @@ import { create } from "zustand";
 import {
   jellyfinDiscover,
   jellyfinLogin,
-  localLogin as localLoginCmd,
+  localLogin,
   providerActiveServer,
   providerLogout,
   providerServers,
   providerSyncLibrary,
   subsonicLogin,
-} from "../lib/tauri";
+} from "@/lib/tauri";
 import type {
   ConnectedServer,
   DiscoveredServer,
   JellyfinLoginRequest,
   LocalLoginRequest,
   SubsonicLoginRequest,
-} from "../types/domain";
+} from "@/types/domain";
 
 export type ServerKind = "jellyfin" | "subsonic" | "local";
 
@@ -110,7 +110,7 @@ export const useServerStore = create<ServerStore>((set, get) => ({
         // Local: no `ConnectedServer` is returned (the scan result
         // carries stats, not server metadata), so synthesise one
         // from the canonical local server id.
-        await localLoginCmd(req.path);
+        await localLogin(req.path);
         connected = {
           serverId: "server-local",
           kind: "local",

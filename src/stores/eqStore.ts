@@ -8,7 +8,7 @@
 
 import { create } from "zustand";
 
-import type { EqBandPayload } from "../lib/tauri";
+import type { EqBandPayload } from "@/types/domain";
 
 interface EqState {
   bands: EqBandPayload[];

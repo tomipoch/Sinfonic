@@ -11,10 +11,10 @@
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
-import { AlbumCover } from "../ui/AlbumCover";
-import { useLibraryStore } from "../../stores/libraryStore";
-import { useServerStore } from "../../stores/serverStore";
-import { formatDuration } from "../../lib/format";
+import { AlbumCover } from "@/components/ui/AlbumCover";
+import { useLibraryStore } from "@/stores/libraryStore";
+import { useServerStore } from "@/stores/serverStore";
+import { formatDuration } from "@/lib/format";
 
 export function AlbumsTab() {
   const albums = useLibraryStore((s) => s.albums);
@@ -42,7 +42,7 @@ export function AlbumsTab() {
 
   if (loading && albums.length === 0) {
     return (
-      <p className="text-fg-subtle text-sm" role="status">
+      <p className="text-muted-foreground text-sm" role="status">
         Loading albums…
       </p>
     );
@@ -50,9 +50,9 @@ export function AlbumsTab() {
 
   if (loaded && albums.length === 0) {
     return (
-      <div className="flex flex-col items-start gap-3 rounded-md border border-bg-raised bg-bg-subtle p-6">
-        <div className="text-base font-medium text-fg">Library is empty</div>
-        <p className="text-sm text-fg-subtle">
+      <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
+        <div className="text-base font-medium text-foreground">Library is empty</div>
+        <p className="text-sm text-muted-foreground">
           Sync the library from your provider to populate the grid.
         </p>
         <button
@@ -79,14 +79,14 @@ export function AlbumsTab() {
             className="group block focus:outline-none"
           >
             <AlbumCover album={album} />
-            <div className="mt-2 truncate text-sm font-medium text-fg group-hover:text-white">
+            <div className="mt-2 truncate text-sm font-medium text-foreground group-hover:text-white">
               {album.title}
             </div>
-            <div className="truncate text-xs text-fg-subtle">
+            <div className="truncate text-xs text-muted-foreground">
               {album.artist}
               {album.year ? ` · ${album.year}` : ""}
             </div>
-            <div className="text-xs text-fg-muted">
+            <div className="text-xs text-foreground-muted">
               {album.trackCount} {album.trackCount === 1 ? "track" : "tracks"}
               {" · "}
               {formatDuration(album.durationSeconds)}

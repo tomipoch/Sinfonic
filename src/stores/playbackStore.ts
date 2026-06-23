@@ -9,7 +9,7 @@ import { create } from "zustand";
 import type {
   PlaybackStatePayload,
   TrackChangedPayload,
-} from "../types/domain";
+} from "@/types/domain";
 
 export interface PlaybackStore {
   isPlaying: boolean;

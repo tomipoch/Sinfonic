@@ -5,12 +5,12 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
-import { usePlaylistsStore } from "../../stores/playlistsStore";
-import { formatDuration } from "../../lib/format";
-import { playTrack } from "../../lib/tauri";
-import { encodeDragData } from "../../lib/queueDnD";
-import { cn } from "../../lib/cn";
-import type { Track } from "../../types/domain";
+import { usePlaylistsStore } from "@/stores/playlistsStore";
+import { formatDuration } from "@/lib/format";
+import { playTrack } from "@/lib/tauri";
+import { encodeDragData } from "@/lib/queueDnD";
+import { cn } from "@/lib/cn";
+import type { Track } from "@/types/domain";
 
 export function PlaylistDetailView() {
   const { id } = useParams<{ id: string }>();
@@ -28,11 +28,11 @@ export function PlaylistDetailView() {
   }, [id, loadPlaylistDetail]);
 
   if (!id) {
-    return <p className="text-fg-subtle text-sm">Missing playlist id.</p>;
+    return <p className="text-muted-foreground text-sm">Missing playlist id.</p>;
   }
 
   if (detailLoading) {
-    return <p className="text-fg-subtle text-sm" role="status">Loading playlist…</p>;
+    return <p className="text-muted-foreground text-sm" role="status">Loading playlist…</p>;
   }
 
   if (detailError || !detail) {
@@ -108,11 +108,11 @@ export function PlaylistDetailView() {
   return (
     <section className="flex flex-col gap-6 p-6">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end">
-        <div className="flex h-24 w-24 shrink-0 items-center justify-center rounded-md bg-bg-raised text-4xl font-bold text-white/40">
+        <div className="flex h-24 w-24 shrink-0 items-center justify-center rounded-md bg-card text-4xl font-bold text-white/40">
           🎵
         </div>
         <div className="flex min-w-0 flex-col gap-1">
-          <div className="text-xs uppercase tracking-wide text-fg-subtle">Playlist</div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Playlist</div>
           {renaming ? (
             <div className="flex items-center gap-2">
               <input
@@ -125,13 +125,13 @@ export function PlaylistDetailView() {
                 }}
                 onBlur={() => void onRename()}
                 autoFocus
-                className="rounded-md border border-bg-raised bg-bg-subtle px-2 py-1 text-2xl font-semibold text-fg focus:border-accent focus:outline-none"
+                className="rounded-md border border-border bg-muted px-2 py-1 text-2xl font-semibold text-foreground focus:border-primary focus:outline-none"
               />
             </div>
           ) : (
             <h1 className="truncate text-3xl font-semibold">{playlist.name}</h1>
           )}
-          <div className="text-base text-fg-subtle">
+          <div className="text-base text-muted-foreground">
             {tracks.length} {tracks.length === 1 ? "track" : "tracks"} · {formatDuration(playlist.durationSeconds)}
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -153,12 +153,12 @@ export function PlaylistDetailView() {
       </header>
 
       {tracks.length === 0 ? (
-        <div className="flex flex-col items-start gap-3 rounded-md border border-bg-raised bg-bg-subtle p-6">
-          <div className="text-base font-medium text-fg">Playlist is empty</div>
-          <p className="text-sm text-fg-subtle">Drag tracks here or use the queue to add them.</p>
+        <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
+          <div className="text-base font-medium text-foreground">Playlist is empty</div>
+          <p className="text-sm text-muted-foreground">Drag tracks here or use the queue to add them.</p>
         </div>
       ) : (
-        <ol className="divide-y divide-bg-raised rounded-md border border-bg-raised">
+        <ol className="divide-y divide-border rounded-md border border-border">
           {tracks.map((track, index) => (
             <li
               key={track.id}
@@ -174,23 +174,23 @@ export function PlaylistDetailView() {
                 draggingId === track.id && "opacity-30",
               )}
             >
-              <div className="text-right font-mono text-xs text-fg-muted">{index + 1}</div>
+              <div className="text-right font-mono text-xs text-muted">{index + 1}</div>
               <button
                 type="button"
                 onClick={() => void onPlayTrack(track)}
                 disabled={busy}
                 className="min-w-0 text-left focus:outline-none"
               >
-                <div className="truncate font-medium text-fg hover:text-white">{track.title}</div>
-                <div className="truncate text-xs text-fg-subtle">{track.artist}</div>
+                <div className="truncate font-medium text-foreground hover:text-white">{track.title}</div>
+                <div className="truncate text-xs text-muted-foreground">{track.artist}</div>
               </button>
-              <div className="text-xs text-fg-muted">{formatDuration(track.durationSeconds)}</div>
+              <div className="text-xs text-muted">{formatDuration(track.durationSeconds)}</div>
               <button
                 type="button"
                 onClick={() => void onRemoveTrack(index)}
                 disabled={busy}
                 aria-label={`Remove ${track.title}`}
-                className="rounded-md p-1 text-fg-muted hover:bg-bg-raised hover:text-fg focus:outline-none disabled:opacity-40"
+                className="rounded-md p-1 text-muted hover:bg-card hover:text-foreground focus:outline-none disabled:opacity-40"
               >
                 ✕
               </button>

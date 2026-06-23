@@ -11,8 +11,8 @@
 
 import { useEffect } from "react";
 
-import { providerImageBytes } from "../lib/tauri";
-import { useLibraryStore } from "../stores/libraryStore";
+import { providerImageBytes } from "@/lib/tauri";
+import { useLibraryStore } from "@/stores/libraryStore";
 
 const PREWARM_LIMIT = 24;
 
