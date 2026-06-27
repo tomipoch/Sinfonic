@@ -23,6 +23,11 @@ log = "0.4"
 md5 = { workspace = true }
 hex = { workspace = true }
 rand = "0.8"
+# Tauri is used only to emit progress events during long fan-out
+# operations (the `tracks()` page fetches). The crate still builds and
+# tests without a Tauri runtime — AppHandle is `Option<…>` and the
+# `tauri::Emitter` trait is only invoked when the handle is present.
+tauri = { workspace = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
