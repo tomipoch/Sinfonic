@@ -100,6 +100,7 @@ async fn tick(
 
         if let (Some(track_id), Some(entry)) = (&current_track_id, &current_entry) {
             if entry.track_id == *track_id {
+                eprintln!("[SCROBBLE] track changed: {} - {}", entry.artist, entry.title);
                 let scrobble = Scrobble {
                     artist: entry.artist.clone(),
                     track: entry.title.clone(),
@@ -109,7 +110,9 @@ async fn tick(
                     mbid: None,
                 };
                 if let Err(err) = client.now_playing(&scrobble, ScrobbleSource::User).await {
-                    eprintln!("sinfonic: lastfm now_playing failed: {err}");
+                    eprintln!("[SCROBBLE] now_playing failed: {err}");
+                } else {
+                    eprintln!("[SCROBBLE] now_playing sent OK");
                 }
             }
         }
@@ -121,6 +124,7 @@ async fn tick(
             if entry.track_id == *track_id
                 && !state.scrobbled_track_ids.contains(track_id)
             {
+                eprintln!("[SCROBBLE] position crossed 50%, scrobbling: {} - {}", entry.artist, entry.title);
                 let scrobble = Scrobble {
                     artist: entry.artist.clone(),
                     track: entry.title.clone(),
@@ -131,11 +135,12 @@ async fn tick(
                 };
                 match client.scrobble(&scrobble, ScrobbleSource::User).await {
                     Ok(accepted) => {
+                        eprintln!("[SCROBBLE] scrobble accepted={}", accepted);
                         if accepted {
                             state.scrobbled_track_ids.insert(track_id.clone());
                         }
                     }
-                    Err(err) => eprintln!("sinfonic: lastfm scrobble failed: {err}"),
+                    Err(err) => eprintln!("[SCROBBLE] scrobble failed: {err}"),
                 }
             }
         }

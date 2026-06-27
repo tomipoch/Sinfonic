@@ -28,6 +28,7 @@
 //!   respective providers and the dispatcher just calls
 //!   `provider.albums(...).await`.
 
+use rusqlite as sqlite;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 
@@ -41,10 +42,10 @@ use crate::events::{
 use crate::lastfm;
 use crate::state::AppState;
 use sinfonic_domain::{
-    Album, AlbumDetail, AlbumId, Artist, ArtistId, ImageKind, PagedResponse, Playlist, PlaylistDetail,
-    PlaylistId, QueueEntryId, QueueSnapshot, RepeatMode, SearchResults, ServerId, SmartPlaylist,
-    SmartPlaylistId, SmartPlaylistRuleField, SmartPlaylistRuleOperator, SmartPlaylistSortDirection,
-    SmartPlaylistSortField, Track, TrackId,
+    Album, AlbumDetail, AlbumId, Artist, ArtistId, Genre, ImageKind, PagedResponse, Playlist,
+    PlaylistDetail, PlaylistId, QueueEntryId, QueueSnapshot, RepeatMode, SearchResults, ServerId,
+    SmartPlaylist, SmartPlaylistId, SmartPlaylistRuleField, SmartPlaylistRuleOperator,
+    SmartPlaylistSortDirection, SmartPlaylistSortField, Track, TrackId,
 };
 use sinfonic_library::ImageCacheKey;
 use sinfonic_secrets::SecretStore;
@@ -78,13 +79,6 @@ async fn active_server_id(state: &SharedState<'_>) -> ServerId {
     server_id
 }
 
-// ─── Greet (kept from the original scaffold) ────────────────────
-
-#[tauri::command]
-pub fn greet(name: String) -> String {
-    format!("Hello, {name}! You've been greeted from Rust!")
-}
-
 // ─── Library queries (Phase 2) ──────────────────────────────────
 
 #[tauri::command]
@@ -112,6 +106,21 @@ pub async fn get_artists(
     guard
         .library
         .list_artists(&server_id, offset, limit)
+        .map_err(|e| e.to_string())
+}
+
+/// Distinct genres for the active server, computed from the
+/// `album_genres` join table. Each row carries a count of distinct
+/// albums and a (rolled-up) count of tracks under that genre.
+#[tauri::command]
+pub async fn get_genres(
+    state: SharedState<'_>,
+) -> Result<Vec<Genre>, String> {
+    let server_id = active_server_id(&state).await;
+    let guard = state.lock().await;
+    guard
+        .library
+        .list_genres(&server_id)
         .map_err(|e| e.to_string())
 }
 
@@ -156,6 +165,25 @@ pub async fn get_album_detail(
     Ok(Some(AlbumDetail { album, tracks }))
 }
 
+/// Single album row by id. Cheap lookup used by views that only
+/// need the cover (e.g. resolving a track's parent album when it
+/// wasn't in the first page of `get_albums`). Skips the track list
+/// to keep the payload small.
+#[tauri::command]
+pub async fn get_album(
+    album_id: String,
+    state: SharedState<'_>,
+) -> Result<Option<Album>, String> {
+    let server_id = active_server_id(&state).await;
+    let parsed = AlbumId::new(album_id);
+    let guard = state.lock().await;
+    let album = guard
+        .library
+        .get_album(&server_id, &parsed)
+        .map_err(|e| e.to_string())?;
+    Ok(album)
+}
+
 /// Replace the queue with `tracks` and start playing the first one
 /// in one atomic step. `play_track` only handles a single track and
 /// would clobber the queue; `queue_play_now` queues without
@@ -198,9 +226,9 @@ pub async fn play_album(
         guard.playback.start(actual_duration);
     }
 
-    emit_queue_changed(&app, &state).await;
-    emit_track_changed(&app, &state, &first).await;
-    emit_playback_state(&app, &state).await;
+    emit_queue_changed(&app, state.inner()).await;
+    emit_track_changed(&app, state.inner(), &first).await;
+    emit_playback_state(&app, state.inner()).await;
     Ok(())
 }
 
@@ -276,9 +304,9 @@ pub async fn play_track(
         guard.playback.start(duration_seconds);
     }
 
-    emit_queue_changed(&app, &state).await;
-    emit_track_changed(&app, &state, &track).await;
-    emit_playback_state(&app, &state).await;
+    emit_queue_changed(&app, state.inner()).await;
+    emit_track_changed(&app, state.inner(), &track).await;
+    emit_playback_state(&app, state.inner()).await;
     Ok(id)
 }
 
@@ -311,11 +339,11 @@ pub async fn queue_play_now(
         return Err("queue_play_now: nothing to play".into());
     }
 
-    emit_queue_changed(&app, &state).await;
+    emit_queue_changed(&app, state.inner()).await;
     if let Some(first) = tracks.first() {
-        emit_track_changed(&app, &state, first).await;
+        emit_track_changed(&app, state.inner(), first).await;
     }
-    emit_playback_state(&app, &state).await;
+    emit_playback_state(&app, state.inner()).await;
     Ok(ids)
 }
 
@@ -329,7 +357,7 @@ pub async fn queue_play_next(
         let mut guard = state.lock().await;
         guard.queue.play_next(&track)
     };
-    emit_queue_changed(&app, &state).await;
+    emit_queue_changed(&app, state.inner()).await;
     Ok(id)
 }
 
@@ -343,7 +371,7 @@ pub async fn queue_add(
         let mut guard = state.lock().await;
         guard.queue.add_to_queue(&track)
     };
-    emit_queue_changed(&app, &state).await;
+    emit_queue_changed(&app, state.inner()).await;
     Ok(id)
 }
 
@@ -359,7 +387,7 @@ pub async fn queue_remove(
         guard.queue.remove_entry(&parsed)
     };
     if removed {
-        emit_queue_changed(&app, &state).await;
+        emit_queue_changed(&app, state.inner()).await;
     }
     Ok(removed)
 }
@@ -376,7 +404,7 @@ pub async fn queue_jump_to(
         guard.queue.jump_to(&parsed)
     };
     if found {
-        emit_queue_changed(&app, &state).await;
+        emit_queue_changed(&app, state.inner()).await;
         if let Some(entry) = {
             let guard = state.lock().await;
             guard.queue.current().cloned()
@@ -402,7 +430,7 @@ pub async fn queue_move(
             .move_entry(&parsed, target_index)
             .map_err(|e| e.to_string())?;
     }
-    emit_queue_changed(&app, &state).await;
+    emit_queue_changed(&app, state.inner()).await;
     Ok(())
 }
 
@@ -414,8 +442,8 @@ pub async fn queue_clear(app: tauri::AppHandle, state: SharedState<'_>) -> Resul
         guard.player.stop();
         guard.playback.stop();
     }
-    emit_queue_changed(&app, &state).await;
-    emit_playback_state(&app, &state).await;
+    emit_queue_changed(&app, state.inner()).await;
+    emit_playback_state(&app, state.inner()).await;
     Ok(())
 }
 
@@ -429,7 +457,7 @@ pub async fn set_repeat(
         let mut guard = state.lock().await;
         guard.queue.set_repeat(repeat);
     }
-    emit_playback_state(&app, &state).await;
+    emit_playback_state(&app, state.inner()).await;
     Ok(())
 }
 
@@ -443,8 +471,8 @@ pub async fn set_shuffle(
         let mut guard = state.lock().await;
         guard.queue.set_shuffle(enabled);
     }
-    emit_queue_changed(&app, &state).await;
-    emit_playback_state(&app, &state).await;
+    emit_queue_changed(&app, state.inner()).await;
+    emit_playback_state(&app, state.inner()).await;
     Ok(())
 }
 
@@ -455,7 +483,7 @@ pub async fn pause(app: tauri::AppHandle, state: SharedState<'_>) -> Result<(), 
         guard.player.pause();
         guard.playback.pause();
     }
-    emit_playback_state(&app, &state).await;
+    emit_playback_state(&app, state.inner()).await;
     Ok(())
 }
 
@@ -466,7 +494,7 @@ pub async fn resume(app: tauri::AppHandle, state: SharedState<'_>) -> Result<(),
         guard.player.resume();
         guard.playback.resume();
     }
-    emit_playback_state(&app, &state).await;
+    emit_playback_state(&app, state.inner()).await;
     Ok(())
 }
 
@@ -480,7 +508,7 @@ pub async fn stop(
         guard.player.stop();
         guard.playback.stop();
     }
-    emit_playback_state(&app, &state).await;
+    emit_playback_state(&app, state.inner()).await;
     Ok(())
 }
 
@@ -500,8 +528,8 @@ pub async fn next(
             guard.playback.start(duration);
         }
         emit_track_changed_from_entry(&app, &entry);
-        emit_queue_changed(&app, &state).await;
-        emit_playback_state(&app, &state).await;
+        emit_queue_changed(&app, state.inner()).await;
+        emit_playback_state(&app, state.inner()).await;
     } else {
         // Queue ended — stop the playhead and the rodio sink.
         {
@@ -509,7 +537,7 @@ pub async fn next(
             guard.player.stop();
             guard.playback.stop();
         }
-        emit_playback_state(&app, &state).await;
+        emit_playback_state(&app, state.inner()).await;
     }
     Ok(())
 }
@@ -530,8 +558,8 @@ pub async fn previous(
             guard.playback.start(duration);
         }
         emit_track_changed_from_entry(&app, &entry);
-        emit_queue_changed(&app, &state).await;
-        emit_playback_state(&app, &state).await;
+        emit_queue_changed(&app, state.inner()).await;
+        emit_playback_state(&app, state.inner()).await;
     }
     Ok(())
 }
@@ -547,7 +575,7 @@ pub async fn seek(
         guard.player.seek(position_seconds);
         guard.playback.seek(position_seconds);
     }
-    emit_playback_state(&app, &state).await;
+    emit_playback_state(&app, state.inner()).await;
     Ok(())
 }
 
@@ -562,7 +590,7 @@ pub async fn set_volume(
         guard.player.set_volume(volume);
         guard.playback.set_volume(volume);
     }
-    emit_playback_state(&app, &state).await;
+    emit_playback_state(&app, state.inner()).await;
     Ok(())
 }
 
@@ -577,13 +605,14 @@ pub async fn set_muted(
         guard.player.set_muted(muted);
         guard.playback.set_muted(muted);
     }
-    emit_playback_state(&app, &state).await;
+    emit_playback_state(&app, state.inner()).await;
     Ok(())
 }
 
 // ─── Equalizer (Phase 4) ────────────────────────────────────────
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EqBandPayload {
     pub hz: u32,
     pub gain_db: f32,
@@ -654,7 +683,7 @@ pub async fn queue_add_many(
         let mut guard = state.lock().await;
         guard.queue.add_many(&tracks)
     };
-    emit_queue_changed(&app, &state).await;
+    emit_queue_changed(&app, state.inner()).await;
     Ok(ids)
 }
 
@@ -671,7 +700,7 @@ pub async fn queue_play_next_many(
         let mut guard = state.lock().await;
         guard.queue.play_next_many(&tracks)
     };
-    emit_queue_changed(&app, &state).await;
+    emit_queue_changed(&app, state.inner()).await;
     Ok(ids)
 }
 
@@ -736,7 +765,7 @@ pub async fn create_playlist(
             .create_playlist(&server_id, &name, &track_ids)
             .map_err(|e| e.to_string())?
     };
-    emit_queue_changed(&app, &state).await;
+    emit_queue_changed(&app, state.inner()).await;
     Ok(playlist_id)
 }
 
@@ -772,7 +801,7 @@ pub async fn delete_playlist(
             .delete_playlist(&server_id, &parsed)
             .map_err(|e| e.to_string())?
     }
-    emit_queue_changed(&app, &state).await;
+    emit_queue_changed(&app, state.inner()).await;
     Ok(())
 }
 
@@ -793,7 +822,7 @@ pub async fn add_playlist_tracks(
             .add_playlist_tracks(&server_id, &parsed, &track_ids)
             .map_err(|e| e.to_string())?
     }
-    emit_queue_changed(&app, &state).await;
+    emit_queue_changed(&app, state.inner()).await;
     Ok(())
 }
 
@@ -814,7 +843,7 @@ pub async fn remove_playlist_entries(
             .remove_playlist_entries(&server_id, &parsed, &entry_ids)
             .map_err(|e| e.to_string())?
     }
-    emit_queue_changed(&app, &state).await;
+    emit_queue_changed(&app, state.inner()).await;
     Ok(())
 }
 
@@ -836,7 +865,7 @@ pub async fn move_playlist_entry(
             .move_playlist_entry(&server_id, &parsed, &entry_id, new_index)
             .map_err(|e| e.to_string())?
     }
-    emit_queue_changed(&app, &state).await;
+    emit_queue_changed(&app, state.inner()).await;
     Ok(())
 }
 
@@ -931,6 +960,7 @@ pub async fn search(
 /// Wire-format mirror of `sinfonic_source_jellyfin::discovery::DiscoveredJellyfinServer`.
 /// Kept here so the frontend never imports the crate directly.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiscoveredServer {
     pub name: String,
     pub base_url: String,
@@ -938,6 +968,7 @@ pub struct DiscoveredServer {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConnectedServer {
     pub server_id: String,
     pub kind: String,
@@ -946,6 +977,7 @@ pub struct ConnectedServer {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct JellyfinLoginRequest {
     pub base_url: String,
     pub username: String,
@@ -953,6 +985,7 @@ pub struct JellyfinLoginRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubsonicLoginRequest {
     pub base_url: String,
     pub username: String,
@@ -1024,8 +1057,18 @@ pub async fn jellyfin_login(
         let guard = state.lock().await;
         guard
             .library
-            .upsert_server(&success.server_id, "jellyfin", &server_name, &request.base_url)
+            .upsert_server(
+                &success.server_id,
+                "jellyfin",
+                &server_name,
+                &request.base_url,
+                Some(&request.username),
+            )
             .map_err(|e| format!("upsert server: {e}"))?;
+        guard
+            .library
+            .set_preference("last_active_server_id", Some(success.server_id.as_str()))
+            .map_err(|e| format!("save preference: {e}"))?;
         let provider: Arc<dyn MusicProvider> = Arc::new(provider);
         *guard.provider.lock().await = Some(provider);
     }
@@ -1046,6 +1089,7 @@ pub async fn jellyfin_login(
 #[tauri::command]
 pub async fn subsonic_login(
     request: SubsonicLoginRequest,
+    app: tauri::AppHandle,
     state: SharedState<'_>,
 ) -> Result<ConnectedServer, String> {
     let secrets = {
@@ -1073,7 +1117,8 @@ pub async fn subsonic_login(
         .map_err(|e| format!("save password: {e}"))?;
 
     let provider = sinfonic_source_subsonic::SubsonicProvider::new(success.session.clone())
-        .map_err(|e| format!("build provider: {e}"))?;
+        .map_err(|e| format!("build provider: {e}"))?
+        .with_app_handle(app);
 
     {
         let guard = state.lock().await;
@@ -1084,8 +1129,13 @@ pub async fn subsonic_login(
                 "subsonic",
                 &success.server_name,
                 &request.base_url,
+                Some(&request.username),
             )
             .map_err(|e| format!("upsert server: {e}"))?;
+        guard
+            .library
+            .set_preference("last_active_server_id", Some(success.server_id.as_str()))
+            .map_err(|e| format!("save preference: {e}"))?;
         let provider: Arc<dyn MusicProvider> = Arc::new(provider);
         *guard.provider.lock().await = Some(provider);
     }
@@ -1103,6 +1153,7 @@ pub async fn subsonic_login(
 /// Response shape for `local_login` and `local_rescan`. Mirrors
 /// `LocalProvider::ScanStats` plus the active-server snapshot.
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LocalScanResult {
     pub server_id: String,
     pub server_name: String,
@@ -1123,6 +1174,7 @@ pub struct LocalScanResult {
 pub async fn local_login(
     path: String,
     state: SharedState<'_>,
+    app: tauri::AppHandle,
 ) -> Result<LocalScanResult, String> {
     use sinfonic_source_local::LocalProvider;
     let root = std::path::PathBuf::from(path.trim());
@@ -1132,6 +1184,16 @@ pub async fn local_login(
     if !root.is_dir() {
         return Err(format!("local: not a directory: {root:?}"));
     }
+
+    // Phase 1: validate the path and prepare the provider.
+    let _ = app.emit(
+        EventName::LibrarySyncStatus.as_str(),
+        LibrarySyncStatusPayload {
+            server_id: None,
+            state: "preparing".into(),
+            progress: 0.05,
+        },
+    );
 
     let provider = LocalProvider::new(&root);
 
@@ -1143,37 +1205,111 @@ pub async fn local_login(
         guard.playback.stop();
     }
 
-    // Rescan synchronously (filesystem-bound, no .await). Replaces
-    // the in-memory snapshot under the provider's own lock; the
-    // SQLite write happens next under AppState.
+    // Phase 2: walk the directory tree and read metadata tags. This
+    // is synchronous (filesystem-bound) but on a real library it
+    // can take several seconds, so we tick progress along the way.
+    let _ = app.emit(
+        EventName::LibrarySyncStatus.as_str(),
+        LibrarySyncStatusPayload {
+            server_id: None,
+            state: "scanning".into(),
+            progress: 0.20,
+        },
+    );
     let stats = provider.rescan().map_err(|e| format!("scan: {e}"))?;
     let snapshot = provider.snapshot().ok_or_else(|| "scan produced no result".to_string())?;
 
+    // Capture the set of album ids present in this scan. The album art
+    // cache prunes entries outside this set after a rescan so art for
+    // albums that no longer exist on disk does not linger.
+    let current_album_ids: std::collections::HashSet<String> =
+        snapshot.embedded_art.keys().cloned().collect();
+
+    // Phase 3: write the snapshot to the SQLite cache so the UI can
+    // render pages straight away.
     let server_id = sinfonic_domain::ServerId::new(sinfonic_source_local::LOCAL_SERVER_ID);
     let server_name = sinfonic_source_local::LOCAL_SERVER_NAME.to_string();
     let root_display = root.display().to_string();
 
+    let _ = app.emit(
+        EventName::LibrarySyncStatus.as_str(),
+        LibrarySyncStatusPayload {
+            server_id: Some(server_id.to_string()),
+            state: "indexing".into(),
+            progress: 0.65,
+        },
+    );
     {
         let guard = state.lock().await;
         guard
             .library
-            .upsert_server(&server_id, "local", &server_name, &root_display)
+            .upsert_server(&server_id, "local", &server_name, &root_display, None)
             .map_err(|e| format!("upsert server: {e}"))?;
         guard
             .library
-            .replace_albums(&server_id, &snapshot.albums)
-            .map_err(|e| format!("upsert albums: {e}"))?;
+            .set_preference("last_active_server_id", Some(server_id.as_str()))
+            .map_err(|e| format!("save preference: {e}"))?;
+        // Order matters: albums FK-references artists, and tracks
+        // FK-reference albums. Insert parents before children or the
+        // SQLite foreign-key check rejects the child rows even
+        // though the parents are about to land in the same batch.
         guard
             .library
             .replace_artists(&server_id, &snapshot.artists)
             .map_err(|e| format!("upsert artists: {e}"))?;
         guard
             .library
+            .replace_albums(&server_id, &snapshot.albums)
+            .map_err(|e| format!("upsert albums: {e}"))?;
+        guard
+            .library
             .replace_tracks(&server_id, &snapshot.tracks)
             .map_err(|e| format!("upsert tracks: {e}"))?;
+
+        // Persist the embedded album art to the filesystem cache so it
+        // survives app restarts and can be served without re-reading
+        // audio file tags. Then prune any cached entries for albums
+        // that no longer exist in this scan.
+        if let Some(ref cache) = guard.album_art {
+            for (album_id, art) in &snapshot.embedded_art {
+                if art.bytes.is_empty() {
+                    continue;
+                }
+                let cache_key = ImageCacheKey::new(
+                    sinfonic_source_local::LOCAL_PROVIDER_ID,
+                    album_id.clone(),
+                    "embedded",
+                );
+                if let Err(e) = cache.put(&cache_key, &art.bytes, &art.content_type) {
+                    eprintln!(
+                        "local: failed to cache embedded art for {album_id}: {e}"
+                    );
+                }
+            }
+
+            if let Err(e) = cache.remove_orphans(
+                sinfonic_source_local::LOCAL_PROVIDER_ID,
+                &current_album_ids,
+            ) {
+                eprintln!("local: failed to prune orphaned album art: {e}");
+            }
+        }
+
         let provider: Arc<dyn MusicProvider> = Arc::new(provider);
         *guard.provider.lock().await = Some(provider);
     }
+
+    // Phase 4: hand off to the same `provider_sync_library` flow the
+    // remote providers use so the UI sees a single "complete" event
+    // regardless of source.
+    let _ = app.emit(
+        EventName::LibrarySyncStatus.as_str(),
+        LibrarySyncStatusPayload {
+            server_id: Some(server_id.to_string()),
+            state: "complete".into(),
+            progress: 1.0,
+        },
+    );
 
     Ok(LocalScanResult {
         server_id: server_id.to_string(),
@@ -1191,6 +1327,7 @@ pub async fn local_login(
 #[tauri::command]
 pub async fn local_rescan(
     state: SharedState<'_>,
+    app: tauri::AppHandle,
 ) -> Result<LocalScanResult, String> {
     // Read the root off the SQLite cache (it's stored there as the
     // server's `base_url` so we can survive an app restart without
@@ -1216,7 +1353,7 @@ pub async fn local_rescan(
         stmt.query_row([sinfonic_source_local::LOCAL_SERVER_ID], |r| r.get::<_, String>(0))
             .map_err(|e| format!("read root: {e}"))?
     };
-    local_login(root, state).await
+    local_login(root, state, app).await
 }
 
 /// Clear the active provider (any kind) and remove its token from the keyring.
@@ -1226,7 +1363,10 @@ pub async fn local_rescan(
 /// logout. The kind doesn't matter: we always clear whatever
 /// provider is currently active.
 #[tauri::command]
-pub async fn provider_logout(state: SharedState<'_>) -> Result<(), String> {
+pub async fn provider_logout(
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
     let (server_id_opt, secrets) = {
         let mut guard = state.lock().await;
         let server_id = guard
@@ -1238,12 +1378,189 @@ pub async fn provider_logout(state: SharedState<'_>) -> Result<(), String> {
         *guard.provider.lock().await = None;
         guard.player.stop();
         guard.playback.stop();
+        // The queue tracks from the previous provider would never
+        // resolve against the next one — clear it so the UI doesn't
+        // show ghost entries from a session that just ended.
+        guard.queue.clear();
         (server_id, guard.secrets.clone())
     };
     if let Some(server_id) = server_id_opt {
         let _ = secrets.delete_token(server_id).await;
     }
+    // Drop the last-active pointer too so a stale id doesn't get
+    // restored on the next launch.
+    if let Ok(guard) = state.try_lock() {
+        let _ = guard.library.set_preference("last_active_server_id", None);
+    }
+    // Notify the frontend so the QueuePanel / PlayerBar clear out
+    // without waiting for the next user action.
+    emit_queue_changed(&app, state.inner()).await;
     Ok(())
+}
+
+/// Look up a row from the `servers` table. Returns `(kind, base_url,
+/// name, username)` or an error if the id is unknown.
+async fn lookup_server(
+    state: &SharedState<'_>,
+    server_id: &ServerId,
+) -> Result<(String, String, String, Option<String>), String> {
+    let guard = state.lock().await;
+    let conn = guard.library.connection().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT kind, base_url, name, username FROM servers WHERE server_id = ?1")
+        .map_err(|e| e.to_string())?;
+    stmt.query_row([server_id.as_str()], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, Option<String>>(3)?,
+        ))
+    })
+    .map_err(|e| format!("server not found: {e}"))
+}
+
+/// Switch the active provider to an already-saved server without
+/// re-running the login flow. Reconstructs the `MusicProvider` from
+/// the keyring (Jellyfin/Subsonic) or the cached root path (local).
+/// Library data stays put — switching only swaps which `server_id`
+/// the library reads are scoped to.
+///
+/// Returns the activated server's metadata so the frontend can
+/// reflect it in the store without a follow-up `provider_servers`
+/// round-trip.
+#[tauri::command]
+pub async fn provider_set_active(
+    server_id: String,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<ConnectedServer, String> {
+    eprintln!("[DEBUG provider_set_active] called with server_id = {}", server_id);
+    let parsed = ServerId::new(server_id.clone());
+    let (kind, base_url, name, username) = lookup_server(&state, &parsed).await?;
+    eprintln!("[DEBUG provider_set_active] looked up server: kind={}, name={}", kind, name);
+
+    let provider: Arc<dyn MusicProvider> = match kind.as_str() {
+        "jellyfin" => {
+            eprintln!("[DEBUG provider_set_active] building Jellyfin provider");
+            let secrets = {
+                let guard = state.lock().await;
+                guard.secrets.clone()
+            };
+            let token = secrets
+                .load_token(parsed.clone())
+                .await
+                .map_err(|e| format!("load token: {e}"))?
+                .ok_or_else(|| "jellyfin: token missing from keyring".to_string())?;
+            eprintln!("[DEBUG provider_set_active] token loaded successfully");
+            let device_id = {
+                let guard = state.lock().await;
+                guard.device_id.clone()
+            };
+            // Subsonic's `server_id` is derived from the server name,
+            // but Jellyfin's comes from the auth response (the
+            // `server-{uuid}` we persisted at login time). Both are
+            // stable across the lifetime of the connection, so the
+            // cached row is the source of truth on switch.
+            let session = sinfonic_source_jellyfin::JellyfinSession {
+                server_id: parsed.clone(),
+                base_url: base_url.clone(),
+                access_token: token,
+                // The cached session does not include `user_id`, so we
+                // probe /System/Info/Public which is anonymous and
+                // therefore cheap. The provider's `identity()` falls
+                // back to the base_url as a display name until
+                // `refresh_server_name` runs.
+                user_id: String::new(),
+                device_id,
+            };
+            Arc::new(
+                sinfonic_source_jellyfin::JellyfinProvider::new(session)
+                    .map_err(|e| format!("build jellyfin provider: {e}"))?,
+            )
+        }
+        "subsonic" => {
+            eprintln!("[DEBUG provider_set_active] building Subsonic provider");
+            let secrets = {
+                let guard = state.lock().await;
+                guard.secrets.clone()
+            };
+            let password = secrets
+                .load_token(parsed.clone())
+                .await
+                .map_err(|e| format!("load password: {e}"))?
+                .ok_or_else(|| {
+                    // The saved-server row exists in SQLite but the
+                    // matching OS keychain entry is gone (user wiped
+                    // their keychain, keyring backend rejected the
+                    // original save, etc.). Tell the user what to do
+                    // instead of just naming the symptom.
+                    "Subsonic password not found in system keychain. \
+                     Delete this server from the Saved Servers list \
+                     and add it again to sign in."
+                        .to_string()
+                })?;
+            eprintln!("[DEBUG provider_set_active] password loaded successfully");
+            // Subsonic signs every request with `?u=` so the username
+            // must be reconstructed. It's persisted on the servers
+            // row at login time (migration v3).
+            let sub_user = username.clone().unwrap_or_else(|| name.clone());
+            let session = sinfonic_source_subsonic::SubsonicSession {
+                server_id: parsed.clone(),
+                base_url: base_url.clone(),
+                username: sub_user,
+                password,
+            };
+            Arc::new(
+                sinfonic_source_subsonic::SubsonicProvider::new(session)
+                    .map_err(|e| format!("build subsonic provider: {e}"))?
+                    .with_app_handle(app.clone()),
+            )
+        }
+        "local" => {
+            eprintln!("[DEBUG provider_set_active] building Local provider");
+            let root = std::path::PathBuf::from(&base_url);
+            if !root.exists() {
+                return Err(format!("local root no longer exists: {root:?}"));
+            }
+            Arc::new(sinfonic_source_local::LocalProvider::new(root))
+        }
+        other => return Err(format!("unknown provider kind: {other}")),
+    };
+
+    // Stop any audio currently being decoded under the previous
+    // provider — its stream URL will stop resolving after the swap.
+    // The queue is cleared too: track ids from the previous provider
+    // would never resolve against the next one, and the UI should
+    // not keep showing ghost entries from a session that's gone.
+    {
+        eprintln!("[DEBUG provider_set_active] stopping playback and swapping provider");
+        let mut guard = state.lock().await;
+        guard.player.stop();
+        guard.playback.stop();
+        guard.queue.clear();
+        *guard.provider.lock().await = Some(provider.clone());
+        eprintln!("[DEBUG provider_set_active] provider swapped, persisting last_active_server_id");
+        // Persist the pointer so the next launch can restore us.
+        guard
+            .library
+            .set_preference("last_active_server_id", Some(&server_id))
+            .map_err(|e| format!("save preference: {e}"))?;
+    }
+
+    // Tell the frontend about the cleared queue / playback state so
+    // the QueuePanel and PlayerBar update immediately rather than
+    // waiting for the next user action.
+    emit_queue_changed(&app, state.inner()).await;
+    emit_playback_state(&app, state.inner()).await;
+
+    eprintln!("[DEBUG provider_set_active] SUCCESS");
+    Ok(ConnectedServer {
+        server_id,
+        kind,
+        name,
+        base_url,
+    })
 }
 
 /// Trigger a sync: fetch the first page of albums / artists / tracks
@@ -1255,8 +1572,7 @@ pub async fn provider_sync_library(
     state: SharedState<'_>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    use sinfonic_domain::PagedRequest;
-
+    eprintln!("[SYNC provider_sync_library] started");
     let payload_start = LibrarySyncStatusPayload {
         server_id: None,
         state: "started".into(),
@@ -1279,30 +1595,9 @@ pub async fn provider_sync_library(
     };
 
     let server_id = provider_snapshot.identity().server_id.clone();
+    eprintln!("[SYNC provider_sync_library] syncing from server_id = {}", server_id);
 
-    let albums = provider_snapshot
-        .albums(PagedRequest::new(0, 200))
-        .await
-        .map_err(|e| format!("albums: {e}"))?;
-    library_handle
-        .replace_albums(&server_id, &albums.items)
-        .map_err(|e| format!("upsert albums: {e}"))?;
-
-    let artists = provider_snapshot
-        .artists(PagedRequest::new(0, 200))
-        .await
-        .map_err(|e| format!("artists: {e}"))?;
-    library_handle
-        .replace_artists(&server_id, &artists.items)
-        .map_err(|e| format!("upsert artists: {e}"))?;
-
-    let tracks = provider_snapshot
-        .tracks(PagedRequest::new(0, 500))
-        .await
-        .map_err(|e| format!("tracks: {e}"))?;
-    library_handle
-        .replace_tracks(&server_id, &tracks.items)
-        .map_err(|e| format!("upsert tracks: {e}"))?;
+    sync_library_data(provider_snapshot.as_ref(), &library_handle, &server_id).await?;
 
     let payload_done = LibrarySyncStatusPayload {
         server_id: Some(server_id.to_string()),
@@ -1310,8 +1605,175 @@ pub async fn provider_sync_library(
         progress: 1.0,
     };
     let _ = app.emit(EventName::LibrarySyncStatus.as_str(), payload_done);
+    eprintln!("[SYNC provider_sync_library] COMPLETE");
 
     Ok(())
+}
+
+/// Fetch every artist, album, and track from the given provider and
+/// write them into the SQLite cache. Extracted from
+/// `provider_sync_library` so the ordering logic can be unit-tested
+/// without a Tauri runtime.
+///
+/// # Page size + chunked fetch
+///
+/// Each provider paginates its collection methods (`artists`,
+/// `albums`, `tracks`). The first sync of a Subsonic/Navidrome
+/// library returns a small first page (≤200), and `local_login`'s
+/// `albums()` is in fact a snapshot of the entire library. To stay
+/// correct for libraries of any size we loop through pages until the
+/// provider reports fewer items than the page size (or `total` is
+/// reached). Earlier this function used a single hard-coded
+/// `PagedRequest::new(0, 200)` call per entity — which silently
+/// dropped anything past page 1 and produced a `FOREIGN KEY
+/// constraint failed` on `replace_albums` because albums past #200
+/// referenced artists past #200 (sorted by name) that the previous
+/// page had not inserted.
+///
+/// # Order matters
+///
+/// `albums.artist_id` is a foreign key into `artists(artist_id)`, and
+/// `tracks.album_id` is a foreign key into `albums`. Even though
+/// every `replace_*` call enables `PRAGMA defer_foreign_keys = ON`,
+/// the deferred check still runs at transaction commit time — so
+/// writing albums before the referenced artists exist causes
+/// `sqlite error: FOREIGN KEY constraint failed`. The contract is:
+/// **artists → albums → tracks**. The same order is used by
+/// `local_login` (Phase 3 of that command).
+pub async fn sync_library_data(
+    provider: &dyn sinfonic_source::MusicProvider,
+    library: &sinfonic_library::Store,
+    server_id: &sinfonic_domain::ServerId,
+) -> Result<(), String> {
+    use sinfonic_domain::PagedRequest;
+
+    const PAGE_SIZE: usize = 200;
+
+    eprintln!("[SYNC sync_library_data] fetching artists...");
+    let artists = fetch_all_pages(PAGE_SIZE, |offset| async move {
+        provider.artists(PagedRequest::new(offset, PAGE_SIZE)).await
+    })
+    .await
+    .map_err(|e| format!("artists: {e}"))?;
+    eprintln!(
+        "[SYNC sync_library_data] fetched {} artists, writing to DB...",
+        artists.len()
+    );
+    library
+        .replace_artists(server_id, &artists)
+        .map_err(|e| format!("upsert artists: {e}"))?;
+    eprintln!("[SYNC sync_library_data] artists written");
+
+    eprintln!("[SYNC sync_library_data] fetching albums...");
+    let albums = fetch_all_pages(PAGE_SIZE, |offset| async move {
+        provider.albums(PagedRequest::new(offset, PAGE_SIZE)).await
+    })
+    .await
+    .map_err(|e| format!("albums: {e}"))?;
+    eprintln!(
+        "[SYNC sync_library_data] fetched {} albums, writing to DB...",
+        albums.len()
+    );
+    library
+        .replace_albums(server_id, &albums)
+        .map_err(|e| format!("upsert albums: {e}"))?;
+    eprintln!("[SYNC sync_library_data] albums written");
+
+    eprintln!("[SYNC sync_library_data] fetching tracks...");
+    let tracks = fetch_all_pages(PAGE_SIZE, |offset| async move {
+        provider.tracks(PagedRequest::new(offset, PAGE_SIZE)).await
+    })
+    .await
+    .map_err(|e| format!("tracks: {e}"))?;
+    eprintln!(
+        "[SYNC sync_library_data] fetched {} tracks, writing to DB...",
+        tracks.len()
+    );
+    library
+        .replace_tracks(server_id, &tracks)
+        .map_err(|e| format!("upsert tracks: {e}"))?;
+    eprintln!("[SYNC sync_library_data] tracks written");
+
+    eprintln!("[SYNC sync_library_data] fetching playlists...");
+    let playlists = fetch_all_pages(PAGE_SIZE, |offset| async move {
+        provider
+            .playlists(PagedRequest::new(offset, PAGE_SIZE))
+            .await
+    })
+    .await
+    .map_err(|e| format!("playlists: {e}"))?;
+    eprintln!(
+        "[SYNC sync_library_data] fetched {} playlists, resolving tracks...",
+        playlists.len()
+    );
+    let mut synced = 0usize;
+    let mut skipped = 0usize;
+    for playlist in &playlists {
+        // Per-playlist errors are non-fatal: a single corrupt
+        // playlist shouldn't block the rest of the sync.
+        match provider.playlist_detail(&playlist.id).await {
+            Ok(detail) => {
+                let track_ids: Vec<TrackId> =
+                    detail.tracks.iter().map(|t| t.id.clone()).collect();
+                if let Err(e) =
+                    library.replace_playlist(server_id, &detail.playlist, &track_ids)
+                {
+                    eprintln!(
+                        "[SYNC sync_library_data] skip playlist {}: {e}",
+                        playlist.id.as_str()
+                    );
+                    skipped += 1;
+                } else {
+                    synced += 1;
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "[SYNC sync_library_data] skip playlist {}: {e}",
+                    playlist.id.as_str()
+                );
+                skipped += 1;
+            }
+        }
+    }
+    eprintln!(
+        "[SYNC sync_library_data] playlists synced ({synced} ok, {skipped} skipped)"
+    );
+
+    Ok(())
+}
+
+/// Drive a paginated `MusicProvider` collection method to completion
+/// by repeatedly issuing `PagedRequest`s until the provider reports
+/// fewer items than `page_size`. The `total` field on the response is
+/// NOT used as a loop guard: Subsonic reports `total = items.len()`
+/// per page (the server caps the response), so trusting it would loop
+/// forever on a Subsonic library with >`page_size` items.
+///
+/// Kept `pub` so the chunked-fetch semantics can be exercised in
+/// isolation by the integration tests in `tests/sync_library_order.rs`.
+pub async fn fetch_all_pages<T, F, Fut>(
+    page_size: usize,
+    mut fetch: F,
+) -> sinfonic_source::ProviderResult<Vec<T>>
+where
+    F: FnMut(usize) -> Fut,
+    Fut: std::future::Future<
+        Output = sinfonic_source::ProviderResult<sinfonic_domain::PagedResponse<T>>,
+    >,
+{
+    let mut all: Vec<T> = Vec::new();
+    let mut offset: usize = 0;
+    loop {
+        let page = fetch(offset).await?;
+        let received = page.items.len();
+        all.extend(page.items);
+        if received < page_size {
+            break;
+        }
+        offset += received;
+    }
+    Ok(all)
 }
 
 /// Return the list of servers the user has configured (rows in the
@@ -1339,6 +1801,65 @@ pub async fn provider_servers(
     Ok(items)
 }
 
+/// Delete a saved server from the `servers` table and clear its
+/// credentials from the keyring. If the deleted server was the
+/// active one, the in-memory provider is also cleared.
+#[tauri::command]
+pub async fn provider_delete(
+    server_id: String,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    eprintln!("[DEBUG provider_delete] deleting server_id = {}", server_id);
+    let (was_active, secrets) = {
+        let guard = state.lock().await;
+        let was_active = guard
+            .provider
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|p| p.identity().server_id.to_string() == server_id);
+        (was_active, guard.secrets.clone())
+    };
+
+    // If it was active, clear the in-memory provider and preferences.
+    if was_active {
+        eprintln!("[DEBUG provider_delete] was active, clearing provider");
+        let mut guard = state.lock().await;
+        *guard.provider.lock().await = None;
+        guard.player.stop();
+        guard.playback.stop();
+        // Drop the queue too — same rationale as `provider_set_active`:
+        // ghost entries from a session that's gone shouldn't linger.
+        guard.queue.clear();
+        let _ = guard.library.set_preference("last_active_server_id", None);
+    }
+
+    // Delete from keyring.
+    let _ = secrets.delete_token(ServerId::new(server_id.clone())).await;
+
+    // Delete from database.
+    {
+        let guard = state.lock().await;
+        let conn = guard.library.connection().map_err(|e| e.to_string())?;
+        conn.execute(
+            "DELETE FROM servers WHERE server_id = ?1",
+            sqlite::params![server_id],
+        )
+        .map_err(|e| format!("delete server: {e}"))?;
+    }
+
+    // Mirror the in-memory clearing to the frontend so the QueuePanel
+    // and PlayerBar update immediately.
+    if was_active {
+        emit_queue_changed(&app, state.inner()).await;
+        emit_playback_state(&app, state.inner()).await;
+    }
+
+    eprintln!("[DEBUG provider_delete] done");
+    Ok(())
+}
+
 /// Surface the active server id (or `null` if none). Used by the
 /// frontend to keep the Zustand store in sync.
 #[tauri::command]
@@ -1352,11 +1873,72 @@ pub async fn provider_active_server(
         .map(|p| p.identity().server_id.to_string()))
 }
 
+/// Snapshot the bootstrap state for the frontend route guard.
+///
+/// The `try_restore_provider` background task is spawned during
+/// app startup; the frontend cannot rely on a single
+/// `provider_active_server` poll to see the restored session
+/// because the call may land before the task finishes. This
+/// command bundles three things in one roundtrip:
+///
+///   * `ready` — true once the restore task has exited, so the
+///     route guard can stop polling and decide where to land.
+///   * `active_server_id` — the provider the restore picked (or
+///     `None` if no session was persisted / the row was stale).
+///   * `saved_servers` — every configured source. The setup view
+///     uses this to render a "Quick connect" list so the user
+///     can re-attach an existing source with one click instead
+///     of running the full wizard again.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BootstrapState {
+    pub ready: bool,
+    pub active_server_id: Option<String>,
+    pub saved_servers: Vec<ConnectedServer>,
+}
+
+#[tauri::command]
+pub async fn bootstrap_state(state: SharedState<'_>) -> Result<BootstrapState, String> {
+    use std::sync::atomic::Ordering;
+
+    let guard = state.lock().await;
+    let ready = guard.bootstrap_complete.load(Ordering::Relaxed);
+    let active_server_id = guard
+        .provider
+        .lock()
+        .await
+        .as_ref()
+        .map(|p| p.identity().server_id.to_string());
+
+    let conn = guard.library.connection().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT server_id, kind, name, base_url FROM servers ORDER BY name")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ConnectedServer {
+                server_id: row.get(0)?,
+                kind: row.get(1)?,
+                name: row.get(2)?,
+                base_url: row.get(3)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let saved_servers: Vec<ConnectedServer> = rows.filter_map(|r| r.ok()).collect();
+
+    Ok(BootstrapState {
+        ready,
+        active_server_id,
+        saved_servers,
+    })
+}
+
 // ─── Album art (Phase 7) ───────────────────────────────────────
 
 /// Payload returned by `provider_image_bytes`. Mirrors the on-disk
 /// cache shape so the frontend can build a blob URL straight away.
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AlbumArtResponse {
     pub bytes: Vec<u8>,
     pub content_type: String,
@@ -1453,6 +2035,132 @@ pub async fn provider_image_bytes(
         content_type,
         cached: false,
     })
+}
+
+/// Bulk version of `provider_image_bytes` for the JS-side album art
+/// prewarm. Each request is resolved against the on-disk cache first
+/// and only falls through to the provider on a miss. Misses are
+/// fetched in parallel so a single slow provider call does not
+/// serialise the whole batch. Items that fail (no provider, network
+/// error) are simply omitted from the response so the frontend can
+/// still render the rest of the grid.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumArtRequest {
+    pub album_id: String,
+    pub tag: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumArtBulkItem {
+    pub album_id: String,
+    pub tag: Option<String>,
+    pub bytes: Vec<u8>,
+    pub content_type: String,
+    pub cached: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumArtBulkResponse {
+    pub images: Vec<AlbumArtBulkItem>,
+    pub not_found: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn provider_image_bytes_bulk(
+    requests: Vec<AlbumArtRequest>,
+    state: SharedState<'_>,
+) -> Result<AlbumArtBulkResponse, String> {
+    use futures::future::join_all;
+
+    let (provider_id, cache) = {
+        let guard = state.lock().await;
+        let provider_id = guard
+            .provider
+            .lock()
+            .await
+            .as_ref()
+            .map(|p| p.identity().provider_id.clone())
+            .unwrap_or_else(|| "unknown".into());
+        (provider_id, guard.album_art.clone())
+    };
+
+    // Split into cache hits and misses first. Cache hits do not need
+    // a provider roundtrip and can be returned immediately.
+    let mut images: Vec<AlbumArtBulkItem> = Vec::with_capacity(requests.len());
+    let mut misses: Vec<AlbumArtRequest> = Vec::new();
+    let mut not_found: Vec<String> = Vec::new();
+
+    for req in requests {
+        if req.album_id.is_empty() {
+            continue;
+        }
+        let key = ImageCacheKey::new(
+            provider_id.clone(),
+            req.album_id.clone(),
+            req.tag.clone().unwrap_or_default(),
+        );
+        let hit = cache.as_ref().and_then(|c| c.get(&key).ok().flatten());
+        match hit {
+            Some(cached) => images.push(AlbumArtBulkItem {
+                album_id: req.album_id.clone(),
+                tag: req.tag.clone(),
+                bytes: cached.bytes,
+                content_type: cached.content_type,
+                cached: true,
+            }),
+            None => misses.push(req),
+        }
+    }
+
+    // Fetch misses in parallel from the provider. Each fetch goes
+    // through the same `provider.image_bytes` path as the single
+    // command, so write-through to the cache still happens.
+    let fetch_futures = misses.iter().map(|req| {
+        let req = req.clone();
+        let state = state.inner().clone();
+        async move {
+            let request = ImageRequest {
+                item_id: req.album_id.clone(),
+                kind: ImageKind::Primary,
+                tag: req.tag.clone(),
+                size: 600,
+            };
+            let guard = state.lock().await;
+            let provider_guard = guard.provider.lock().await;
+            let provider = provider_guard.as_ref()?;
+            let res = provider.image_bytes(request).await.ok()?;
+            let content_type = res
+                .content_type
+                .unwrap_or_else(|| guess_image_content_type(&res.bytes).to_string());
+            if let Some(ref cache) = guard.album_art {
+                let key = ImageCacheKey::new(
+                    provider.identity().provider_id.clone(),
+                    req.album_id.clone(),
+                    req.tag.clone().unwrap_or_default(),
+                );
+                let _ = cache.put(&key, &res.bytes, &content_type);
+            }
+            Some(AlbumArtBulkItem {
+                album_id: req.album_id.clone(),
+                tag: req.tag.clone(),
+                bytes: res.bytes,
+                content_type,
+                cached: false,
+            })
+        }
+    });
+    let fetched = join_all(fetch_futures).await;
+    for (req, maybe_image) in misses.into_iter().zip(fetched) {
+        match maybe_image {
+            Some(image) => images.push(image),
+            None => not_found.push(req.album_id),
+        }
+    }
+
+    Ok(AlbumArtBulkResponse { images, not_found })
 }
 
 /// Sniff a small set of magic bytes to fall back to a content type
@@ -1563,6 +2271,176 @@ pub async fn try_resume_lastfm(state: &AppState) {
     let _ = lastfm::try_resume(secrets.as_ref(), slot.as_ref()).await;
 }
 
+/// Restore the provider that was active when the app last shut down.
+/// Reads the `last_active_server_id` preference and rebuilds the
+/// matching provider from the keyring / SQLite root path.
+///
+/// Failures are logged and dropped: a stale pointer (server deleted,
+/// keyring entry gone, root directory moved) should land the user on
+/// the setup view, not on a crash screen.
+pub async fn try_restore_provider(state: &Arc<Mutex<AppState>>, app: &tauri::AppHandle) {
+    use std::sync::atomic::Ordering;
+
+    eprintln!("[DEBUG try_restore_provider] starting");
+    // Run the actual restore in an inner block so we can mark the
+    // bootstrap as complete on every exit path — success, missing
+    // pointer, stale row, or provider build failure. The frontend
+    // polls `bootstrap_state` until this flips.
+    let result: Result<(), String> = async {
+        let last_active = {
+            let state_ref = state.lock().await;
+            match state_ref.library.get_preference("last_active_server_id") {
+                Ok(Some(id)) => {
+                    eprintln!("[DEBUG try_restore_provider] found last_active_server_id = {}", id);
+                    id
+                }
+                Ok(None) => {
+                    eprintln!("[DEBUG try_restore_provider] no last_active_server_id preference");
+                    return Ok(());
+                }
+                Err(e) => {
+                    eprintln!("[DEBUG try_restore_provider] error reading last_active_server_id: {e}");
+                    return Err(format!("read last_active_server_id: {e}"));
+                }
+            }
+        };
+        eprintln!("[DEBUG try_restore_provider] parsing server_id = {}", last_active);
+
+        let parsed = ServerId::new(last_active.clone());
+        eprintln!("[DEBUG try_restore_provider] looking up server in DB");
+        let (kind, base_url, name, username) = {
+            let state_ref = state.lock().await;
+            let conn = state_ref
+                .library
+                .connection()
+                .map_err(|e| format!("open connection: {e}"))?;
+            let mut stmt = conn
+                .prepare("SELECT kind, base_url, name, username FROM servers WHERE server_id = ?1")
+                .map_err(|e| format!("prepare: {e}"))?;
+            match stmt.query_row([last_active.as_str()], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
+            }) {
+                Ok(row) => {
+                    eprintln!("[DEBUG try_restore_provider] found server: kind={}, name={}, base_url={}", row.0, row.2, row.1);
+                    row
+                }
+                // Pointer targets a row that no longer exists — clear it
+                // so we don't retry every launch.
+                Err(_) => {
+                    eprintln!("[DEBUG try_restore_provider] server row not found, clearing last_active_server_id");
+                    let _ = state_ref
+                        .library
+                        .set_preference("last_active_server_id", None);
+                    return Ok(());
+                }
+            }
+        };
+
+        let provider: Option<Arc<dyn MusicProvider>> = match kind.as_str() {
+            "jellyfin" => {
+                eprintln!("[DEBUG try_restore_provider] building Jellyfin provider");
+                let token = {
+                    let state_ref = state.lock().await;
+                    state_ref
+                        .secrets
+                        .load_token(parsed.clone())
+                        .await
+                        .ok()
+                        .flatten()
+                };
+                let Some(token) = token else {
+                    eprintln!("[DEBUG try_restore_provider] jellyfin token missing from keyring");
+                    return Err("jellyfin token missing".into());
+                };
+                let device_id = {
+                    let state_ref = state.lock().await;
+                    state_ref.device_id.clone()
+                };
+                let session = sinfonic_source_jellyfin::JellyfinSession {
+                    server_id: parsed.clone(),
+                    base_url,
+                    access_token: token,
+                    user_id: String::new(),
+                    device_id,
+                };
+                sinfonic_source_jellyfin::JellyfinProvider::new(session)
+                    .ok()
+                    .map(|p| Arc::new(p) as Arc<dyn MusicProvider>)
+            }
+            "subsonic" => {
+                eprintln!("[DEBUG try_restore_provider] building Subsonic provider");
+                let password = {
+                    let state_ref = state.lock().await;
+                    state_ref
+                        .secrets
+                        .load_token(parsed.clone())
+                        .await
+                        .ok()
+                        .flatten()
+                };
+                let Some(password) = password else {
+                    eprintln!("[DEBUG try_restore_provider] subsonic password missing from keyring");
+                    return Err("subsonic password missing".into());
+                };
+                let session = sinfonic_source_subsonic::SubsonicSession {
+                    server_id: parsed.clone(),
+                    base_url,
+                    username: username.unwrap_or(name),
+                    password,
+                };
+                sinfonic_source_subsonic::SubsonicProvider::new(session)
+                    .ok()
+                    .map(|p| Arc::new(p.with_app_handle(app.clone())) as Arc<dyn MusicProvider>)
+            }
+            "local" => {
+                eprintln!("[DEBUG try_restore_provider] building Local provider");
+                let root = std::path::PathBuf::from(&base_url);
+                if !root.exists() {
+                    eprintln!(
+                        "[DEBUG try_restore_provider] local root no longer exists: {root:?}, clearing pointer"
+                    );
+                    let state_ref = state.lock().await;
+                    let _ = state_ref
+                        .library
+                        .set_preference("last_active_server_id", None);
+                    return Ok(());
+                }
+                Some(Arc::new(sinfonic_source_local::LocalProvider::new(root)))
+            }
+            other => {
+                return Err(format!("unknown provider kind: {other}"));
+            }
+        };
+
+        let Some(provider) = provider else {
+            eprintln!("[DEBUG try_restore_provider] provider build returned None");
+            return Ok(());
+        };
+        eprintln!("[DEBUG try_restore_provider] provider built successfully, setting as active");
+        let state_ref = state.lock().await;
+        *state_ref.provider.lock().await = Some(provider);
+        eprintln!("[DEBUG try_restore_provider] SUCCESS - provider restored");
+        Ok(())
+    }
+    .await;
+
+    if let Err(e) = result {
+        eprintln!("[DEBUG try_restore_provider] FAILED: {e}");
+    }
+
+    state
+        .lock()
+        .await
+        .bootstrap_complete
+        .store(true, Ordering::Relaxed);
+    eprintln!("[DEBUG try_restore_provider] bootstrap_complete set to true");
+}
+
 // ─── Smart Playlists (Phase 9) ─────────────────────────────────
 
 #[derive(serde::Deserialize)]
@@ -1657,7 +2535,88 @@ pub async fn evaluate_smart_playlist(
 
 // ─── Internal event helpers ─────────────────────────────────────
 
-async fn emit_playback_state(app: &tauri::AppHandle, state: &SharedState<'_>) {
+/// Advance the queue when the rodio sink runs dry. Honors the queue's
+/// repeat mode:
+///   * `One`   — re-play the current track from position 0.
+///   * `All`   — wrap to the first entry and play it.
+///   * `Off`   — move to the next entry; if there isn't one, stop.
+///
+/// Resolves the next track's stream URI through the active provider
+/// the same way `play_track` / `next` do. Failures are logged and
+/// degraded gracefully (e.g. a missing stream URI uses the cached
+/// duration so the seekbar still reflects the right length).
+pub async fn advance_queue_on_end(state: &Arc<Mutex<AppState>>, app: &tauri::AppHandle) {
+    enum AdvanceAction {
+        Play(sinfonic_domain::QueueEntry),
+        Stop,
+    }
+
+    let action: AdvanceAction = {
+        let mut guard = state.lock().await;
+        match guard.queue.repeat() {
+            RepeatMode::One => match guard.queue.current().cloned() {
+                Some(entry) => AdvanceAction::Play(entry),
+                None => AdvanceAction::Stop,
+            },
+            RepeatMode::All | RepeatMode::Off => {
+                let advanced = guard.queue.next_track().cloned();
+                match advanced {
+                    Some(entry) => AdvanceAction::Play(entry),
+                    None => AdvanceAction::Stop,
+                }
+            }
+        }
+    };
+
+    match action {
+        AdvanceAction::Play(entry) => {
+            let stream_uri = {
+                let guard = state.lock().await;
+                let provider_guard = guard.provider.lock().await;
+                let provider = provider_guard.as_ref();
+                match provider {
+                    Some(provider) => provider
+                        .stream(&entry.track_id)
+                        .await
+                        .ok()
+                        .map(|d| d.uri().to_string()),
+                    None => None,
+                }
+            };
+            let duration_seconds = match stream_uri.as_deref() {
+                Some(uri) => {
+                    let guard = state.lock().await;
+                    match guard.player.play(entry.track_id.clone(), uri) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            eprintln!("sinfonic: auto-advance player.play failed: {e}");
+                            entry.duration_seconds
+                        }
+                    }
+                }
+                None => entry.duration_seconds,
+            };
+            {
+                let mut guard = state.lock().await;
+                guard.playback.start(duration_seconds);
+            }
+            emit_queue_changed(app, state).await;
+            emit_track_changed_from_entry(app, &entry);
+            emit_playback_state(app, state).await;
+        }
+        AdvanceAction::Stop => {
+            {
+                let mut guard = state.lock().await;
+                guard.player.stop();
+                guard.playback.stop();
+            }
+            emit_queue_changed(app, state).await;
+            emit_playback_state(app, state).await;
+        }
+    }
+}
+
+async fn emit_playback_state(app: &tauri::AppHandle, state: &Arc<Mutex<AppState>>) {
     let payload = {
         let guard = state.lock().await;
         PlaybackStatePayload::from_state(&guard.playback, &guard.queue)
@@ -1665,7 +2624,7 @@ async fn emit_playback_state(app: &tauri::AppHandle, state: &SharedState<'_>) {
     let _ = app.emit(EventName::PlaybackStateChanged.as_str(), payload);
 }
 
-async fn emit_queue_changed(app: &tauri::AppHandle, state: &SharedState<'_>) {
+async fn emit_queue_changed(app: &tauri::AppHandle, state: &Arc<Mutex<AppState>>) {
     let payload = {
         let guard = state.lock().await;
         let snap = guard.queue.snapshot();
@@ -1692,7 +2651,7 @@ async fn emit_queue_changed(app: &tauri::AppHandle, state: &SharedState<'_>) {
 
 async fn emit_track_changed(
     app: &tauri::AppHandle,
-    state: &SharedState<'_>,
+    state: &Arc<Mutex<AppState>>,
     track: &Track,
 ) {
     let payload = TrackChangedPayload {
