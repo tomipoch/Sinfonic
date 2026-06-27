@@ -12,10 +12,10 @@ type Props = {
 export function AlbumCard({ album, className }: Props) {
   return (
     <Link
-      to={`/library/album/${encodeURIComponent(album.id)}`}
+      to={`/albums/${encodeURIComponent(album.id)}`}
       className={`group flex w-40 shrink-0 flex-col gap-2 ${className ?? ""}`}
     >
-      <AlbumCover album={album} className="aspect-square w-full rounded-md" />
+      <AlbumCover source={album} className="aspect-square w-full rounded-md" />
       <div className="min-w-0">
         <div className="truncate text-sm font-medium text-foreground group-hover:text-primary">
           {album.title}

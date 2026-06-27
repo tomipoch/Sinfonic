@@ -1,14 +1,19 @@
 // FavoriteButton — heart toggle for tracks/albums/artists.
-// Fires the set_favorite IPC call and updates locally.
+//
+// Uses React 19's `useOptimistic` to flip the heart instantly while
+// the IPC round-trip is in flight; if the call fails the optimistic
+// state is reverted automatically once the transition settles.
 
-import { useState } from "react";
+import { useOptimistic, useTransition } from "react";
 import { toast } from "sonner";
 
+import { cn } from "@/lib/cn";
 import {
   setTrackFavorite,
   setAlbumFavorite,
   setArtistFavorite,
 } from "@/lib/tauri";
+import { extractError } from "@/lib/errors";
 
 type FavoriteKind = "track" | "album" | "artist";
 
@@ -20,37 +25,37 @@ interface FavoriteButtonProps {
 }
 
 export function FavoriteButton({ kind, itemId, initialFavorite, onToggle }: FavoriteButtonProps) {
-  const [favorited, setFavorited] = useState(initialFavorite);
-  const [busy, setBusy] = useState(false);
+  const [optimisticFavorited, setOptimisticFavorited] = useOptimistic(initialFavorite);
+  const [, startTransition] = useTransition();
 
-  const toggle = async () => {
-    if (busy) return;
-    const next = !favorited;
-    setFavorited(next);
-    setBusy(true);
-    try {
-      if (kind === "track") await setTrackFavorite(itemId, next);
-      else if (kind === "album") await setAlbumFavorite(itemId, next);
-      else await setArtistFavorite(itemId, next);
-      onToggle?.(next);
-    } catch (e) {
-      setFavorited(!next);
-      toast.error(`Couldn't update favorite: ${(e as Error).message}`);
-    } finally {
-      setBusy(false);
-    }
+  const toggle = () => {
+    const next = !optimisticFavorited;
+    startTransition(async () => {
+      setOptimisticFavorited(next);
+      try {
+        if (kind === "track") await setTrackFavorite(itemId, next);
+        else if (kind === "album") await setAlbumFavorite(itemId, next);
+        else await setArtistFavorite(itemId, next);
+        onToggle?.(next);
+      } catch (e) {
+        setOptimisticFavorited(!next);
+        toast.error(`Couldn't update favorite: ${extractError(e, "unknown error")}`);
+      }
+    });
   };
 
   return (
     <button
       type="button"
-      onClick={(e) => { e.stopPropagation(); void toggle(); }}
-      disabled={busy}
-      aria-label={favorited ? "Remove from favorites" : "Add to favorites"}
-      aria-pressed={favorited}
-      className="rounded-md p-1 text-fg-muted transition-colors hover:text-red-400 focus:outline-none disabled:opacity-40"
+      onClick={(e) => { e.stopPropagation(); toggle(); }}
+      aria-label={optimisticFavorited ? "Remove from favorites" : "Add to favorites"}
+      aria-pressed={optimisticFavorited}
+      className={cn(
+        "rounded-md p-1 transition-colors focus:outline-none disabled:opacity-40",
+        optimisticFavorited ? "text-red-500 hover:text-red-400" : "text-fg-muted hover:text-red-400",
+      )}
     >
-      {favorited ? "♥" : "♡"}
+      {optimisticFavorited ? "♥" : "♡"}
     </button>
   );
 }
