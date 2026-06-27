@@ -207,7 +207,7 @@ impl AudioPlayer {
 
     /// Start playing `track_id` from its stream URI. Returns the
     /// resolved duration (from the rodio decoder) on success.
-    pub fn play(
+    pub async fn play(
         &self,
         track_id: TrackId,
         stream_uri: &str,
@@ -215,7 +215,14 @@ impl AudioPlayer {
         // Open the stream first so we know the duration before we
         // touch any state. A decode failure here is surfaced to the
         // caller and nothing else happens.
+        //
+        // `stream::open` is async because HTTP downloads are funneled
+        // through `tokio::task::spawn_blocking` internally — keeping
+        // the rodio `Sink` work on the same task avoids any chance of
+        // the user pressing "next" mid-decode and leaving us with a
+        // dangling source.
         let decoded = stream::open(stream_uri)
+            .await
             .map_err(|e| PlayerError::Stream(e.to_string()))?
             .with_eq(self.inner.equalizer.clone());
         let duration_seconds = decoded.duration_seconds.unwrap_or(0);
@@ -515,6 +522,10 @@ mod tests {
 
     #[test]
     fn event_callback_fires_on_play_and_stop() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build runtime");
         let player = AudioPlayer::new();
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = counter.clone();
@@ -524,7 +535,7 @@ mod tests {
         let path = tmp_wav(2);
         // Best-effort play: CI may not have an audio device, but the
         // callback should still fire on stop.
-        let _ = player.play(TrackId::from("track-test"), path.to_str().unwrap());
+        let _ = runtime.block_on(player.play(TrackId::from("track-test"), path.to_str().unwrap()));
         std::thread::sleep(StdDuration::from_millis(100));
         player.stop();
         std::thread::sleep(StdDuration::from_millis(50));

@@ -210,7 +210,7 @@ pub async fn play_album(
     let actual_duration = match stream_uri.as_deref() {
         Some(uri) => {
             let guard = state.lock().await;
-            match guard.player.play(first.id.clone(), uri) {
+            match guard.player.play(first.id.clone(), uri).await {
                 Ok(duration) => duration,
                 Err(e) => {
                     tracing::warn!(target: "sinfonic::playback", error = %e, "player.play failed");
@@ -286,7 +286,7 @@ pub async fn play_track(
     let duration_seconds = match stream_uri.as_deref() {
         Some(uri) => {
             let guard = state.lock().await;
-            match guard.player.play(track_id.clone(), uri) {
+            match guard.player.play(track_id.clone(), uri).await {
                 Ok(duration) => duration,
                 Err(e) => {
                     tracing::warn!(target: "sinfonic::playback", error = %e, "player.play failed");
@@ -2593,7 +2593,7 @@ pub async fn advance_queue_on_end(state: &Arc<Mutex<AppState>>, app: &tauri::App
             let duration_seconds = match stream_uri.as_deref() {
                 Some(uri) => {
                     let guard = state.lock().await;
-                    match guard.player.play(entry.track_id.clone(), uri) {
+                    match guard.player.play(entry.track_id.clone(), uri).await {
                         Ok(d) => d,
                         Err(e) => {
                             tracing::warn!(

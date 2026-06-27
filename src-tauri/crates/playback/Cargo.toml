@@ -38,3 +38,5 @@ parking_lot = { workspace = true }
 [dev-dependencies]
 # Generated-WAV helper for offline AudioPlayer tests.
 hound = "3.5"
+# Used to drive async `AudioPlayer::play` from sync #[test] fns.
+tokio = { workspace = true }

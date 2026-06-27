@@ -6,9 +6,15 @@
 //! - **Local files** (absolute paths) → open with `std::fs::File`,
 //!   wrap in `BufReader`, decode directly. Cheap and supports seeking.
 //! - **HTTP URLs** (`http://`, `https://`) → fetch the body with
-//!   `reqwest::blocking::get`, wrap in a `Cursor`, decode from there.
-//!   Slightly wasteful for long tracks but trivially robust and
-//!   supports seeking.
+//!   `reqwest::blocking::get` **on the tokio blocking pool**, wrap in
+//!   a `Cursor`, decode from there. Slightly wasteful for long tracks
+//!   but trivially robust and supports seeking.
+//!
+//! The blocking HTTP request is funneled through
+//! [`tokio::task::spawn_blocking`] so the caller's async worker is not
+//! stalled for the full download duration (typically 1-10 s for a
+//! cached audio body on a LAN). Local files don't need the hop because
+//! `File::open` is fast.
 //!
 //! The decoded source is then optionally piped through [`crate::eq::apply`]
 //! so that the AudioPlayer doesn't need to know whether EQ is on.
@@ -66,14 +72,18 @@ impl StreamHandle {
 /// `uri` is one of:
 /// - An absolute filesystem path (e.g. `/music/track.flac`).
 /// - An `http://` or `https://` URL.
-pub fn open(uri: &str) -> Result<StreamHandle, StreamError> {
+///
+/// The HTTP path is asynchronous: it offloads the blocking download
+/// to `tokio::task::spawn_blocking` so the caller's worker thread is
+/// not pinned for the duration of the network round-trip.
+pub async fn open(uri: &str) -> Result<StreamHandle, StreamError> {
     let uri = uri.trim();
     if uri.is_empty() {
         return Err(StreamError::InvalidUri("empty uri".into()));
     }
 
     if uri.starts_with("http://") || uri.starts_with("https://") {
-        return open_http(uri);
+        return open_http(uri).await;
     }
     if Path::new(uri).exists() {
         return open_local(uri);
@@ -94,8 +104,18 @@ fn open_local(path: &str) -> Result<StreamHandle, StreamError> {
     })
 }
 
-fn open_http(url: &str) -> Result<StreamHandle, StreamError> {
-    let bytes = download(url)?;
+async fn open_http(url: &str) -> Result<StreamHandle, StreamError> {
+    // Move the blocking HTTP fetch off the async worker. The download
+    // can take seconds for a remote track body; without this hop it
+    // would stall one of tokio's worker threads for the full duration
+    // and degrade responsiveness of every other IPC command.
+    let bytes = tokio::task::spawn_blocking({
+        let url = url.to_owned();
+        move || download(&url)
+    })
+    .await
+    .map_err(|e| StreamError::Http(format!("blocking pool join: {e}")))??;
+
     let cursor = Cursor::new(bytes);
     let source = Decoder::new(cursor)
         .map_err(|e| StreamError::Decode(e.to_string()))?
@@ -108,8 +128,9 @@ fn open_http(url: &str) -> Result<StreamHandle, StreamError> {
 }
 
 /// Synchronous HTTP download. Returns the body as bytes. Used by
-/// [`open_http`] to bridge from `reqwest::async` (Tauri) to
-/// `rodio::Decoder` (which expects `Read + Seek`).
+/// [`open_http`] (via `spawn_blocking`) to bridge from
+/// `reqwest::async` (Tauri) to `rodio::Decoder` (which expects
+/// `Read + Seek`).
 fn download(url: &str) -> Result<Vec<u8>, StreamError> {
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(10))
@@ -168,15 +189,26 @@ pub(crate) fn write_test_wav(path: &Path, duration_seconds: u32) -> Result<PathB
 mod tests {
     use super::*;
 
+    fn block_on<F: std::future::Future>(fut: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build runtime")
+            .block_on(fut)
+    }
+
     #[test]
     fn open_rejects_empty_uri() {
-        assert!(matches!(open(""), Err(StreamError::InvalidUri(_))));
+        assert!(matches!(
+            block_on(open("")),
+            Err(StreamError::InvalidUri(_))
+        ));
     }
 
     #[test]
     fn open_unknown_path_returns_unsupported() {
         let bogus = "/tmp/does-not-exist-sinfonic-abc.flac";
-        let result = open(bogus);
+        let result = block_on(open(bogus));
         // Falls through "not http" + "path doesn't exist" → unsupported
         // scheme error.
         assert!(matches!(result, Err(StreamError::UnsupportedScheme(_))));
@@ -187,7 +219,7 @@ mod tests {
         let dir = std::env::temp_dir();
         let path = dir.join(format!("sinfonic-test-{}.wav", std::process::id()));
         let written = write_test_wav(&path, 1).expect("write wav");
-        let handle = open(written.to_str().unwrap()).expect("open wav");
+        let handle = block_on(open(written.to_str().unwrap())).expect("open wav");
         let mut source = handle.source;
         let mut count = 0_usize;
         for sample in source.by_ref() {
