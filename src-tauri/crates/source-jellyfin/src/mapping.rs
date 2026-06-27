@@ -10,7 +10,8 @@
 //! `"Backdrop"`. Anything Jellyfin doesn't tag is dropped.
 
 use sinfonic_domain::{
-    Album, AlbumId, Artist, ArtistId, ImageRef, Playlist, PlaylistId, Track, TrackId,
+    Album, AlbumId, Artist, ArtistId, ImageKindHint, ImageRef, Playlist, PlaylistId, Track,
+    TrackId,
 };
 
 use super::dto::{BaseItemDto, PlaylistDto};
@@ -57,7 +58,7 @@ pub fn album_from_dto(dto: &BaseItemDto) -> Option<Album> {
             .as_ref()
             .map(|u| u.is_favorite)
             .unwrap_or(false),
-        image_ref: image_ref_from_tags(dto, "Primary"),
+        image_ref: image_ref_from_tags(dto, ImageKindHint::Primary),
         genres: dto.genres.clone(),
     })
 }
@@ -76,7 +77,7 @@ pub fn artist_from_dto(dto: &BaseItemDto) -> Option<Artist> {
             .as_ref()
             .map(|u| u.is_favorite)
             .unwrap_or(false),
-        image_ref: image_ref_from_tags(dto, "Primary"),
+        image_ref: image_ref_from_tags(dto, ImageKindHint::Primary),
     })
 }
 
@@ -109,7 +110,7 @@ pub fn track_from_dto(dto: &BaseItemDto) -> Option<Track> {
             .as_ref()
             .map(|u| u.is_favorite)
             .unwrap_or(false),
-        image_ref: image_ref_from_tags(dto, "Primary"),
+        image_ref: image_ref_from_tags(dto, ImageKindHint::Primary),
     })
 }
 
@@ -130,7 +131,7 @@ pub fn playlist_from_dto(dto: &PlaylistDto) -> Option<Playlist> {
             .and_then(|t| t.primary.as_ref().filter(|s| !s.is_empty()))
             .map(|tag| ImageRef {
                 item_id: dto.id.clone(),
-                kind: "Primary".to_string(),
+                kind: ImageKindHint::Primary,
                 tag: Some(tag.clone()),
             }),
     })
@@ -150,18 +151,23 @@ pub fn track_stream_url(server_url: &str, track_id: &str, token: &str) -> String
     )
 }
 
-fn image_ref_from_tags(dto: &BaseItemDto, kind: &str) -> Option<ImageRef> {
+fn image_ref_from_tags(dto: &BaseItemDto, kind: ImageKindHint) -> Option<ImageRef> {
     let tag = dto.image_tags.as_ref().and_then(|t| match kind {
-        "Primary" => t.primary.clone(),
-        "Backdrop" => t.backdrop.clone(),
+        ImageKindHint::Primary => t.primary.clone(),
+        ImageKindHint::Backdrop => t.backdrop.clone(),
         _ => None,
     });
     if dto.id.is_empty() {
         return None;
     }
+    let kind_label = match kind {
+        ImageKindHint::Primary => "Primary",
+        ImageKindHint::Backdrop => "Backdrop",
+        _ => "Primary",
+    };
     tag.map(|t| ImageRef {
-        item_id: format!("{kind}:{}", dto.id),
-        kind: kind.to_string(),
+        item_id: format!("{kind_label}:{}", dto.id),
+        kind,
         tag: Some(t),
     })
 }

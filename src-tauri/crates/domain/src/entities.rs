@@ -12,13 +12,34 @@ use serde::{Deserialize, Serialize};
 
 use super::ids::{AlbumId, ArtistId, GenreId, PlaylistId, TrackId};
 
+/// Hint for what an image represents. The wire format is the
+/// PascalCase variant name so the frontend can keep matching strings
+/// ("Primary", "Backdrop", "CoverArt", "Embedded"). A new variant
+/// only needs to be added here once and every mapping site picks it
+/// up automatically.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
+pub enum ImageKindHint {
+    /// The primary artwork (album cover, artist portrait).
+    #[default]
+    Primary,
+    /// A backdrop / fanart image.
+    Backdrop,
+    /// A Subsonic-style "coverArt" id; not an indication of what the
+    /// image *contains*, kept distinct for backward compat with the
+    /// upstream API.
+    CoverArt,
+    /// Embedded artwork inside the audio file itself (local source).
+    Embedded,
+}
+
 /// Reference to an image served by a provider, optionally with a tag for
 /// cache-busting.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageRef {
     pub item_id: String,
-    pub kind: String,
+    pub kind: ImageKindHint,
     pub tag: Option<String>,
 }
 
@@ -236,7 +257,7 @@ mod tests {
     fn image_ref_uses_camel_case_wire_format() {
         let image_ref = ImageRef {
             item_id: "abc".to_string(),
-            kind: "Primary".to_string(),
+            kind: ImageKindHint::Primary,
             tag: Some("tag-1".to_string()),
         };
         let json = serde_json::to_string(&image_ref).unwrap();

@@ -11,7 +11,8 @@
 //! match on the prefix (the same convention as Jellyfin).
 
 use sinfonic_domain::{
-    Album, AlbumId, Artist, ArtistId, ImageRef, Playlist, PlaylistId, Track, TrackId,
+    Album, AlbumId, Artist, ArtistId, ImageKindHint, ImageRef, Playlist, PlaylistId, Track,
+    TrackId,
 };
 
 use super::dto::{AlbumDto, ArtistDto, ChildDto, PlaylistDto, PlaylistEntryDto};
@@ -73,7 +74,7 @@ pub fn artist_from_dto(dto: &ArtistDto) -> Option<Artist> {
         favorite: dto.starred.is_some(),
         image_ref: Some(sinfonic_domain::ImageRef {
             item_id: format!("coverArt:{}", dto.id),
-            kind: "coverArt".to_string(),
+            kind: sinfonic_domain::ImageKindHint::CoverArt,
             tag: tag.or_else(|| Some(dto.id.clone())),
         }),
     })
@@ -132,7 +133,7 @@ fn playlist_image_ref(playlist_id: &str, cover_art: Option<&str>) -> Option<Imag
         .or_else(|| Some(playlist_id.to_string()));
     Some(ImageRef {
         item_id: format!("coverArt:{playlist_id}"),
-        kind: "coverArt".to_string(),
+        kind: ImageKindHint::CoverArt,
         tag,
     })
 }
@@ -194,7 +195,7 @@ fn image_ref_from_cover_art(id: &str, cover_art: Option<&str>) -> Option<ImageRe
     // server-relative path or a full URL.
     Some(ImageRef {
         item_id: format!("coverArt:{id}"),
-        kind: "coverArt".to_string(),
+        kind: ImageKindHint::CoverArt,
         tag: Some(value.to_string()),
     })
 }

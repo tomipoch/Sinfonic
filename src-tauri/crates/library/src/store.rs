@@ -1107,8 +1107,24 @@ fn image_columns(
     image_ref: Option<&sinfonic_domain::ImageRef>,
 ) -> (Option<String>, Option<String>) {
     match image_ref {
-        Some(ir) => (Some(ir.kind.clone()), ir.tag.clone()),
+        // Serialise the enum back to its PascalCase variant name so
+        // the SQLite row matches the wire string the frontend already
+        // sees. parse_image_kind in rows.rs is the inverse.
+        Some(ir) => (
+            Some(image_kind_to_str(ir.kind)),
+            ir.tag.clone(),
+        ),
         None => (None, None),
+    }
+}
+
+fn image_kind_to_str(kind: sinfonic_domain::ImageKindHint) -> String {
+    use sinfonic_domain::ImageKindHint::*;
+    match kind {
+        Primary => "Primary".to_string(),
+        Backdrop => "Backdrop".to_string(),
+        CoverArt => "CoverArt".to_string(),
+        Embedded => "Embedded".to_string(),
     }
 }
 

@@ -41,7 +41,7 @@ use lofty::probe::Probe;
 use lofty::tag::Accessor;
 use sha2::{Digest, Sha256};
 use sinfonic_domain::{
-    Album, AlbumId, Artist, ArtistId, ImageKind, ImageRef, Track, TrackId,
+    Album, AlbumId, Artist, ArtistId, ImageRef, Track, TrackId,
 };
 use thiserror::Error;
 use walkdir::WalkDir;
@@ -443,13 +443,11 @@ fn aggregate_artists(tracks: &[Track]) -> Vec<Artist> {
     artists
 }
 
-fn image_kind_label() -> String {
-    // Both Primary and Backdrop variants get the same label here —
-    // the album art cache keys on the byte prefix regardless.
-    match ImageKind::Primary {
-        ImageKind::Primary => "embedded".to_string(),
-        ImageKind::Backdrop => "embedded".to_string(),
-    }
+fn image_kind_label() -> sinfonic_domain::ImageKindHint {
+    // Both Primary and Backdrop cache buckets map to the same
+    // 'embedded' label here — the album-art cache keys on the byte
+    // prefix regardless of which kind the caller asked for.
+    sinfonic_domain::ImageKindHint::Embedded
 }
 
 #[cfg(test)]

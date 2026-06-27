@@ -10,17 +10,38 @@
 //! surfaced as `rusqlite::Error`.
 
 use rusqlite::Row;
-use sinfonic_domain::{Album, AlbumId, Artist, ArtistId, Genre, GenreId, ImageRef, Playlist, PlaylistId, Track, TrackId};
+use sinfonic_domain::{
+    Album, AlbumId, Artist, ArtistId, Genre, GenreId, ImageKindHint, ImageRef, Playlist,
+    PlaylistId, Track, TrackId,
+};
+
+/// Map a wire-string image kind (e.g. "Primary") to the closed
+/// `ImageKindHint` enum. Unknown or empty values fall back to
+/// `Primary` because every row in the cache is keyed by it and a
+/// missing kind would otherwise render a row undecodable.
+fn parse_image_kind(s: Option<String>) -> ImageKindHint {
+    match s.as_deref() {
+        Some("Primary") | None => ImageKindHint::Primary,
+        Some("Backdrop") => ImageKindHint::Backdrop,
+        Some("CoverArt") => ImageKindHint::CoverArt,
+        Some("Embedded") => ImageKindHint::Embedded,
+        Some(_) => ImageKindHint::Primary,
+    }
+}
 
 fn row_to_image_ref(row: &Row, kind_col: &str, tag_col: &str, id_col: &str) -> rusqlite::Result<Option<ImageRef>> {
-    let kind: Option<String> = row.get(kind_col)?;
-    let kind = match kind {
+    let kind_raw: Option<String> = row.get(kind_col)?;
+    let kind = match kind_raw.as_deref() {
         Some(k) if !k.is_empty() => k,
         _ => return Ok(None),
     };
     let tag: Option<String> = row.get(tag_col)?;
     let item_id: String = row.get(id_col)?;
-    Ok(Some(ImageRef { item_id, kind, tag }))
+    Ok(Some(ImageRef {
+        item_id,
+        kind: parse_image_kind(Some(kind.to_string())),
+        tag,
+    }))
 }
 
 pub fn row_to_album(row: &Row) -> rusqlite::Result<Album> {

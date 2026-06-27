@@ -19,9 +19,9 @@ pub mod source;
 
 pub use entities::{
     Album, AlbumDetail, Artist, ArtistDetail, FolderDetail, FolderEntry, FolderEntryKind, Genre,
-    GenreDetail, ImageRef, MusicFolder, Playlist, PlaylistDetail, SmartPlaylist, SmartPlaylistRule,
-    SmartPlaylistRuleField, SmartPlaylistRuleOperator, SmartPlaylistSortDirection,
-    SmartPlaylistSortField, Track,
+    GenreDetail, ImageKindHint, ImageRef, MusicFolder, Playlist, PlaylistDetail, SmartPlaylist,
+    SmartPlaylistRule, SmartPlaylistRuleField, SmartPlaylistRuleOperator,
+    SmartPlaylistSortDirection, SmartPlaylistSortField, Track,
 };
 pub use error::{DomainError, DomainResult};
 pub use events::{
