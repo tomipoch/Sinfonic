@@ -6,6 +6,9 @@
 //! `ProviderError::Unsupported` and advertise the absence in
 //! `ProviderCapabilities`.
 
+// Trait-definition crate: no `unsafe` should ever land here.
+#![deny(unsafe_code)]
+
 pub mod capabilities;
 pub mod error;
 pub mod identity;

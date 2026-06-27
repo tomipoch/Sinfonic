@@ -1,0 +1,9 @@
+# Clippy configuration for the Sinfonic Rust workspace.
+#
+# Keep this lenient. The codebase predates this file by several
+# phases and tightening `pedantic`/`nursery` here would turn every
+# green build red. We instead turn on the rule groups per crate
+# via `#![warn(...)]` attributes so each module opts in as it's
+# refactored.
+
+msrv = "1.77"
