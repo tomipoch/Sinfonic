@@ -50,6 +50,7 @@ pub enum RepeatMode {
 /// engine rewrites it when the user toggles shuffle; consumers should
 /// treat it as opaque.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum QueueEntryOrigin {
     /// Added as part of a bulk action (play album, play playlist).
     Source { shuffle_key: u64 },
@@ -78,6 +79,7 @@ impl QueueEntryOrigin {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct QueueEntry {
     pub id: QueueEntryId,
     pub track_id: TrackId,
@@ -113,6 +115,7 @@ impl QueueEntry {
 
 /// A batch replacement used by "Play album" / "Play playlist" actions.
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct QueueReplacement {
     pub track_ids: Vec<TrackId>,
     pub origin: QueueEntryOrigin,
@@ -120,6 +123,7 @@ pub struct QueueReplacement {
 
 /// Serializable view of the queue for the UI.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct QueueSnapshot {
     pub server_id: Option<ServerId>,
     pub entries: Vec<QueueEntry>,
