@@ -2470,10 +2470,7 @@ pub async fn create_smart_playlist(
     args: CreateSmartPlaylistArgs,
 ) -> Result<SmartPlaylist, String> {
     let server_id = active_server_id(&state).await;
-    let sp_id = SmartPlaylistId::new(format!("sp-{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos()));
+    let sp_id = SmartPlaylistId::new(format!("sp-{}", uuid::Uuid::new_v4()));
     let sp = SmartPlaylist {
         id: sp_id.clone(),
         name: args.name,
