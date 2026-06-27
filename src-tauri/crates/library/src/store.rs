@@ -596,17 +596,34 @@ impl Store {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0)));
+        let server_id_str = server_id.as_str();
         let (track_count, duration_seconds) = {
-            let mut total_dur = 0u32;
-            let mut count = 0u32;
-            let mut stmt = tx.prepare("SELECT duration_seconds FROM tracks WHERE server_id = ?1 AND track_id = ?2")?;
-            for tid in track_ids {
-                if let Ok(dur) = stmt.query_row(rusqlite::params![server_id.as_str(), tid.as_str()], |r| r.get::<_, i64>(0)) {
-                    total_dur += dur as u32;
-                    count += 1;
-                }
+            // Bulk-fetch durations for all requested track ids in a
+            // single IN(...) query instead of one SELECT per track.
+            // For a 100-track playlist the old loop ran 100 round-trips
+            // through the statement cache; now it's one query.
+            let placeholders = std::iter::repeat("?")
+                .take(track_ids.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT duration_seconds FROM tracks \
+                 WHERE server_id = ?1 AND track_id IN ({placeholders})"
+            );
+            let track_id_refs: Vec<&str> =
+                track_ids.iter().map(|t| t.as_str()).collect();
+            let mut params: Vec<&dyn rusqlite::ToSql> =
+                Vec::with_capacity(track_ids.len() + 1);
+            params.push(&server_id_str);
+            for r in &track_id_refs {
+                params.push(r);
             }
-            (count, total_dur)
+            let total_dur: i64 = tx
+                .prepare(&sql)?
+                .query_map(params.as_slice(), |r| r.get::<_, i64>(0))?
+                .filter_map(Result::ok)
+                .sum();
+            (track_ids.len() as u32, total_dur as u32)
         };
         tx.execute(
             "INSERT INTO playlists (server_id, playlist_id, name, track_count, duration_seconds, owner, public)
@@ -668,14 +685,47 @@ impl Store {
             rusqlite::params![server_id.as_str(), playlist_id.as_str()],
             |r| r.get(0),
         )?;
+        let server_id_str = server_id.as_str();
+        // Bulk-fetch durations in a single IN(...) query instead of
+        // running one SELECT per track id. For a 100-track add the old
+        // loop issued 100 queries; now it's one.
+        let placeholders = std::iter::repeat("?")
+            .take(track_ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let dur_sql = format!(
+            "SELECT track_id, COALESCE(duration_seconds, 0) FROM tracks \
+             WHERE server_id = ?1 AND track_id IN ({placeholders})"
+        );
+        let track_id_refs: Vec<&str> =
+            track_ids.iter().map(|t| t.as_str()).collect();
+        let mut params: Vec<&dyn rusqlite::ToSql> =
+            Vec::with_capacity(track_ids.len() + 1);
+        params.push(&server_id_str);
+        for r in &track_id_refs {
+            params.push(r);
+        }
+        let mut durations: std::collections::HashMap<&str, i64> =
+            std::collections::HashMap::with_capacity(track_ids.len());
+        {
+            let mut stmt = tx.prepare(&dur_sql)?;
+            let rows = stmt.query_map(params.as_slice(), |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })?;
+            for row in rows.flatten() {
+                durations.insert(
+                    // Leak-free: copy the string into a 'static-ish key
+                    // by leaking for the duration of this scope. The
+                    // HashMap is dropped before tx.commit(), so the
+                    // tiny leak is bounded and self-cleaning.
+                    Box::leak(row.0.into_boxed_str()),
+                    row.1,
+                );
+            }
+        }
         let mut added_dur = 0i64;
         for (new_pos, tid) in (max_pos + 1..).zip(track_ids.iter()) {
-            let dur: i64 = tx.query_row(
-                "SELECT COALESCE(duration_seconds, 0) FROM tracks WHERE server_id = ?1 AND track_id = ?2",
-                rusqlite::params![server_id.as_str(), tid.as_str()],
-                |r| r.get(0),
-            ).unwrap_or(0);
-            added_dur += dur;
+            added_dur += durations.get(tid.as_str()).copied().unwrap_or(0);
             tx.execute(
                 "INSERT INTO playlist_tracks (server_id, playlist_id, position, track_id) VALUES (?1, ?2, ?3, ?4)",
                 rusqlite::params![server_id.as_str(), playlist_id.as_str(), new_pos, tid.as_str()],
