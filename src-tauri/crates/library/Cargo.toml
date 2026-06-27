@@ -18,6 +18,7 @@ r2d2 = { workspace = true }
 r2d2_sqlite = { workspace = true }
 parking_lot = { workspace = true }
 sha2 = "0.10"
+tracing = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

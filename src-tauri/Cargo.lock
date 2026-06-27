@@ -4018,6 +4018,7 @@ dependencies = [
  "sinfonic-domain",
  "tempfile",
  "thiserror 1.0.69",
+ "tracing",
 ]
 
 [[package]]

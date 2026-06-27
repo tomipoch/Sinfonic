@@ -37,12 +37,12 @@ r2d2_sqlite = "0.24"
 # Secrets
 keyring = "3"
 
-# Synchronisation primitives (faster, non-poisoning Mutexes for hot paths)
-parking_lot = "0.12"
-
 # Structured logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Synchronisation primitives (faster, non-poisoning Mutexes for hot paths)
+parking_lot = "0.12"
 
 # Filesystem (Phase 8 — local-files provider)
 walkdir = "2"
