@@ -216,6 +216,34 @@ impl AlbumArtCache {
             .map(|entries| entries.iter().map(|e| e.size_bytes).sum())
     }
 
+    /// Removes all cache entries belonging to `provider` whose
+    /// `image_id` is NOT in `active_image_ids`. Returns the number
+    /// of entries evicted. This is used after a local-library
+    /// rescan to prune art for albums that no longer exist on disk
+    /// (or for which the file no longer carries an embedded picture).
+    pub fn remove_orphans(
+        &self,
+        provider: &str,
+        active_image_ids: &std::collections::HashSet<String>,
+    ) -> LibraryResult<usize> {
+        let _guard = self.inner.lock();
+        self.ensure_root_locked()?;
+
+        let entries = self.collect_entries()?;
+        let mut removed = 0;
+
+        for entry in entries {
+            if entry.meta.provider == provider
+                && !active_image_ids.contains(&entry.meta.image_id)
+            {
+                self.remove_entry(&entry.hex)?;
+                removed += 1;
+            }
+        }
+
+        Ok(removed)
+    }
+
     fn ensure_root(&self) -> LibraryResult<()> {
         let _guard = self.inner.lock();
         self.ensure_root_locked()

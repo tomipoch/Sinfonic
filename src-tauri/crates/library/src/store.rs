@@ -71,22 +71,25 @@ impl Store {
     // ─── Server registration ─────────────────────────────────────
 
     /// Upsert a server row. Used by the auth flow once login
-    /// succeeds.
+    /// succeeds. `username` is optional (Jellyfin doesn't reuse it,
+    /// Subsonic requires it on every request).
     pub fn upsert_server(
         &self,
         server_id: &ServerId,
         kind: &str,
         name: &str,
         base_url: &str,
+        username: Option<&str>,
     ) -> LibraryResult<()> {
         let conn = self.connection()?;
         conn.execute(
-            "INSERT INTO servers (server_id, kind, name, base_url) VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO servers (server_id, kind, name, base_url, username) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(server_id) DO UPDATE SET
                  kind = excluded.kind,
                  name = excluded.name,
-                 base_url = excluded.base_url",
-            rusqlite::params![server_id.as_str(), kind, name, base_url],
+                 base_url = excluded.base_url,
+                 username = excluded.username",
+            rusqlite::params![server_id.as_str(), kind, name, base_url, username],
         )?;
         Ok(())
     }
@@ -117,7 +120,64 @@ impl Store {
             "DELETE FROM servers WHERE server_id = ?1",
             rusqlite::params![server_id.as_str()],
         )?;
+        // Drop any "last active" pointer that targeted this server so
+        // the next launch doesn't try to restore a deleted connection.
+        self.clear_preference_tx(&tx, "last_active_server_id")?;
         tx.commit()?;
+        Ok(())
+    }
+
+    // ─── Preferences ─────────────────────────────────────────────
+
+    /// Read a string value from the `library_meta` table. Returns
+    /// `None` if the key has never been written. Used for things like
+    /// the last-active server pointer that must survive across
+    /// launches but doesn't belong on a row in a domain table.
+    pub fn get_preference(&self, key: &str) -> LibraryResult<Option<String>> {
+        let conn = self.connection()?;
+        let mut stmt = conn.prepare("SELECT value FROM library_meta WHERE key = ?1")?;
+        let mut rows = stmt.query([key])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Upsert a key/value pair in `library_meta`. Pass `None` to clear
+    /// the entry; the row is removed rather than nulled so a subsequent
+    /// `get_preference` returns `None` (matching the "never written"
+    /// semantics).
+    pub fn set_preference(&self, key: &str, value: Option<&str>) -> LibraryResult<()> {
+        let mut conn = self.connection()?;
+        let tx = conn.transaction()?;
+        match value {
+            Some(v) => {
+                tx.execute(
+                    "INSERT INTO library_meta (key, value) VALUES (?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    rusqlite::params![key, v],
+                )?;
+            }
+            None => {
+                tx.execute(
+                    "DELETE FROM library_meta WHERE key = ?1",
+                    rusqlite::params![key],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn clear_preference_tx(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        key: &str,
+    ) -> LibraryResult<()> {
+        tx.execute(
+            "DELETE FROM library_meta WHERE key = ?1",
+            rusqlite::params![key],
+        )?;
         Ok(())
     }
 
@@ -344,6 +404,42 @@ impl Store {
         Ok(PagedResponse::new(items, total as usize))
     }
 
+    // ─── Genres ──────────────────────────────────────────────────
+
+    /// Distinct genres for a server, computed from the
+    /// `album_genres` join table. Each row is one genre string with
+    /// the count of distinct albums and the count of distinct tracks
+    /// that list it. Ordered alphabetically (case-insensitive).
+    pub fn list_genres(
+        &self,
+        server_id: &ServerId,
+    ) -> LibraryResult<Vec<sinfonic_domain::Genre>> {
+        let conn = self.connection()?;
+        // album_count: distinct albums that have this genre.
+        // track_count: distinct tracks on those albums (we don't
+        //   carry per-track genre tags in the schema today, so the
+        //   count is the sum of track_count across the genre's
+        //   albums. Close enough for the genre pills UI).
+        let mut stmt = conn.prepare(
+            "SELECT ag.genre AS name,
+                    COUNT(DISTINCT ag.album_id) AS album_count,
+                    COALESCE(SUM(a.track_count), 0) AS track_count
+             FROM album_genres ag
+             LEFT JOIN albums a
+               ON a.server_id = ag.server_id AND a.album_id = ag.album_id
+             WHERE ag.server_id = ?1
+             GROUP BY ag.genre COLLATE NOCASE
+             ORDER BY ag.genre COLLATE NOCASE",
+        )?;
+        let items = stmt
+            .query_map(
+                rusqlite::params![server_id.as_str()],
+                rows::row_to_genre,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(items)
+    }
+
     pub fn list_album_tracks(
         &self,
         server_id: &ServerId,
@@ -379,16 +475,19 @@ impl Store {
         let mut conn = self.connection()?;
         conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
         let tx = conn.transaction()?;
+        let (image_kind, image_tag) = image_columns(playlist.image_ref.as_ref());
 
         tx.execute(
-            "INSERT INTO playlists (server_id, playlist_id, name, track_count, duration_seconds, owner, public)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO playlists (server_id, playlist_id, name, track_count, duration_seconds, owner, public, image_kind, image_tag)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(server_id, playlist_id) DO UPDATE SET
                  name = excluded.name,
                  track_count = excluded.track_count,
                  duration_seconds = excluded.duration_seconds,
                  owner = excluded.owner,
-                 public = excluded.public",
+                 public = excluded.public,
+                 image_kind = excluded.image_kind,
+                 image_tag = excluded.image_tag",
             rusqlite::params![
                 server_id.as_str(),
                 playlist.id.as_str(),
@@ -397,6 +496,8 @@ impl Store {
                 playlist.duration_seconds as i64,
                 playlist.owner,
                 playlist.public as i64,
+                image_kind,
+                image_tag,
             ],
         )?;
 
@@ -423,23 +524,14 @@ impl Store {
     pub fn list_playlists(&self, server_id: &ServerId) -> LibraryResult<Vec<Playlist>> {
         let conn = self.connection()?;
         let mut stmt = conn.prepare(
-            "SELECT playlist_id, name, track_count, duration_seconds, owner, public
+            "SELECT playlist_id, name, track_count, duration_seconds, owner, public,
+                    image_kind, image_tag
              FROM playlists
              WHERE server_id = ?1
              ORDER BY name COLLATE NOCASE",
         )?;
         let items = stmt
-            .query_map(rusqlite::params![server_id.as_str()], |row| {
-                let id: String = row.get("playlist_id")?;
-                Ok(Playlist {
-                    id: PlaylistId::new(id),
-                    name: row.get("name")?,
-                    track_count: row.get("track_count")?,
-                    duration_seconds: row.get("duration_seconds")?,
-                    owner: row.get("owner")?,
-                    public: row.get::<_, i64>("public")? != 0,
-                })
-            })?
+            .query_map(rusqlite::params![server_id.as_str()], rows::row_to_playlist)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(items)
     }
@@ -1027,6 +1119,7 @@ mod tests {
                 duration_seconds: 0,
                 owner: Some("me".into()),
                 public: false,
+                image_ref: None,
             },
             track_ids.into_iter().map(TrackId::new).collect(),
         )
@@ -1239,6 +1332,47 @@ mod tests {
         let page = store.list_artists(&s, 0, 10).unwrap();
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].name, "A v2");
+    }
+
+    /// Regression for the v4 schema fix: when a resync evicts a
+    /// stale artist, the `ON DELETE SET NULL` action on the
+    /// `albums.artist_id` FK must only NULL `artist_id` —
+    /// NOT `server_id`. The pre-v4 composite FK tripped this and
+    /// every resync crashed with
+    /// `NOT NULL constraint failed: albums.server_id` as soon as
+    /// any artist had referencing albums.
+    #[test]
+    fn replace_artists_evicting_stale_does_not_fail_when_albums_reference_them() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+
+        // First sync: 1 artist + 1 album that references it.
+        store
+            .replace_artists(&s, &[artist("ar-1", "Radiohead")])
+            .unwrap();
+        let mut a = album("al-1", "OK Computer", "Radiohead");
+        a.artist_id = Some(ArtistId::new("ar-1"));
+        store.replace_albums(&s, &[a]).unwrap();
+
+        // Second sync: the artist is no longer in the list. Pre-v4
+        // this raised `NOT NULL constraint failed: albums.server_id`
+        // because the composite FK SET NULL tried to NULL both
+        // FK columns. Post-v4 only `artist_id` is NULLed.
+        store.replace_artists(&s, &[]).expect(
+            "replace_artists must succeed when evicting a stale artist \
+             whose albums still reference it",
+        );
+
+        let page = store.list_albums(&s, 0, 10).unwrap();
+        assert_eq!(page.total, 1, "album row must be preserved");
+        assert!(
+            page.items[0].artist_id.is_none(),
+            "FK SET NULL must NULL only artist_id; server_id must remain set"
+        );
+        assert_eq!(
+            page.items[0].artist, "Radiohead",
+            "display name on the album row must survive the artist eviction"
+        );
     }
 
     #[test]

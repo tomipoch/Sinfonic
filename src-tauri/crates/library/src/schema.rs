@@ -14,7 +14,7 @@
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when appending a migration.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// One versioned schema change.
 #[derive(Clone, Copy, Debug)]
@@ -36,6 +36,21 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "add_year_and_smart_playlists",
         sql: MIGRATION_V2,
     },
+    Migration {
+        version: 3,
+        name: "servers_username",
+        sql: MIGRATION_V3,
+    },
+    Migration {
+        version: 4,
+        name: "albums_fk_artist_id_only",
+        sql: MIGRATION_V4,
+    },
+    Migration {
+        version: 5,
+        name: "playlists_cover",
+        sql: MIGRATION_V5,
+    },
 ];
 
 const INITIAL_SCHEMA: &str = r#"
@@ -53,7 +68,15 @@ CREATE TABLE servers (
 
 CREATE TABLE artists (
     server_id   TEXT NOT NULL,
-    artist_id   TEXT NOT NULL,
+    -- `artist_id` is globally unique (the Subsonic / Jellyfin
+    -- mapping layer prepends `artist-`, so e.g. `artist-ar-1`
+    -- cannot collide across servers). The `UNIQUE` constraint
+    -- lets the `albums.artist_id` FK reference it directly —
+    -- SQLite requires the FK target to be uniquely keyed, and
+    -- the composite PK on `(server_id, artist_id)` is not enough
+    -- on its own. See MIGRATION_V4 for the matching constraint
+    -- added to pre-existing databases.
+    artist_id   TEXT NOT NULL UNIQUE,
     name        TEXT NOT NULL,
     album_count INTEGER NOT NULL DEFAULT 0,
     track_count INTEGER NOT NULL DEFAULT 0,
@@ -77,7 +100,16 @@ CREATE TABLE albums (
     image_kind       TEXT,
     image_tag        TEXT,
     PRIMARY KEY (server_id, album_id),
-    FOREIGN KEY (server_id, artist_id) REFERENCES artists(server_id, artist_id)
+    -- FK on `artist_id` alone, not `(server_id, artist_id)`. Artist
+    -- IDs are globally unique (the Subsonic/Jellyfin mapping layer
+    -- prepends `artist-`, so e.g. `artist-ar-1` cannot collide across
+    -- servers), so referencing `artist_id` is sufficient. The
+    -- earlier composite FK triggered `ON DELETE SET NULL` on both
+    -- columns of the FK — including `server_id`, which is `NOT
+    -- NULL` — and re-syncs that deleted stale artists crashed with
+    -- `NOT NULL constraint failed: albums.server_id`. See
+    -- MIGRATION_V4 below.
+    FOREIGN KEY (artist_id) REFERENCES artists(artist_id)
         ON DELETE SET NULL
 );
 CREATE INDEX idx_albums_server_title ON albums(server_id, title COLLATE NOCASE);
@@ -186,6 +218,109 @@ CREATE TABLE smart_playlists (
 CREATE INDEX idx_smart_playlists_server ON smart_playlists(server_id);
 "#;
 
+// Persist the username alongside each server row so the active
+// provider can be reconstructed from keyring + SQLite alone
+// (Subsonic needs the username on every request to sign the auth
+// header; storing it on the row avoids a separate preferences
+// table for one column).
+const MIGRATION_V3: &str = r#"
+ALTER TABLE servers ADD COLUMN username TEXT;
+"#;
+
+// Rebuild `albums` with an FK on `artist_id` only, instead of the
+// composite `(server_id, artist_id)` we shipped in v1. The
+// composite form is the textbook SQLite recipe for "scope an FK
+// alongside its parent's PK", but it interacts badly with
+// `ON DELETE SET NULL`: per the SQLite docs, `SET NULL` on a
+// composite FK NULLs **every** column in the FK, including
+// `server_id` — which is `NOT NULL` on `albums`. That made every
+// resync crash with `NOT NULL constraint failed: albums.server_id`
+// the moment `replace_artists` tried to evict a stale artist that
+// still had albums referencing it.
+//
+// The rebuild follows SQLite's standard "rebuild table to change
+// FK" recipe: build a new table with the desired schema, copy the
+// data over, drop the old table, rename the new one, recreate the
+// indexes. `album_genres` references `albums(server_id, album_id)`
+// via `ON DELETE CASCADE`; the rename preserves the table name so
+// the FK still resolves. `library_fts` has no FK so it is not
+// affected.
+//
+// We rebuild `artists` first to mark `artist_id UNIQUE`. SQLite
+// requires the target of an FK to have a `UNIQUE` or `PRIMARY KEY`
+// constraint — the v1 composite PK on `(server_id, artist_id)` is
+// not enough. Artist IDs are globally unique already (the
+// Subsonic / Jellyfin mapping layer prepends `artist-` so e.g.
+// `artist-ar-1` cannot collide across servers), so adding the
+// constraint is a no-op for valid data and fails the migration
+// loudly for corrupt data.
+const MIGRATION_V4: &str = r#"
+CREATE TABLE artists_new (
+    server_id   TEXT NOT NULL,
+    artist_id   TEXT NOT NULL UNIQUE,
+    name        TEXT NOT NULL,
+    album_count INTEGER NOT NULL DEFAULT 0,
+    track_count INTEGER NOT NULL DEFAULT 0,
+    favorite    INTEGER NOT NULL DEFAULT 0,
+    image_kind  TEXT,
+    image_tag   TEXT,
+    PRIMARY KEY (server_id, artist_id)
+);
+INSERT INTO artists_new (
+    server_id, artist_id, name, album_count, track_count,
+    favorite, image_kind, image_tag
+)
+SELECT
+    server_id, artist_id, name, album_count, track_count,
+    favorite, image_kind, image_tag
+FROM artists;
+DROP TABLE artists;
+ALTER TABLE artists_new RENAME TO artists;
+CREATE INDEX idx_artists_server_name ON artists(server_id, name COLLATE NOCASE);
+
+CREATE TABLE albums_new (
+    server_id        TEXT NOT NULL,
+    album_id         TEXT NOT NULL,
+    title            TEXT NOT NULL,
+    artist           TEXT NOT NULL,
+    artist_id        TEXT,
+    year             INTEGER,
+    track_count      INTEGER NOT NULL DEFAULT 0,
+    duration_seconds INTEGER NOT NULL DEFAULT 0,
+    favorite         INTEGER NOT NULL DEFAULT 0,
+    image_kind       TEXT,
+    image_tag        TEXT,
+    PRIMARY KEY (server_id, album_id),
+    FOREIGN KEY (artist_id) REFERENCES artists(artist_id)
+        ON DELETE SET NULL
+);
+INSERT INTO albums_new (
+    server_id, album_id, title, artist, artist_id,
+    year, track_count, duration_seconds, favorite, image_kind, image_tag
+)
+SELECT
+    server_id, album_id, title, artist, artist_id,
+    year, track_count, duration_seconds, favorite, image_kind, image_tag
+FROM albums;
+DROP TABLE albums;
+ALTER TABLE albums_new RENAME TO albums;
+CREATE INDEX idx_albums_server_title  ON albums(server_id, title COLLATE NOCASE);
+CREATE INDEX idx_albums_server_artist ON albums(server_id, artist_id);
+"#;
+
+/// V5: add cover-art columns to the `playlists` table so the cached
+/// playlist metadata carries an `image_ref`. Existing rows get
+/// `NULL` for both columns, which maps to `image_ref = None` in the
+/// domain type.
+///
+/// V1's `INITIAL_SCHEMA` no longer creates these columns (so a fresh
+/// install hits V5's ALTERs once). Existing databases created before
+/// V5 will get the columns added here without any data loss.
+const MIGRATION_V5: &str = r#"
+ALTER TABLE playlists ADD COLUMN image_kind TEXT;
+ALTER TABLE playlists ADD COLUMN image_tag  TEXT;
+"#;
+
 /// Apply every migration in `MIGRATIONS` that has not been applied
 /// yet, recording each in `schema_migrations` inside a single
 /// transaction. Idempotent: running twice does nothing on the second
@@ -272,7 +407,7 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(count, 2);
+        assert_eq!(count, 5);
     }
 
     #[test]
@@ -313,5 +448,49 @@ mod tests {
             [],
         );
         assert!(result.is_err());
+    }
+
+    /// Regression for the v4 migration: deleting an artist whose
+    /// albums still reference it used to crash with
+    /// `NOT NULL constraint failed: albums.server_id`. The v1 FK
+    /// `(server_id, artist_id) ON DELETE SET NULL` is a composite
+    /// FK; SQLite's FK action semantics NULL **every** column in
+    /// the child FK on parent delete — including `server_id`,
+    /// which is `NOT NULL` on `albums`. After v4 the FK is on
+    /// `artist_id` alone, so SET NULL only touches `artist_id`.
+    ///
+    /// Asserts the migration ran (albums has the new single-column
+    /// FK) and that an UPDATE with `server_id = NULL` would still
+    /// be rejected — i.e. the column is still NOT NULL.
+    #[test]
+    fn albums_albums_fk_is_artist_id_only_after_v4() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+
+        // The FK list for `albums` should reference `artists(artist_id)`
+        // and nothing else. SQLite stores FK definitions in
+        // `pragma foreign_key_list(albums)`.
+        let mut stmt = conn
+            .prepare("SELECT \"from\", \"table\", \"to\" FROM pragma_foreign_key_list('albums')")
+            .unwrap();
+        let fks: Vec<(String, String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert_eq!(
+            fks,
+            vec![("artist_id".to_string(), "artists".to_string(), "artist_id".to_string())],
+            "albums FK must reference artists(artist_id) after v4 (was artists(server_id, artist_id))"
+        );
+
+        // Belt-and-braces: `server_id` must still be NOT NULL on albums.
+        let result = conn.execute(
+            "INSERT INTO albums (server_id, album_id, title, artist, artist_id) \
+             VALUES (NULL, 'a-1', 'A', 'A', NULL)",
+            [],
+        );
+        assert!(result.is_err(), "albums.server_id must remain NOT NULL");
     }
 }
