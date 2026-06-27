@@ -741,13 +741,9 @@ fn urlencoded(s: &str) -> String {
 }
 
 fn strip_prefix<'a>(s: &'a str, prefix: &str) -> &'a str {
-    s.strip_prefix(prefix).unwrap_or(s)
+    sinfonic_source::strip_prefix(s, prefix)
 }
 
 fn split_image_id(item_id: &str) -> (&str, &str) {
-    if let Some((kind, id)) = item_id.split_once(':') {
-        (kind, id)
-    } else {
-        ("", item_id)
-    }
+    sinfonic_source::split_image_id(item_id)
 }

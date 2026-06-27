@@ -11,6 +11,7 @@ pub mod error;
 pub mod identity;
 pub mod provider;
 pub mod types;
+pub mod util;
 
 pub use capabilities::{Capabilities, ProviderCapabilities};
 pub use error::{ProviderError, ProviderResult};
@@ -21,3 +22,4 @@ pub use types::{
     ImageBytes, ImageMetadata, ImageRequest, Lyrics, PlaybackReport, PlaybackReportKind,
     RandomTrackRequest, StreamRequest,
 };
+pub use util::{slugify, split_image_id, strip_prefix};
