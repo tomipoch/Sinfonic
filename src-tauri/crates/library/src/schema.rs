@@ -13,8 +13,16 @@
 
 use rusqlite::Connection;
 
-/// Current schema version. Bump this when appending a migration.
-pub const SCHEMA_VERSION: u32 = 4;
+/// Current schema version. Always equal to the highest version number
+/// present in [`MIGRATIONS`]; checked at runtime so callers don't have
+/// to trust a hand-bumped constant.
+pub fn current_schema_version() -> u32 {
+    MIGRATIONS
+        .iter()
+        .map(|m| m.version)
+        .max()
+        .expect("MIGRATIONS must not be empty")
+}
 
 /// One versioned schema change.
 #[derive(Clone, Copy, Debug)]
