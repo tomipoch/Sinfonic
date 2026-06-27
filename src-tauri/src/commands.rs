@@ -149,7 +149,7 @@ pub async fn get_album_detail(
     state: SharedState<'_>,
 ) -> Result<Option<AlbumDetail>, String> {
     let server_id = active_server_id(&state).await;
-    let parsed = AlbumId::new(album_id);
+    let parsed = AlbumId::try_new(album_id).map_err(|e| e.to_string())?;
     let guard = state.lock().await;
     let album = guard
         .library
@@ -175,7 +175,7 @@ pub async fn get_album(
     state: SharedState<'_>,
 ) -> Result<Option<Album>, String> {
     let server_id = active_server_id(&state).await;
-    let parsed = AlbumId::new(album_id);
+    let parsed = AlbumId::try_new(album_id).map_err(|e| e.to_string())?;
     let guard = state.lock().await;
     let album = guard
         .library
@@ -1436,7 +1436,7 @@ pub async fn provider_set_active(
     state: SharedState<'_>,
 ) -> Result<ConnectedServer, String> {
     eprintln!("[DEBUG provider_set_active] called with server_id = {}", server_id);
-    let parsed = ServerId::new(server_id.clone());
+    let parsed = ServerId::try_new(server_id.clone()).map_err(|e| e.to_string())?;
     let (kind, base_url, name, username) = lookup_server(&state, &parsed).await?;
     eprintln!("[DEBUG provider_set_active] looked up server: kind={}, name={}", kind, name);
 
@@ -2503,7 +2503,7 @@ pub async fn delete_smart_playlist(
     sp_id: String,
 ) -> Result<(), String> {
     let server_id = active_server_id(&state).await;
-    let id = SmartPlaylistId::new(sp_id);
+    let id = SmartPlaylistId::try_new(sp_id).map_err(|e| e.to_string())?;
     let guard = state.lock().await;
     guard
         .library
@@ -2517,7 +2517,7 @@ pub async fn evaluate_smart_playlist(
     sp_id: String,
 ) -> Result<Vec<Track>, String> {
     let server_id = active_server_id(&state).await;
-    let id = SmartPlaylistId::new(sp_id);
+    let id = SmartPlaylistId::try_new(sp_id).map_err(|e| e.to_string())?;
     let guard = state.lock().await;
     let playlists = guard
         .library
