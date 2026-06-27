@@ -3,6 +3,7 @@
 // when "Add new server..." is selected.
 
 import { useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Add01Icon,
   HardDriveIcon,
@@ -14,6 +15,10 @@ import { HugeiconsIcon } from "@hugeicons/react";
 
 import { LoginDialog } from "@/components/dialogs/LoginDialog";
 import { useServerStore } from "@/stores/serverStore";
+import { extractError } from "@/lib/errors";
+import { makeLogger } from "@/utils/log";
+
+const log = makeLogger("SourceSelector");
 
 const KIND_ICONS = {
   jellyfin: Link04Icon,
@@ -22,16 +27,37 @@ const KIND_ICONS = {
 } as const;
 
 export function SourceSelector() {
+  const navigate = useNavigate();
   const servers = useServerStore((s) => s.servers);
   const activeServerId = useServerStore((s) => s.activeServerId);
   const activeServer = servers.find((s) => s.id === activeServerId);
+  const setActive = useServerStore((s) => s.setActive);
 
   const [open, setOpen] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [switching, setSwitching] = useState<string | null>(null);
+  const [switchError, setSwitchError] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const handleSelectServer = (_serverId: string) => {
+  const handleSelectServer = async (serverId: string) => {
     setOpen(false);
+    if (serverId === activeServerId) return;
+    log.log("switching source", serverId);
+    setSwitching(serverId);
+    setSwitchError(null);
+    try {
+      await setActive(serverId);
+      // Hand off to the loading route so the user sees the cache /
+      // sync progress for the newly-active source instead of a
+      // blank intermediate state.
+      void navigate("/loading", { replace: true });
+    } catch (e) {
+      const msg = extractError(e, "could not switch source");
+      log.error("switch failed", serverId, msg);
+      setSwitchError(msg);
+    } finally {
+      setSwitching(null);
+    }
   };
 
   const handleAddNew = () => {
@@ -85,12 +111,14 @@ export function SourceSelector() {
               <ul role="listbox" className="py-1">
                 {servers.map((server) => {
                   const isActive = server.id === activeServerId;
+                  const isSwitching = switching === server.id;
                   return (
                     <li key={server.id}>
                       <button
                         type="button"
+                        disabled={isSwitching}
                         onClick={() => handleSelectServer(server.id)}
-                        className="flex w-full items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-muted"
+                        className="flex w-full items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-muted disabled:opacity-60"
                       >
                         {isActive ? (
                           <span className="size-2 rounded-full bg-primary" />
@@ -106,7 +134,12 @@ export function SourceSelector() {
                         <span className="min-w-0 flex-1 truncate text-foreground">
                           {server.name}
                         </span>
-                        {isActive && (
+                        {isSwitching && (
+                          <span className="text-[11px] text-muted-foreground">
+                            switching…
+                          </span>
+                        )}
+                        {isActive && !isSwitching && (
                           <HugeiconsIcon
                             icon={Tick02Icon}
                             size={12}
@@ -137,6 +170,11 @@ export function SourceSelector() {
                   </button>
                 </li>
               </ul>
+              {switchError && (
+                <div className="border-t border-border px-3 py-2 text-[11px] text-destructive">
+                  {switchError}
+                </div>
+              )}
             </div>
           </>
         )}

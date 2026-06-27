@@ -2,24 +2,32 @@
 //
 // Structure (expanded):
 //   Home (direct link with icon)
-//   BIBLIOTECA  (collapsible header)
-//     Canciones, Álbumes, Artistas, Géneros
-//   PLAYLISTS   (collapsible header)
-//     Todas las playlists, Canciones favoritas, Smart Playlists
+//   LIBRARY    (collapsible header)
+//     Songs, Albums, Artists, Genres
+//   PLAYLISTS  (collapsible header)
+//     All Playlists, Favorite Songs, Smart Playlists,
+//     <one entry per user playlist from the active server>
 //
 // Structure (collapsed):
 //   Icon-only rail. Items without icons are hidden.
 //   Headers become invisible but the row spacing is preserved so the
 //   icon column stays aligned with the expanded layout.
+//
+// Dynamic playlist entries come from `usePlaylistsStore`, which is
+// fed by the same `playlists_get` IPC that the full-page PlaylistsView
+// uses. The store is fetched on mount (and on every server switch);
+// a refresh-on-sync listener in `Layout` keeps it current.
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { NavLink } from "react-router-dom";
+import { useShallow } from "zustand/react/shallow";
 import {
   Album01Icon,
   AlbumIcon,
   ArrowDown01Icon,
   ArrowRight01Icon,
   Home01Icon,
+  MusicNote01Icon,
   SparklesIcon,
   StarIcon,
   TagIcon,
@@ -27,6 +35,9 @@ import {
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { cn } from "@/lib/cn";
+
+import { usePlaylistsStore } from "@/stores/playlistsStore";
+import { useServerStore } from "@/stores/serverStore";
 
 import { SourceSelector } from "./SourceSelector";
 
@@ -45,26 +56,17 @@ type Section = {
 
 const HOME_ITEM: NavItem = { to: "/", label: "Home", end: true, icon: Home01Icon };
 
-const SECTIONS: Section[] = [
-  {
-    title: "Library",
-    defaultExpanded: true,
-    items: [
-      { to: "/library/songs", label: "Songs", icon: AlbumIcon },
-      { to: "/library/albums", label: "Albums", icon: Album01Icon },
-      { to: "/library/artists", label: "Artists", icon: UserIcon },
-      { to: "/library/genres", label: "Genres", icon: TagIcon },
-    ],
-  },
-  {
-    title: "Playlists",
-    defaultExpanded: true,
-    items: [
-      { to: "/playlists", label: "All Playlists", icon: Album01Icon },
-      { to: "/favorites", label: "Favorite Songs", icon: StarIcon },
-      { to: "/smart-playlists", label: "Smart Playlists", icon: SparklesIcon },
-    ],
-  },
+const LIBRARY_ITEMS: NavItem[] = [
+  { to: "/songs", label: "Songs", icon: AlbumIcon },
+  { to: "/albums", label: "Albums", icon: Album01Icon },
+  { to: "/artists", label: "Artists", icon: UserIcon },
+  { to: "/genres", label: "Genres", icon: TagIcon },
+];
+
+const PLAYLISTS_STATIC_ITEMS: NavItem[] = [
+  { to: "/playlists", label: "All Playlists", icon: Album01Icon },
+  { to: "/favorites", label: "Favorite Songs", icon: StarIcon },
+  { to: "/smart-playlists", label: "Smart Playlists", icon: SparklesIcon },
 ];
 
 type ItemLinkProps = {
@@ -101,7 +103,7 @@ function ItemLink({ item, collapsed }: ItemLinkProps) {
           className="shrink-0"
         />
       )}
-      {!collapsed && item.label}
+      {!collapsed && <span className="truncate">{item.label}</span>}
     </NavLink>
   );
 }
@@ -158,6 +160,47 @@ type Props = {
 };
 
 export function Sidebar({ collapsed = false }: Props) {
+  const activeServerId = useServerStore((s) => s.activeServerId);
+  // `useShallow` so the Sidebar doesn't re-render on every store
+  // mutation (e.g. detail loading/error flips in PlaylistsView).
+  const { playlists, loadPlaylists } = usePlaylistsStore(
+    useShallow((s) => ({
+      playlists: s.playlists,
+      loadPlaylists: s.loadPlaylists,
+    })),
+  );
+
+  // Fetch the playlist list when an active server is present, and
+  // reset to empty when the user logs out. The post-sync refresh
+  // lives in `Layout` so it survives view changes.
+  useEffect(() => {
+    if (activeServerId) {
+      void loadPlaylists();
+    } else {
+      // Drop the cache so a new login doesn't briefly show the
+      // previous server's playlists.
+      usePlaylistsStore.setState({ playlists: [] });
+    }
+  }, [activeServerId, loadPlaylists]);
+
+  const sections = useMemo<Section[]>(() => {
+    const userPlaylistItems: NavItem[] = [...playlists]
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
+      .map((pl) => ({
+        to: `/playlists/${encodeURIComponent(pl.id)}`,
+        label: pl.name,
+        icon: MusicNote01Icon,
+      }));
+    return [
+      { title: "Library", defaultExpanded: true, items: LIBRARY_ITEMS },
+      {
+        title: "Playlists",
+        defaultExpanded: true,
+        items: [...PLAYLISTS_STATIC_ITEMS, ...userPlaylistItems],
+      },
+    ];
+  }, [playlists]);
+
   return (
     <aside
       className={cn(
@@ -169,7 +212,7 @@ export function Sidebar({ collapsed = false }: Props) {
         <ItemLink item={HOME_ITEM} collapsed={collapsed} />
       </nav>
 
-      {SECTIONS.map((section) => (
+      {sections.map((section) => (
         <SectionBlock key={section.title} section={section} collapsed={collapsed} />
       ))}
 
