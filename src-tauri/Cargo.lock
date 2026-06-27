@@ -3924,9 +3924,11 @@ name = "sinfonic"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures",
  "hex",
  "md5",
  "parking_lot",
+ "rusqlite",
  "serde",
  "serde_json",
  "sinfonic-domain",
@@ -4080,6 +4082,7 @@ dependencies = [
  "serde_json",
  "sinfonic-domain",
  "sinfonic-source",
+ "tauri",
  "thiserror 1.0.69",
  "tokio",
  "url",
