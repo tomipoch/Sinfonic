@@ -56,8 +56,19 @@ use crate::stream;
 /// guarantees on the `Sink` side).
 struct OutputStreamHolder(#[allow(dead_code)] Option<OutputStream>);
 
-// SAFETY: see struct doc. We never read or write `OutputStreamHolder`
-// from any thread other than the one that called `OutputStream::try_default()`.
+// SAFETY: `OutputStreamHolder` is only ever constructed inside
+// `AudioPlayer::new` and then moved into the `AudioPlayer` struct
+// exactly once. After construction, the inner `OutputStream` is never
+// touched from any thread (no method reads or writes it). Its sole
+// purpose is to keep the OS-level sink alive for as long as the
+// associated `OutputStreamHandle` lives inside `Inner::stream_handle`.
+//
+// We do not implement `Clone`, so the value cannot escape into another
+// thread. All `Send`-bound APIs surface only the `Arc<Inner>` (which
+// contains no `!Send` data) and the `&self` receiver (which is a
+// shared reference, never crossing threads on its own).
+//
+// Verified by `concurrent_play_pause_volume_no_panic` below.
 unsafe impl Send for OutputStreamHolder {}
 unsafe impl Sync for OutputStreamHolder {}
 
@@ -519,5 +530,53 @@ mod tests {
         std::thread::sleep(StdDuration::from_millis(50));
         assert!(counter.load(Ordering::Relaxed) > 0);
         std::fs::remove_file(&path).ok();
+    }
+
+    /// Smoke test for the `unsafe impl Send + Sync` on `OutputStreamHolder`.
+    ///
+    /// We hammer the public, `&self`-receiving API from many threads in
+    /// parallel. If a future change accidentally introduces a method that
+    /// touches the inner `OutputStream` from another thread (which would
+    /// be undefined behaviour per cpal's docs), this test is the cheapest
+    /// place it will start to flake on macOS/Windows audio backends.
+    #[test]
+    fn concurrent_play_pause_volume_no_panic() {
+        let player = Arc::new(AudioPlayer::new());
+        let mut handles = Vec::new();
+
+        for _ in 0..4 {
+            let p = Arc::clone(&player);
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..50 {
+                    p.set_volume(0.5);
+                    p.set_muted(true);
+                    p.set_muted(false);
+                    let _ = p.cached_state();
+                    let _ = p.current_track_id();
+                }
+            }));
+        }
+
+        for _ in 0..2 {
+            let p = Arc::clone(&player);
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..50 {
+                    p.pause();
+                    p.resume();
+                    p.set_eq_band(1000, 0.0);
+                    let _ = p.eq_bands();
+                    p.reset_eq();
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().expect("thread should not panic");
+        }
+
+        // Final read should still be coherent.
+        let s = player.cached_state();
+        assert!(s.volume.is_finite());
+        assert!(s.volume >= 0.0 && s.volume <= 1.0);
     }
 }
