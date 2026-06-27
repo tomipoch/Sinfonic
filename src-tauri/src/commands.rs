@@ -1427,6 +1427,105 @@ async fn lookup_server(
     .map_err(|e| format!("server not found: {e}"))
 }
 
+/// Provider-construction helpers shared between the live login
+/// (`jellyfin_login` / `subsonic_login`), the in-app switch
+/// (`provider_set_active`) and the startup restore
+/// (`try_restore_provider`). Centralising them avoids the previous
+/// three-way duplication where adding a new field to e.g.
+/// `JellyfinSession` meant editing three call sites.
+///
+/// Each helper takes everything it needs by value/reference and
+/// returns either an `Arc<dyn MusicProvider>` ready to install, or
+/// an `Err(String)` with a UI-friendly message.
+mod provider_factory {
+    use super::*;
+
+    /// Shared state handle accepted by both Tauri command context
+    /// (`SharedState<'_>`) and the raw `Arc<Mutex<AppState>>` used by
+    /// `try_restore_provider`. We deref to the inner `Arc` for both.
+    type SharedStateLike<'a> = &'a Arc<tokio::sync::Mutex<super::AppState>>;
+
+    /// Build a `JellyfinProvider` from a keyring-stored access token.
+    pub(super) async fn build_jellyfin(
+        state: SharedStateLike<'_>,
+        server_id: &ServerId,
+        base_url: String,
+    ) -> Result<Arc<dyn MusicProvider>, String> {
+        let token = {
+            let guard = state.lock().await;
+            guard
+                .secrets
+                .load_token(server_id.clone())
+                .await
+                .map_err(|e| format!("load token: {e}"))?
+                .ok_or_else(|| "jellyfin: token missing from keyring".to_string())?
+        };
+        let device_id = {
+            let guard = state.lock().await;
+            guard.device_id.clone()
+        };
+        let session = sinfonic_source_jellyfin::JellyfinSession {
+            server_id: server_id.clone(),
+            base_url,
+            access_token: token,
+            // The cached session does not include `user_id`; the
+            // provider falls back to base_url as the display name
+            // until `refresh_server_name` runs.
+            user_id: String::new(),
+            device_id,
+        };
+        Ok(Arc::new(
+            sinfonic_source_jellyfin::JellyfinProvider::new(session)
+                .map_err(|e| format!("build jellyfin provider: {e}"))?,
+        ))
+    }
+
+    /// Same shape as `build_jellyfin` but for Subsonic.
+    pub(super) async fn build_subsonic(
+        state: SharedStateLike<'_>,
+        server_id: &ServerId,
+        base_url: String,
+        username: String,
+        app: &tauri::AppHandle,
+    ) -> Result<Arc<dyn MusicProvider>, String> {
+        let password = {
+            let guard = state.lock().await;
+            guard
+                .secrets
+                .load_token(server_id.clone())
+                .await
+                .map_err(|e| format!("load password: {e}"))?
+                .ok_or_else(|| {
+                    "Subsonic password not found in system keychain. \
+                     Delete this server from the Saved Servers list \
+                     and add it again to sign in."
+                        .to_string()
+                })?
+        };
+        let session = sinfonic_source_subsonic::SubsonicSession {
+            server_id: server_id.clone(),
+            base_url,
+            username,
+            password,
+        };
+        Ok(Arc::new(
+            sinfonic_source_subsonic::SubsonicProvider::new(session)
+                .map_err(|e| format!("build subsonic provider: {e}"))?
+                .with_app_handle(app.clone()),
+        ))
+    }
+
+    /// Same shape for the local-files provider. No network secret;
+    /// the `base_url` field actually holds the absolute music root.
+    pub(super) fn build_local(base_url: &str) -> Result<Arc<dyn MusicProvider>, String> {
+        let root = std::path::PathBuf::from(base_url);
+        if !root.exists() {
+            return Err(format!("local root no longer exists: {root:?}"));
+        }
+        Ok(Arc::new(sinfonic_source_local::LocalProvider::new(root)))
+    }
+}
+
 /// Switch the active provider to an already-saved server without
 /// re-running the login flow. Reconstructs the `MusicProvider` from
 /// the keyring (Jellyfin/Subsonic) or the cached root path (local).
@@ -1448,90 +1547,12 @@ pub async fn provider_set_active(
     tracing::debug!(target: "sinfonic::commands", kind = %kind, name = %name, "server row looked up");
 
     let provider: Arc<dyn MusicProvider> = match kind.as_str() {
-        "jellyfin" => {
-            tracing::debug!(target: "sinfonic::commands", "building Jellyfin provider");
-            let secrets = {
-                let guard = state.lock().await;
-                guard.secrets.clone()
-            };
-            let token = secrets
-                .load_token(parsed.clone())
-                .await
-                .map_err(|e| format!("load token: {e}"))?
-                .ok_or_else(|| "jellyfin: token missing from keyring".to_string())?;
-            tracing::debug!(target: "sinfonic::commands", "Jellyfin token loaded from keyring");
-            let device_id = {
-                let guard = state.lock().await;
-                guard.device_id.clone()
-            };
-            // Subsonic's `server_id` is derived from the server name,
-            // but Jellyfin's comes from the auth response (the
-            // `server-{uuid}` we persisted at login time). Both are
-            // stable across the lifetime of the connection, so the
-            // cached row is the source of truth on switch.
-            let session = sinfonic_source_jellyfin::JellyfinSession {
-                server_id: parsed.clone(),
-                base_url: base_url.clone(),
-                access_token: token,
-                // The cached session does not include `user_id`, so we
-                // probe /System/Info/Public which is anonymous and
-                // therefore cheap. The provider's `identity()` falls
-                // back to the base_url as a display name until
-                // `refresh_server_name` runs.
-                user_id: String::new(),
-                device_id,
-            };
-            Arc::new(
-                sinfonic_source_jellyfin::JellyfinProvider::new(session)
-                    .map_err(|e| format!("build jellyfin provider: {e}"))?,
-            )
-        }
+        "jellyfin" => provider_factory::build_jellyfin(&state, &parsed, base_url.clone()).await?,
         "subsonic" => {
-            tracing::debug!(target: "sinfonic::commands", "building Subsonic provider");
-            let secrets = {
-                let guard = state.lock().await;
-                guard.secrets.clone()
-            };
-            let password = secrets
-                .load_token(parsed.clone())
-                .await
-                .map_err(|e| format!("load password: {e}"))?
-                .ok_or_else(|| {
-                    // The saved-server row exists in SQLite but the
-                    // matching OS keychain entry is gone (user wiped
-                    // their keychain, keyring backend rejected the
-                    // original save, etc.). Tell the user what to do
-                    // instead of just naming the symptom.
-                    "Subsonic password not found in system keychain. \
-                     Delete this server from the Saved Servers list \
-                     and add it again to sign in."
-                        .to_string()
-                })?;
-            tracing::debug!(target: "sinfonic::commands", "Subsonic password loaded from keyring");
-            // Subsonic signs every request with `?u=` so the username
-            // must be reconstructed. It's persisted on the servers
-            // row at login time (migration v3).
             let sub_user = username.clone().unwrap_or_else(|| name.clone());
-            let session = sinfonic_source_subsonic::SubsonicSession {
-                server_id: parsed.clone(),
-                base_url: base_url.clone(),
-                username: sub_user,
-                password,
-            };
-            Arc::new(
-                sinfonic_source_subsonic::SubsonicProvider::new(session)
-                    .map_err(|e| format!("build subsonic provider: {e}"))?
-                    .with_app_handle(app.clone()),
-            )
+            provider_factory::build_subsonic(&state, &parsed, base_url.clone(), sub_user, &app).await?
         }
-        "local" => {
-            tracing::debug!(target: "sinfonic::commands", "building Local provider");
-            let root = std::path::PathBuf::from(&base_url);
-            if !root.exists() {
-                return Err(format!("local root no longer exists: {root:?}"));
-            }
-            Arc::new(sinfonic_source_local::LocalProvider::new(root))
-        }
+        "local" => provider_factory::build_local(&base_url)?,
         other => return Err(format!("unknown provider kind: {other}")),
     };
 
@@ -2349,58 +2370,24 @@ pub async fn try_restore_provider(state: &Arc<Mutex<AppState>>, app: &tauri::App
         let provider: Option<Arc<dyn MusicProvider>> = match kind.as_str() {
             "jellyfin" => {
                 tracing::debug!(target: "sinfonic::commands", "restoring Jellyfin provider");
-                let token = {
-                    let state_ref = state.lock().await;
-                    state_ref
-                        .secrets
-                        .load_token(parsed.clone())
-                        .await
-                        .ok()
-                        .flatten()
-                };
-                let Some(token) = token else {
-                    tracing::warn!(target: "sinfonic::commands", "jellyfin token missing from keyring");
-                    return Err("jellyfin token missing".into());
-                };
-                let device_id = {
-                    let state_ref = state.lock().await;
-                    state_ref.device_id.clone()
-                };
-                let session = sinfonic_source_jellyfin::JellyfinSession {
-                    server_id: parsed.clone(),
-                    base_url,
-                    access_token: token,
-                    user_id: String::new(),
-                    device_id,
-                };
-                sinfonic_source_jellyfin::JellyfinProvider::new(session)
-                    .ok()
-                    .map(|p| Arc::new(p) as Arc<dyn MusicProvider>)
+                match provider_factory::build_jellyfin(state, &parsed, base_url).await {
+                    Ok(p) => Some(p),
+                    Err(e) => {
+                        tracing::warn!(target: "sinfonic::commands", error = %e, "jellyfin restore failed");
+                        return Err(e);
+                    }
+                }
             }
             "subsonic" => {
                 tracing::debug!(target: "sinfonic::commands", "restoring Subsonic provider");
-                let password = {
-                    let state_ref = state.lock().await;
-                    state_ref
-                        .secrets
-                        .load_token(parsed.clone())
-                        .await
-                        .ok()
-                        .flatten()
-                };
-                let Some(password) = password else {
-                    tracing::warn!(target: "sinfonic::commands", "subsonic password missing from keyring");
-                    return Err("subsonic password missing".into());
-                };
-                let session = sinfonic_source_subsonic::SubsonicSession {
-                    server_id: parsed.clone(),
-                    base_url,
-                    username: username.unwrap_or(name),
-                    password,
-                };
-                sinfonic_source_subsonic::SubsonicProvider::new(session)
-                    .ok()
-                    .map(|p| Arc::new(p.with_app_handle(app.clone())) as Arc<dyn MusicProvider>)
+                let sub_user = username.unwrap_or(name);
+                match provider_factory::build_subsonic(state, &parsed, base_url, sub_user, app).await {
+                    Ok(p) => Some(p),
+                    Err(e) => {
+                        tracing::warn!(target: "sinfonic::commands", error = %e, "subsonic restore failed");
+                        return Err(e);
+                    }
+                }
             }
             "local" => {
                 tracing::debug!(target: "sinfonic::commands", "restoring Local provider");
