@@ -80,7 +80,7 @@ export function useKeyboardShortcuts() {
           const nextVol = Math.min(1, volume + VOLUME_STEP);
           try {
             await setVolume(nextVol);
-            setVolume(nextVol);
+            updateVolume(nextVol);
           } catch (err) {
             toast.error(`Volume: ${(err as Error).message}`);
           }
