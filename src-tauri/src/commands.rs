@@ -213,7 +213,7 @@ pub async fn play_album(
             match guard.player.play(first.id.clone(), uri) {
                 Ok(duration) => duration,
                 Err(e) => {
-                    eprintln!("sinfonic: player.play failed: {e}");
+                    tracing::warn!(target: "sinfonic::playback", error = %e, "player.play failed");
                     fallback_duration
                 }
             }
@@ -289,7 +289,7 @@ pub async fn play_track(
             match guard.player.play(track_id.clone(), uri) {
                 Ok(duration) => duration,
                 Err(e) => {
-                    eprintln!("sinfonic: player.play failed: {e}");
+                    tracing::warn!(target: "sinfonic::playback", error = %e, "player.play failed");
                     track.duration_seconds
                 }
             }
@@ -1281,8 +1281,11 @@ pub async fn local_login(
                     "embedded",
                 );
                 if let Err(e) = cache.put(&cache_key, &art.bytes, &art.content_type) {
-                    eprintln!(
-                        "local: failed to cache embedded art for {album_id}: {e}"
+                    tracing::warn!(
+                        target: "sinfonic::commands",
+                        album_id = %album_id,
+                        error = %e,
+                        "failed to cache embedded art"
                     );
                 }
             }
@@ -1291,7 +1294,11 @@ pub async fn local_login(
                 sinfonic_source_local::LOCAL_PROVIDER_ID,
                 &current_album_ids,
             ) {
-                eprintln!("local: failed to prune orphaned album art: {e}");
+                tracing::warn!(
+                    target: "sinfonic::commands",
+                    error = %e,
+                    "failed to prune orphaned album art"
+                );
             }
         }
 
@@ -1435,14 +1442,14 @@ pub async fn provider_set_active(
     app: tauri::AppHandle,
     state: SharedState<'_>,
 ) -> Result<ConnectedServer, String> {
-    eprintln!("[DEBUG provider_set_active] called with server_id = {}", server_id);
+    tracing::debug!(target: "sinfonic::commands", server_id = %server_id, "provider_set_active called");
     let parsed = ServerId::try_new(server_id.clone()).map_err(|e| e.to_string())?;
     let (kind, base_url, name, username) = lookup_server(&state, &parsed).await?;
-    eprintln!("[DEBUG provider_set_active] looked up server: kind={}, name={}", kind, name);
+    tracing::debug!(target: "sinfonic::commands", kind = %kind, name = %name, "server row looked up");
 
     let provider: Arc<dyn MusicProvider> = match kind.as_str() {
         "jellyfin" => {
-            eprintln!("[DEBUG provider_set_active] building Jellyfin provider");
+            tracing::debug!(target: "sinfonic::commands", "building Jellyfin provider");
             let secrets = {
                 let guard = state.lock().await;
                 guard.secrets.clone()
@@ -1452,7 +1459,7 @@ pub async fn provider_set_active(
                 .await
                 .map_err(|e| format!("load token: {e}"))?
                 .ok_or_else(|| "jellyfin: token missing from keyring".to_string())?;
-            eprintln!("[DEBUG provider_set_active] token loaded successfully");
+            tracing::debug!(target: "sinfonic::commands", "Jellyfin token loaded from keyring");
             let device_id = {
                 let guard = state.lock().await;
                 guard.device_id.clone()
@@ -1480,7 +1487,7 @@ pub async fn provider_set_active(
             )
         }
         "subsonic" => {
-            eprintln!("[DEBUG provider_set_active] building Subsonic provider");
+            tracing::debug!(target: "sinfonic::commands", "building Subsonic provider");
             let secrets = {
                 let guard = state.lock().await;
                 guard.secrets.clone()
@@ -1500,7 +1507,7 @@ pub async fn provider_set_active(
                      and add it again to sign in."
                         .to_string()
                 })?;
-            eprintln!("[DEBUG provider_set_active] password loaded successfully");
+            tracing::debug!(target: "sinfonic::commands", "Subsonic password loaded from keyring");
             // Subsonic signs every request with `?u=` so the username
             // must be reconstructed. It's persisted on the servers
             // row at login time (migration v3).
@@ -1518,7 +1525,7 @@ pub async fn provider_set_active(
             )
         }
         "local" => {
-            eprintln!("[DEBUG provider_set_active] building Local provider");
+            tracing::debug!(target: "sinfonic::commands", "building Local provider");
             let root = std::path::PathBuf::from(&base_url);
             if !root.exists() {
                 return Err(format!("local root no longer exists: {root:?}"));
@@ -1534,13 +1541,13 @@ pub async fn provider_set_active(
     // would never resolve against the next one, and the UI should
     // not keep showing ghost entries from a session that's gone.
     {
-        eprintln!("[DEBUG provider_set_active] stopping playback and swapping provider");
+        tracing::debug!(target: "sinfonic::commands", "stopping playback and swapping provider");
         let mut guard = state.lock().await;
         guard.player.stop();
         guard.playback.stop();
         guard.queue.clear();
         *guard.provider.lock().await = Some(provider.clone());
-        eprintln!("[DEBUG provider_set_active] provider swapped, persisting last_active_server_id");
+        tracing::debug!(target: "sinfonic::commands", "provider swapped; persisting last_active_server_id");
         // Persist the pointer so the next launch can restore us.
         guard
             .library
@@ -1554,7 +1561,7 @@ pub async fn provider_set_active(
     emit_queue_changed(&app, state.inner()).await;
     emit_playback_state(&app, state.inner()).await;
 
-    eprintln!("[DEBUG provider_set_active] SUCCESS");
+    tracing::debug!(target: "sinfonic::commands", "provider_set_active succeeded");
     Ok(ConnectedServer {
         server_id,
         kind,
@@ -1572,7 +1579,7 @@ pub async fn provider_sync_library(
     state: SharedState<'_>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    eprintln!("[SYNC provider_sync_library] started");
+    tracing::info!(target: "sinfonic::sync", "provider_sync_library started");
     let payload_start = LibrarySyncStatusPayload {
         server_id: None,
         state: "started".into(),
@@ -1595,7 +1602,7 @@ pub async fn provider_sync_library(
     };
 
     let server_id = provider_snapshot.identity().server_id.clone();
-    eprintln!("[SYNC provider_sync_library] syncing from server_id = {}", server_id);
+    tracing::info!(target: "sinfonic::sync", server_id = %server_id, "provider_sync_library syncing");
 
     sync_library_data(provider_snapshot.as_ref(), &library_handle, &server_id).await?;
 
@@ -1605,7 +1612,7 @@ pub async fn provider_sync_library(
         progress: 1.0,
     };
     let _ = app.emit(EventName::LibrarySyncStatus.as_str(), payload_done);
-    eprintln!("[SYNC provider_sync_library] COMPLETE");
+    tracing::info!(target: "sinfonic::sync", server_id = %server_id, "provider_sync_library complete");
 
     Ok(())
 }
@@ -1649,52 +1656,43 @@ pub async fn sync_library_data(
 
     const PAGE_SIZE: usize = 200;
 
-    eprintln!("[SYNC sync_library_data] fetching artists...");
+    tracing::info!(target: "sinfonic::sync", "fetching artists");
     let artists = fetch_all_pages(PAGE_SIZE, |offset| async move {
         provider.artists(PagedRequest::new(offset, PAGE_SIZE)).await
     })
     .await
     .map_err(|e| format!("artists: {e}"))?;
-    eprintln!(
-        "[SYNC sync_library_data] fetched {} artists, writing to DB...",
-        artists.len()
-    );
+    tracing::info!(target: "sinfonic::sync", count = artists.len(), "artists fetched; writing to DB");
     library
         .replace_artists(server_id, &artists)
         .map_err(|e| format!("upsert artists: {e}"))?;
-    eprintln!("[SYNC sync_library_data] artists written");
+    tracing::debug!(target: "sinfonic::sync", "artists written");
 
-    eprintln!("[SYNC sync_library_data] fetching albums...");
+    tracing::info!(target: "sinfonic::sync", "fetching albums");
     let albums = fetch_all_pages(PAGE_SIZE, |offset| async move {
         provider.albums(PagedRequest::new(offset, PAGE_SIZE)).await
     })
     .await
     .map_err(|e| format!("albums: {e}"))?;
-    eprintln!(
-        "[SYNC sync_library_data] fetched {} albums, writing to DB...",
-        albums.len()
-    );
+    tracing::info!(target: "sinfonic::sync", count = albums.len(), "albums fetched; writing to DB");
     library
         .replace_albums(server_id, &albums)
         .map_err(|e| format!("upsert albums: {e}"))?;
-    eprintln!("[SYNC sync_library_data] albums written");
+    tracing::debug!(target: "sinfonic::sync", "albums written");
 
-    eprintln!("[SYNC sync_library_data] fetching tracks...");
+    tracing::info!(target: "sinfonic::sync", "fetching tracks");
     let tracks = fetch_all_pages(PAGE_SIZE, |offset| async move {
         provider.tracks(PagedRequest::new(offset, PAGE_SIZE)).await
     })
     .await
     .map_err(|e| format!("tracks: {e}"))?;
-    eprintln!(
-        "[SYNC sync_library_data] fetched {} tracks, writing to DB...",
-        tracks.len()
-    );
+    tracing::info!(target: "sinfonic::sync", count = tracks.len(), "tracks fetched; writing to DB");
     library
         .replace_tracks(server_id, &tracks)
         .map_err(|e| format!("upsert tracks: {e}"))?;
-    eprintln!("[SYNC sync_library_data] tracks written");
+    tracing::debug!(target: "sinfonic::sync", "tracks written");
 
-    eprintln!("[SYNC sync_library_data] fetching playlists...");
+    tracing::info!(target: "sinfonic::sync", "fetching playlists");
     let playlists = fetch_all_pages(PAGE_SIZE, |offset| async move {
         provider
             .playlists(PagedRequest::new(offset, PAGE_SIZE))
@@ -1702,10 +1700,7 @@ pub async fn sync_library_data(
     })
     .await
     .map_err(|e| format!("playlists: {e}"))?;
-    eprintln!(
-        "[SYNC sync_library_data] fetched {} playlists, resolving tracks...",
-        playlists.len()
-    );
+    tracing::info!(target: "sinfonic::sync", count = playlists.len(), "playlists fetched; resolving tracks");
     let mut synced = 0usize;
     let mut skipped = 0usize;
     for playlist in &playlists {
@@ -1718,9 +1713,11 @@ pub async fn sync_library_data(
                 if let Err(e) =
                     library.replace_playlist(server_id, &detail.playlist, &track_ids)
                 {
-                    eprintln!(
-                        "[SYNC sync_library_data] skip playlist {}: {e}",
-                        playlist.id.as_str()
+                    tracing::warn!(
+                        target: "sinfonic::sync",
+                        playlist_id = %playlist.id.as_str(),
+                        error = %e,
+                        "skipping playlist"
                     );
                     skipped += 1;
                 } else {
@@ -1728,16 +1725,21 @@ pub async fn sync_library_data(
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "[SYNC sync_library_data] skip playlist {}: {e}",
-                    playlist.id.as_str()
+                tracing::warn!(
+                    target: "sinfonic::sync",
+                    playlist_id = %playlist.id.as_str(),
+                    error = %e,
+                    "skipping playlist"
                 );
                 skipped += 1;
             }
         }
     }
-    eprintln!(
-        "[SYNC sync_library_data] playlists synced ({synced} ok, {skipped} skipped)"
+    tracing::info!(
+        target: "sinfonic::sync",
+        synced,
+        skipped,
+        "playlists synced"
     );
 
     Ok(())
@@ -1810,7 +1812,7 @@ pub async fn provider_delete(
     app: tauri::AppHandle,
     state: SharedState<'_>,
 ) -> Result<(), String> {
-    eprintln!("[DEBUG provider_delete] deleting server_id = {}", server_id);
+    tracing::debug!(target: "sinfonic::commands", server_id = %server_id, "provider_delete called");
     let (was_active, secrets) = {
         let guard = state.lock().await;
         let was_active = guard
@@ -1824,7 +1826,7 @@ pub async fn provider_delete(
 
     // If it was active, clear the in-memory provider and preferences.
     if was_active {
-        eprintln!("[DEBUG provider_delete] was active, clearing provider");
+        tracing::debug!(target: "sinfonic::commands", "deleted server was active; clearing provider");
         let mut guard = state.lock().await;
         *guard.provider.lock().await = None;
         guard.player.stop();
@@ -1856,7 +1858,7 @@ pub async fn provider_delete(
         emit_playback_state(&app, state.inner()).await;
     }
 
-    eprintln!("[DEBUG provider_delete] done");
+    tracing::debug!(target: "sinfonic::commands", "provider_delete done");
     Ok(())
 }
 
@@ -2281,7 +2283,7 @@ pub async fn try_resume_lastfm(state: &AppState) {
 pub async fn try_restore_provider(state: &Arc<Mutex<AppState>>, app: &tauri::AppHandle) {
     use std::sync::atomic::Ordering;
 
-    eprintln!("[DEBUG try_restore_provider] starting");
+    tracing::debug!(target: "sinfonic::commands", "try_restore_provider starting");
     // Run the actual restore in an inner block so we can mark the
     // bootstrap as complete on every exit path — success, missing
     // pointer, stale row, or provider build failure. The frontend
@@ -2291,23 +2293,21 @@ pub async fn try_restore_provider(state: &Arc<Mutex<AppState>>, app: &tauri::App
             let state_ref = state.lock().await;
             match state_ref.library.get_preference("last_active_server_id") {
                 Ok(Some(id)) => {
-                    eprintln!("[DEBUG try_restore_provider] found last_active_server_id = {}", id);
+                    tracing::debug!(target: "sinfonic::commands", last_active_server_id = %id, "found pointer");
                     id
                 }
                 Ok(None) => {
-                    eprintln!("[DEBUG try_restore_provider] no last_active_server_id preference");
+                    tracing::debug!(target: "sinfonic::commands", "no last_active_server_id preference");
                     return Ok(());
                 }
                 Err(e) => {
-                    eprintln!("[DEBUG try_restore_provider] error reading last_active_server_id: {e}");
+                    tracing::warn!(target: "sinfonic::commands", error = %e, "could not read last_active_server_id");
                     return Err(format!("read last_active_server_id: {e}"));
                 }
             }
         };
-        eprintln!("[DEBUG try_restore_provider] parsing server_id = {}", last_active);
 
         let parsed = ServerId::new(last_active.clone());
-        eprintln!("[DEBUG try_restore_provider] looking up server in DB");
         let (kind, base_url, name, username) = {
             let state_ref = state.lock().await;
             let conn = state_ref
@@ -2326,13 +2326,18 @@ pub async fn try_restore_provider(state: &Arc<Mutex<AppState>>, app: &tauri::App
                 ))
             }) {
                 Ok(row) => {
-                    eprintln!("[DEBUG try_restore_provider] found server: kind={}, name={}, base_url={}", row.0, row.2, row.1);
+                    tracing::debug!(
+                        target: "sinfonic::commands",
+                        kind = %row.0,
+                        name = %row.2,
+                        "server row found"
+                    );
                     row
                 }
                 // Pointer targets a row that no longer exists — clear it
                 // so we don't retry every launch.
                 Err(_) => {
-                    eprintln!("[DEBUG try_restore_provider] server row not found, clearing last_active_server_id");
+                    tracing::warn!(target: "sinfonic::commands", server_id = %last_active, "server row not found; clearing pointer");
                     let _ = state_ref
                         .library
                         .set_preference("last_active_server_id", None);
@@ -2343,7 +2348,7 @@ pub async fn try_restore_provider(state: &Arc<Mutex<AppState>>, app: &tauri::App
 
         let provider: Option<Arc<dyn MusicProvider>> = match kind.as_str() {
             "jellyfin" => {
-                eprintln!("[DEBUG try_restore_provider] building Jellyfin provider");
+                tracing::debug!(target: "sinfonic::commands", "restoring Jellyfin provider");
                 let token = {
                     let state_ref = state.lock().await;
                     state_ref
@@ -2354,7 +2359,7 @@ pub async fn try_restore_provider(state: &Arc<Mutex<AppState>>, app: &tauri::App
                         .flatten()
                 };
                 let Some(token) = token else {
-                    eprintln!("[DEBUG try_restore_provider] jellyfin token missing from keyring");
+                    tracing::warn!(target: "sinfonic::commands", "jellyfin token missing from keyring");
                     return Err("jellyfin token missing".into());
                 };
                 let device_id = {
@@ -2373,7 +2378,7 @@ pub async fn try_restore_provider(state: &Arc<Mutex<AppState>>, app: &tauri::App
                     .map(|p| Arc::new(p) as Arc<dyn MusicProvider>)
             }
             "subsonic" => {
-                eprintln!("[DEBUG try_restore_provider] building Subsonic provider");
+                tracing::debug!(target: "sinfonic::commands", "restoring Subsonic provider");
                 let password = {
                     let state_ref = state.lock().await;
                     state_ref
@@ -2384,7 +2389,7 @@ pub async fn try_restore_provider(state: &Arc<Mutex<AppState>>, app: &tauri::App
                         .flatten()
                 };
                 let Some(password) = password else {
-                    eprintln!("[DEBUG try_restore_provider] subsonic password missing from keyring");
+                    tracing::warn!(target: "sinfonic::commands", "subsonic password missing from keyring");
                     return Err("subsonic password missing".into());
                 };
                 let session = sinfonic_source_subsonic::SubsonicSession {
@@ -2398,11 +2403,13 @@ pub async fn try_restore_provider(state: &Arc<Mutex<AppState>>, app: &tauri::App
                     .map(|p| Arc::new(p.with_app_handle(app.clone())) as Arc<dyn MusicProvider>)
             }
             "local" => {
-                eprintln!("[DEBUG try_restore_provider] building Local provider");
+                tracing::debug!(target: "sinfonic::commands", "restoring Local provider");
                 let root = std::path::PathBuf::from(&base_url);
                 if !root.exists() {
-                    eprintln!(
-                        "[DEBUG try_restore_provider] local root no longer exists: {root:?}, clearing pointer"
+                    tracing::warn!(
+                        target: "sinfonic::commands",
+                        root = %root.display(),
+                        "local root no longer exists; clearing pointer"
                     );
                     let state_ref = state.lock().await;
                     let _ = state_ref
@@ -2418,19 +2425,19 @@ pub async fn try_restore_provider(state: &Arc<Mutex<AppState>>, app: &tauri::App
         };
 
         let Some(provider) = provider else {
-            eprintln!("[DEBUG try_restore_provider] provider build returned None");
+            tracing::warn!(target: "sinfonic::commands", "provider build returned None");
             return Ok(());
         };
-        eprintln!("[DEBUG try_restore_provider] provider built successfully, setting as active");
+        tracing::debug!(target: "sinfonic::commands", "provider built; installing as active");
         let state_ref = state.lock().await;
         *state_ref.provider.lock().await = Some(provider);
-        eprintln!("[DEBUG try_restore_provider] SUCCESS - provider restored");
+        tracing::info!(target: "sinfonic::commands", "try_restore_provider succeeded");
         Ok(())
     }
     .await;
 
     if let Err(e) = result {
-        eprintln!("[DEBUG try_restore_provider] FAILED: {e}");
+        tracing::warn!(target: "sinfonic::commands", error = %e, "try_restore_provider failed");
     }
 
     state
@@ -2438,7 +2445,7 @@ pub async fn try_restore_provider(state: &Arc<Mutex<AppState>>, app: &tauri::App
         .await
         .bootstrap_complete
         .store(true, Ordering::Relaxed);
-    eprintln!("[DEBUG try_restore_provider] bootstrap_complete set to true");
+    tracing::debug!(target: "sinfonic::commands", "bootstrap_complete set to true");
 }
 
 // ─── Smart Playlists (Phase 9) ─────────────────────────────────
@@ -2589,7 +2596,11 @@ pub async fn advance_queue_on_end(state: &Arc<Mutex<AppState>>, app: &tauri::App
                     match guard.player.play(entry.track_id.clone(), uri) {
                         Ok(d) => d,
                         Err(e) => {
-                            eprintln!("sinfonic: auto-advance player.play failed: {e}");
+                            tracing::warn!(
+                                target: "sinfonic::playback",
+                                error = %e,
+                                "auto-advance player.play failed"
+                            );
                             entry.duration_seconds
                         }
                     }
