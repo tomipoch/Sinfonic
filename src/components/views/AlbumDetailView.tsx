@@ -14,12 +14,20 @@ import { toast } from "sonner";
 
 import { AlbumCover } from "@/components/ui/AlbumCover";
 import { FavoriteButton } from "@/components/ui/FavoriteButton";
+import { TrackTable, type TrackColumn } from "@/components/ui/TrackTable";
 import { getAlbumDetail, playAlbum, playTrack } from "@/lib/tauri";
 import { useServerStore } from "@/stores/serverStore";
 import { formatDuration } from "@/lib/format";
-import { encodeDragData } from "@/lib/queueDnD";
-import { cn } from "@/lib/cn";
 import type { Album, Track } from "@/types/domain";
+
+const COLUMNS: TrackColumn[] = [
+  { kind: "index", mode: "track-number" },
+  { kind: "cover" },
+  { kind: "title" },
+  { kind: "time" },
+  { kind: "favorite" },
+  { kind: "menu" },
+];
 
 interface AlbumDetailData {
   album: Album;
@@ -34,7 +42,6 @@ export function AlbumDetailView() {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [draggingId, setDraggingId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -117,7 +124,7 @@ export function AlbumDetailView() {
     <section className="flex flex-col gap-6">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end">
         <div className="w-48 shrink-0">
-          <AlbumCover album={album} />
+          <AlbumCover source={album} />
         </div>
         <div className="flex min-w-0 flex-col gap-1">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">Album</div>
@@ -145,43 +152,12 @@ export function AlbumDetailView() {
         </div>
       </header>
 
-          <ol className="divide-y divide-border rounded-md border border-border">
-            {tracks.map((track) => (
-              <li
-                key={track.id}
-                draggable
-                onDragStart={(e) => {
-                  setDraggingId(track.id);
-                  e.dataTransfer.setData("application/json", encodeDragData({ tracks: [track], source: "album-detail" }));
-                  e.dataTransfer.effectAllowed = "copy";
-                }}
-                onDragEnd={() => setDraggingId(null)}
-                className={cn(
-                  "grid grid-cols-[2.5rem_1fr_auto_auto] items-center gap-3 px-3 py-2 text-sm",
-                  draggingId === track.id && "opacity-30",
-                )}
-              >
-                <div className="text-right font-mono text-xs text-muted">
-                  {track.trackNumber || "—"}
-                </div>
-                <div className="min-w-0">
-                  <button
-                    type="button"
-                    onClick={() => void onPlayTrack(track)}
-                    disabled={busy}
-                    className="block w-full truncate text-left font-medium text-foreground hover:text-white focus:outline-none"
-                  >
-                    {track.title}
-                  </button>
-                  <div className="truncate text-xs text-muted-foreground">{track.artist}</div>
-                </div>
-                <div className="text-xs text-muted">
-                  {formatDuration(track.durationSeconds)}
-                </div>
-                <FavoriteButton kind="track" itemId={track.id} initialFavorite={track.favorite} />
-              </li>
-            ))}
-          </ol>
+      <TrackTable
+        tracks={tracks}
+        columns={COLUMNS}
+        onPlayTrack={onPlayTrack}
+        dragSource="album-detail"
+      />
     </section>
   );
 }

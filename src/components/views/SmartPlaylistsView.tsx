@@ -6,6 +6,7 @@ import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
 import { getSmartPlaylists, createSmartPlaylist, deleteSmartPlaylist, type SmartPlaylist, type CreateSmartPlaylistArgs } from "@/lib/tauri";
+import { extractError } from "@/lib/errors";
 import { useServerStore } from "@/stores/serverStore";
 
 const FIELDS = [
@@ -100,7 +101,7 @@ export function SmartPlaylistsView() {
       setForm({ name: "", field: "title", operator: "contains", value: "", sortField: "title", sortDir: "asc", limitN: 50 });
       void load();
     } catch (e) {
-      toast.error(`Couldn't create: ${(e as Error).message}`);
+      toast.error(`Couldn't create: ${extractError(e, "unknown error")}`);
     } finally {
       setCreating(false);
     }
@@ -112,7 +113,7 @@ export function SmartPlaylistsView() {
       toast.success("Deleted");
       void load();
     } catch (e) {
-      toast.error(`Couldn't delete: ${(e as Error).message}`);
+      toast.error(`Couldn't delete: ${extractError(e, "unknown error")}`);
     } finally {
       setDeleteId(null);
     }

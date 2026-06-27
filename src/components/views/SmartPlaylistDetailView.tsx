@@ -4,10 +4,17 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
+import { TrackTable, type TrackColumn } from "@/components/ui/TrackTable";
 import { getSmartPlaylists, evaluateSmartPlaylist, type SmartPlaylist } from "@/lib/tauri";
 import type { Track } from "@/types/domain";
 import { useServerStore } from "@/stores/serverStore";
-import { formatDuration } from "@/lib/format";
+
+const COLUMNS: TrackColumn[] = [
+  { kind: "index", mode: "track-number" },
+  { kind: "cover" },
+  { kind: "song" },
+  { kind: "time" },
+];
 
 export function SmartPlaylistDetailView() {
   const { id } = useParams<{ id: string }>();
@@ -86,25 +93,11 @@ export function SmartPlaylistDetailView() {
           </p>
         </div>
       ) : (
-        <ol className="divide-y divide-border rounded-md border border-border">
-          {tracks.map((track) => (
-            <li
-              key={track.id}
-              className="grid grid-cols-[2.5rem_1fr_auto] items-center gap-3 px-3 py-2 text-sm"
-            >
-              <div className="text-right font-mono text-xs text-muted">
-                {track.trackNumber || "—"}
-              </div>
-              <div className="min-w-0">
-                <div className="truncate font-medium text-foreground">{track.title}</div>
-                <div className="truncate text-xs text-muted-foreground">{track.artist}</div>
-              </div>
-              <div className="text-xs text-muted">
-                {formatDuration(track.durationSeconds)}
-              </div>
-            </li>
-          ))}
-        </ol>
+        <TrackTable
+          tracks={tracks}
+          columns={COLUMNS}
+          draggable={false}
+        />
       )}
     </section>
   );

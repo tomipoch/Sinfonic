@@ -3,15 +3,30 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { useShallow } from "zustand/react/shallow";
 
+import { AlbumCover } from "@/components/ui/AlbumCover";
 import { usePlaylistsStore } from "@/stores/playlistsStore";
 import { useServerStore } from "@/stores/serverStore";
+import { extractError } from "@/lib/errors";
 import { formatDuration } from "@/lib/format";
 
 export function PlaylistsView() {
   const navigate = useNavigate();
   const activeServerId = useServerStore((s) => s.activeServerId);
-  const { playlists, loading, error, loadPlaylists, createPlaylist } = usePlaylistsStore();
+  // `useShallow` keeps the selector reference stable when the picked
+  // fields are reference-equal, so the view only re-renders on
+  // meaningful changes (e.g. a new playlist) instead of every store
+  // update (e.g. detail error flips).
+  const { playlists, loading, error, loadPlaylists, createPlaylist } = usePlaylistsStore(
+    useShallow((s) => ({
+      playlists: s.playlists,
+      loading: s.loading,
+      error: s.error,
+      loadPlaylists: s.loadPlaylists,
+      createPlaylist: s.createPlaylist,
+    })),
+  );
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
 
@@ -29,7 +44,7 @@ export function PlaylistsView() {
       setCreating(false);
       navigate(`/playlists/${encodeURIComponent(id)}`);
     } catch (e) {
-      toast.error(`Failed to create playlist: ${(e as Error).message}`);
+      toast.error(`Failed to create playlist: ${extractError(e, "unknown error")}`);
       setCreating(false);
     }
   };
@@ -114,9 +129,17 @@ export function PlaylistsView() {
               to={`/playlists/${encodeURIComponent(pl.id)}`}
               className="flex flex-col gap-2 rounded-md border border-border bg-muted p-4 transition-colors hover:border-primary/50 hover:bg-card"
             >
-              <div className="flex h-24 w-full items-center justify-center rounded-md bg-card text-4xl font-bold text-white/40">
-                🎵
-              </div>
+              {pl.imageRef ? (
+                <AlbumCover
+                  source={{ id: pl.id, title: pl.name, imageRef: pl.imageRef }}
+                  className="aspect-square w-full rounded-md"
+                  ariaLabel={`Cover art for playlist ${pl.name}`}
+                />
+              ) : (
+                <div className="flex aspect-square w-full items-center justify-center rounded-md bg-card text-5xl text-white/30">
+                  🎵
+                </div>
+              )}
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium text-foreground">{pl.name}</div>
                 <div className="truncate text-xs text-muted-foreground">

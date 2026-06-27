@@ -74,10 +74,10 @@ export function ArtistDetailView() {
           {artistAlbums.map((album) => (
             <li key={album.id}>
               <Link
-                to={`/library/album/${encodeURIComponent(album.id)}`}
+                to={`/albums/${encodeURIComponent(album.id)}`}
                 className="group block focus:outline-none"
               >
-                <AlbumCover album={album} />
+                <AlbumCover source={album} />
                 <div className="mt-2 truncate text-sm font-medium text-foreground group-hover:text-white">
                   {album.title}
                 </div>
