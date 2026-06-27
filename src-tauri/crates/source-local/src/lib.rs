@@ -161,17 +161,22 @@ impl LocalProvider {
         let state = self.state.read();
         match state.scan.as_ref() {
             None => {
-                eprintln!(
-                    "[local] lookup_embedded_art({album_id}) — in-memory scan is empty (provider not rescanned)"
+                tracing::debug!(
+                    target: "sinfonic::source_local",
+                    album_id,
+                    "lookup_embedded_art called before rescan"
                 );
                 None
             }
             Some(s) => {
                 let n = s.embedded_art.len();
                 let hit = s.embedded_art.get(album_id).cloned();
-                eprintln!(
-                    "[local] lookup_embedded_art({album_id}) — {n} entries, hit={}",
-                    hit.is_some()
+                tracing::trace!(
+                    target: "sinfonic::source_local",
+                    album_id,
+                    entries = n,
+                    hit = hit.is_some(),
+                    "embedded art lookup"
                 );
                 hit
             }

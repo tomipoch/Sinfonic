@@ -162,7 +162,11 @@ impl AudioPlayer {
         let (stream_opt, handle_opt) = match OutputStream::try_default() {
             Ok(pair) => (Some(pair.0), Some(pair.1)),
             Err(err) => {
-                eprintln!("sinfonic-playback: no audio output device: {err}");
+                tracing::warn!(
+                    target: "sinfonic::playback",
+                    error = %err,
+                    "no audio output device; running in headless mode"
+                );
                 (None, None)
             }
         };
