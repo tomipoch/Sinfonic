@@ -33,7 +33,7 @@
 //! for more than that.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -138,7 +138,10 @@ struct Inner {
     volume: Mutex<f32>,
     muted: Mutex<bool>,
     equalizer: SharedEqualizer,
-    on_event: Mutex<Option<PlayerEventCallback>>,
+    /// Set once via `set_event_callback` and never re-assigned at
+    /// runtime, so we can use `OnceLock` and pay zero synchronisation
+    /// cost on every emit.
+    on_event: OnceLock<PlayerEventCallback>,
 }
 
 impl std::fmt::Debug for AudioPlayer {
@@ -176,7 +179,7 @@ impl AudioPlayer {
             volume: Mutex::new(0.8),
             muted: Mutex::new(false),
             equalizer: Arc::new(Mutex::new(Equalizer::flat())),
-            on_event: Mutex::new(None),
+            on_event: OnceLock::new(),
         };
         Self {
             output_stream: OutputStreamHolder(stream_opt),
@@ -184,14 +187,20 @@ impl AudioPlayer {
         }
     }
 
-    /// Register a callback fired on every state change / track end.
-    /// `lib.rs::run` wires this to Tauri `app.emit(...)` calls.
-    pub fn set_event_callback<F>(&self, callback: F)
-    where
-        F: Fn(PlayerEvent) + Send + Sync + 'static,
-    {
-        *self.inner.on_event.lock() = Some(Arc::new(callback));
-    }
+/// Register a callback fired on every state change / track end.
+/// `lib.rs::run` wires this to Tauri `app.emit(...)` calls.
+///
+/// Must be called exactly once before any playback starts. Repeated
+/// calls are silently ignored — `OnceLock::set` returns `Err` if the
+/// slot is already populated. The lock-free `get` on the hot path
+/// (every poll tick) is the win over the previous `Mutex<Option<…>>`
+/// arrangement.
+pub fn set_event_callback<F>(&self, callback: F)
+where
+    F: Fn(PlayerEvent) + Send + Sync + 'static,
+{
+    let _ = self.inner.on_event.set(Arc::new(callback));
+}
 
     /// Read the most-recently cached playback state. Cheap; doesn't
     /// lock the rodio sink.
@@ -257,8 +266,7 @@ impl AudioPlayer {
                 // Headless: drop the source, fire TrackEnded so the
                 // queue can advance without waiting on a real device.
                 drop(decoded);
-                let cb = self.inner.on_event.lock().clone();
-                if let Some(cb) = cb {
+                if let Some(cb) = self.inner.on_event.get() {
                     cb(PlayerEvent::TrackEnded { track_id: track_id.clone() });
                 }
             }
@@ -363,8 +371,7 @@ impl AudioPlayer {
     // ─── internals ────────────────────────────────────────────────
 
     fn emit_state(&self, track_id: Option<TrackId>) {
-        let cb = self.inner.on_event.lock().clone();
-        if let Some(cb) = cb {
+        if let Some(cb) = self.inner.on_event.get() {
             cb(PlayerEvent::StateChanged {
                 track_id: track_id.clone(),
                 position_seconds: self.inner.position_seconds.load(Ordering::Relaxed),
@@ -441,8 +448,7 @@ impl Inner {
             if empty && !paused {
                 if let Some(track_id) = track_id {
                     if !self.ended_fired.swap(true, Ordering::Relaxed) {
-                        let cb = self.on_event.lock().clone();
-                        if let Some(cb) = cb {
+                        if let Some(cb) = self.on_event.get() {
                             cb(PlayerEvent::TrackEnded { track_id });
                         }
                     }
@@ -452,8 +458,7 @@ impl Inner {
             }
 
             // Emit state.
-            let cb = self.on_event.lock().clone();
-            if let Some(cb) = cb {
+            if let Some(cb) = self.on_event.get() {
                 cb(PlayerEvent::StateChanged {
                     track_id: self.track_id.lock().clone(),
                     position_seconds,
