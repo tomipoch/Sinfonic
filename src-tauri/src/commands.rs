@@ -2015,7 +2015,10 @@ pub async fn provider_image_bytes(
 
     let (cache_for_lookup, cache_for_write) = {
         let guard = state.lock().await;
-        (guard.album_art.clone(), guard.album_art.clone())
+        let cache = guard.album_art.clone();
+        // Hand the same Arc clone to both the lookup and the eventual
+        // write — no need to clone twice.
+        (cache.clone(), cache)
     };
 
     if let Some(cache) = cache_for_lookup.as_ref() {
