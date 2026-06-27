@@ -2,6 +2,11 @@
 //!
 //! Field set mirrors Rufin's domain for parity, trimmed where v0.1 doesn't
 //! need the value. Add fields as features land — keep the diff small per PR.
+//!
+//! `rename_all = "camelCase"` is applied to every type that crosses
+//! the IPC boundary so the Rust snake_case fields line up with the
+//! TypeScript camelCase types in `src/types/domain.ts`. Internal
+//! Rust code continues to use snake_case field access.
 
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +15,7 @@ use super::ids::{AlbumId, ArtistId, GenreId, PlaylistId, TrackId};
 /// Reference to an image served by a provider, optionally with a tag for
 /// cache-busting.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ImageRef {
     pub item_id: String,
     pub kind: String,
@@ -17,6 +23,7 @@ pub struct ImageRef {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Album {
     pub id: AlbumId,
     pub title: String,
@@ -31,12 +38,14 @@ pub struct Album {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AlbumDetail {
     pub album: Album,
     pub tracks: Vec<Track>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Track {
     pub id: TrackId,
     pub album_id: AlbumId,
@@ -52,6 +61,7 @@ pub struct Track {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Artist {
     pub id: ArtistId,
     pub name: String,
@@ -68,6 +78,7 @@ pub struct ArtistDetail {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Genre {
     pub id: GenreId,
     pub name: String,
@@ -76,6 +87,7 @@ pub struct Genre {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Playlist {
     pub id: PlaylistId,
     pub name: String,
@@ -83,15 +95,22 @@ pub struct Playlist {
     pub duration_seconds: u32,
     pub owner: Option<String>,
     pub public: bool,
+    /// Optional cover art. Subsonic returns a `coverArt` string per
+    /// playlist; Jellyfin tags it as `Primary`. The tag carries the
+    /// provider's image id so the on-disk cache invalidates when the
+    /// server bumps it.
+    pub image_ref: Option<ImageRef>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlaylistDetail {
     pub playlist: Playlist,
     pub tracks: Vec<Track>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GenreDetail {
     pub genre: Genre,
     pub albums: Vec<Album>,
@@ -132,6 +151,7 @@ pub struct FolderDetail {
 
 /// Single-rule smart playlist definition.
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SmartPlaylist {
     pub id: super::ids::SmartPlaylistId,
     pub name: String,
@@ -197,4 +217,116 @@ pub enum SmartPlaylistSortField {
 pub enum SmartPlaylistSortDirection {
     Asc,
     Desc,
+}
+
+#[cfg(test)]
+mod tests {
+    //! Regression tests for the IPC wire format.
+    //!
+    //! Every entity type that crosses the Tauri command boundary is
+    //! `#[serde(rename_all = "camelCase")]` so the TypeScript types in
+    //! `src/types/domain.ts` line up field-for-field. These tests
+    //! pin the JSON keys so a future refactor can't silently
+    //! regress the boundary (the frontend used to receive `image_ref`
+    //! for months because nobody asserted the camelCase).
+
+    use super::*;
+
+    #[test]
+    fn image_ref_uses_camel_case_wire_format() {
+        let image_ref = ImageRef {
+            item_id: "abc".to_string(),
+            kind: "Primary".to_string(),
+            tag: Some("tag-1".to_string()),
+        };
+        let json = serde_json::to_string(&image_ref).unwrap();
+        // Rust's snake_case fields must serialise as camelCase keys.
+        assert!(json.contains("\"itemId\":\"abc\""), "got: {json}");
+        assert!(json.contains("\"kind\":\"Primary\""), "got: {json}");
+        assert!(json.contains("\"tag\":\"tag-1\""), "got: {json}");
+        assert!(!json.contains("item_id"), "snake_case leaked: {json}");
+    }
+
+    #[test]
+    fn track_uses_camel_case_wire_format() {
+        let track = Track {
+            id: TrackId::new("track-1"),
+            album_id: AlbumId::new("album-1"),
+            title: "T".to_string(),
+            artist: "A".to_string(),
+            artist_id: None,
+            album: "Al".to_string(),
+            duration_seconds: 1,
+            track_number: 1,
+            disc_number: 1,
+            favorite: false,
+            image_ref: None,
+        };
+        let json = serde_json::to_string(&track).unwrap();
+        for key in ["albumId", "artistId", "durationSeconds", "trackNumber", "discNumber", "imageRef"] {
+            assert!(json.contains(&format!("\"{key}\"")), "missing {key}: {json}");
+        }
+        for leaked in ["album_id", "artist_id", "duration_seconds", "track_number", "disc_number", "image_ref"] {
+            assert!(!json.contains(leaked), "snake_case leaked `{leaked}`: {json}");
+        }
+    }
+
+    #[test]
+    fn album_uses_camel_case_wire_format() {
+        let album = Album {
+            id: AlbumId::new("album-1"),
+            title: "Al".to_string(),
+            artist: "A".to_string(),
+            artist_id: None,
+            year: None,
+            track_count: 1,
+            duration_seconds: 1,
+            favorite: false,
+            image_ref: None,
+            genres: Vec::new(),
+        };
+        let json = serde_json::to_string(&album).unwrap();
+        for key in ["trackCount", "durationSeconds", "imageRef"] {
+            assert!(json.contains(&format!("\"{key}\"")), "missing {key}: {json}");
+        }
+        for leaked in ["track_count", "duration_seconds", "image_ref"] {
+            assert!(!json.contains(leaked), "snake_case leaked `{leaked}`: {json}");
+        }
+    }
+
+    #[test]
+    fn playlist_uses_camel_case_wire_format() {
+        let playlist = Playlist {
+            id: PlaylistId::new("playlist-1"),
+            name: "P".to_string(),
+            track_count: 1,
+            duration_seconds: 1,
+            owner: None,
+            public: false,
+            image_ref: None,
+        };
+        let json = serde_json::to_string(&playlist).unwrap();
+        for key in ["trackCount", "durationSeconds", "imageRef"] {
+            assert!(json.contains(&format!("\"{key}\"")), "missing {key}: {json}");
+        }
+    }
+
+    #[test]
+    fn artist_uses_camel_case_wire_format() {
+        let artist = Artist {
+            id: ArtistId::new("artist-1"),
+            name: "A".to_string(),
+            album_count: 1,
+            track_count: 1,
+            favorite: false,
+            image_ref: None,
+        };
+        let json = serde_json::to_string(&artist).unwrap();
+        for key in ["albumCount", "trackCount", "imageRef"] {
+            assert!(json.contains(&format!("\"{key}\"")), "missing {key}: {json}");
+        }
+        for leaked in ["album_count", "track_count", "image_ref"] {
+            assert!(!json.contains(leaked), "snake_case leaked `{leaked}`: {json}");
+        }
+    }
 }

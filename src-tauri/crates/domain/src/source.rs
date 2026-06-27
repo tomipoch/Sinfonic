@@ -8,6 +8,7 @@ use super::ids::TrackId;
 
 /// Page request for collection-style provider methods.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PagedRequest {
     pub offset: usize,
     pub limit: usize,
@@ -21,6 +22,7 @@ impl PagedRequest {
 
 /// Page response with total count.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PagedResponse<T> {
     pub items: Vec<T>,
     pub total: usize,

@@ -10,7 +10,7 @@
 //! surfaced as `rusqlite::Error`.
 
 use rusqlite::Row;
-use sinfonic_domain::{Album, AlbumId, Artist, ArtistId, ImageRef, Track, TrackId};
+use sinfonic_domain::{Album, AlbumId, Artist, ArtistId, Genre, GenreId, ImageRef, Playlist, PlaylistId, Track, TrackId};
 
 fn row_to_image_ref(row: &Row, kind_col: &str, tag_col: &str, id_col: &str) -> rusqlite::Result<Option<ImageRef>> {
     let kind: Option<String> = row.get(kind_col)?;
@@ -70,6 +70,39 @@ pub fn row_to_track(row: &Row) -> rusqlite::Result<Track> {
         track_number: row.get("track_number")?,
         disc_number: row.get("disc_number")?,
         favorite: row.get::<_, i64>("favorite")? != 0,
+        image_ref,
+    })
+}
+
+/// Build a `Genre` from a row produced by `Library::list_genres`.
+/// The `id` is derived from the genre name so a UI can build stable
+/// links without needing the original provider's opaque id (we
+/// don't currently store it in `album_genres`).
+pub fn row_to_genre(row: &Row) -> rusqlite::Result<Genre> {
+    let name: String = row.get("name")?;
+    Ok(Genre {
+        id: GenreId::new(name.clone()),
+        name,
+        album_count: row.get::<_, i64>("album_count")? as u32,
+        track_count: row.get::<_, i64>("track_count")? as u32,
+    })
+}
+
+/// Build a `Playlist` from a `playlists` row. The image columns
+/// (`image_kind` / `image_tag`) are reconstructed into an
+/// `ImageRef` whose `item_id` is the playlist's id — the
+/// `image_metadata` / `image_bytes` provider methods strip the
+/// prefix and resolve the cover via the provider's own endpoint.
+pub fn row_to_playlist(row: &Row) -> rusqlite::Result<Playlist> {
+    let image_ref = row_to_image_ref(row, "image_kind", "image_tag", "playlist_id")?;
+    let id: String = row.get("playlist_id")?;
+    Ok(Playlist {
+        id: PlaylistId::new(id),
+        name: row.get("name")?,
+        track_count: row.get::<_, i64>("track_count")? as u32,
+        duration_seconds: row.get::<_, i64>("duration_seconds")? as u32,
+        owner: row.get("owner")?,
+        public: row.get::<_, i64>("public")? != 0,
         image_ref,
     })
 }

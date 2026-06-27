@@ -7,8 +7,8 @@ import {
   resume,
   setMuted,
   setVolume,
-} from "../lib/tauri";
-import { usePlaybackStore } from "../stores/playbackStore";
+} from "@/lib/tauri";
+import { usePlaybackStore } from "@/stores/playbackStore";
 
 const VOLUME_STEP = 0.05;
 
@@ -44,10 +44,10 @@ export function useKeyboardShortcuts() {
           try {
             if (isPlaying) {
               await pause();
-              usePlaybackStore.getState().setState({ ...usePlaybackStore.getState(), isPlaying: false });
+              usePlaybackStore.getState().setIsPlaying(false);
             } else {
               await resume();
-              usePlaybackStore.getState().setState({ ...usePlaybackStore.getState(), isPlaying: true });
+              usePlaybackStore.getState().setIsPlaying(true);
             }
           } catch (err) {
             toast.error(`Playback: ${(err as Error).message}`);
@@ -80,7 +80,7 @@ export function useKeyboardShortcuts() {
           const nextVol = Math.min(1, volume + VOLUME_STEP);
           try {
             await setVolume(nextVol);
-            setVolume(nextVol);
+            updateVolume(nextVol);
           } catch (err) {
             toast.error(`Volume: ${(err as Error).message}`);
           }

@@ -26,6 +26,17 @@ pub mod scanner;
 
 pub use scanner::{scan, EmbeddedArt, FileError, ScanResult};
 
+/// Bridge the scanner's error type into the provider layer. The
+/// music-provider trait returns `ProviderError`, but the scanner's
+/// filesystem errors don't map cleanly onto any of its variants —
+/// they get surfaced as a generic `Other` so the UI still gets a
+/// human-readable message.
+impl From<scanner::ScanError> for ProviderError {
+    fn from(e: scanner::ScanError) -> Self {
+        ProviderError::Other(format!("local scan failed: {e}"))
+    }
+}
+
 pub const LOCAL_PROVIDER_ID: &str = "local";
 pub const LOCAL_SERVER_NAME: &str = "Local files";
 pub const LOCAL_SERVER_ID: &str = "server-local";
@@ -117,6 +128,26 @@ impl LocalProvider {
         Ok(stats)
     }
 
+    /// Trigger a scan if the in-memory snapshot hasn't been populated
+    /// yet. The `LocalProvider` is reconstructed without a scan on
+    /// every app start (see `try_restore_provider` /
+    /// `provider_set_active`), so the first data access after a
+    /// restart would otherwise fail with `local provider not scanned`.
+    /// This keeps the user-facing fix invisible — the LoadingView's
+    /// "caching your library" spinner covers the scan.
+    ///
+    /// The result is cached in the existing `state.scan` slot, so
+    /// subsequent calls are O(1). The scan itself is synchronous
+    /// and filesystem-bound; calling it from an async method blocks
+    /// the async task but does not pin a worker thread.
+    pub fn ensure_scanned(&self) -> Result<(), scanner::ScanError> {
+        let needs_scan = self.state.read().scan.is_none();
+        if needs_scan {
+            self.rescan()?;
+        }
+        Ok(())
+    }
+
     /// Try to expose the in-memory scan (used by tests and the Tauri
     /// command that does the SQLite write).
     pub fn snapshot(&self) -> Option<ScanResult> {
@@ -127,11 +158,24 @@ impl LocalProvider {
     /// scanner emits). Used by `image_bytes` to satisfy the
     /// `provider_image_bytes` IPC command.
     fn lookup_embedded_art(&self, album_id: &str) -> Option<EmbeddedArt> {
-        self.state
-            .read()
-            .scan
-            .as_ref()
-            .and_then(|s| s.embedded_art.get(album_id).cloned())
+        let state = self.state.read();
+        match state.scan.as_ref() {
+            None => {
+                eprintln!(
+                    "[local] lookup_embedded_art({album_id}) — in-memory scan is empty (provider not rescanned)"
+                );
+                None
+            }
+            Some(s) => {
+                let n = s.embedded_art.len();
+                let hit = s.embedded_art.get(album_id).cloned();
+                eprintln!(
+                    "[local] lookup_embedded_art({album_id}) — {n} entries, hit={}",
+                    hit.is_some()
+                );
+                hit
+            }
+        }
     }
 
     /// Resolve a `track_id` to its absolute filesystem path. Returns
@@ -184,6 +228,7 @@ impl MusicProvider for LocalProvider {
         // surfaced, labelled "Explore". The Tauri layer typically
         // calls the SQLite cache directly for home view, so this is
         // a courtesy fallback.
+        self.ensure_scanned()?;
         let snapshot = self.state.read();
         let albums = snapshot
             .scan
@@ -198,11 +243,9 @@ impl MusicProvider for LocalProvider {
     }
 
     async fn albums(&self, request: PagedRequest) -> ProviderResult<PagedResponse<Album>> {
+        self.ensure_scanned()?;
         let snapshot = self.state.read();
-        let scan = snapshot
-            .scan
-            .as_ref()
-            .ok_or_else(|| ProviderError::Other("local provider not scanned".into()))?;
+        let scan = snapshot.scan.as_ref().expect("ensure_scanned set this");
         let total = scan.albums.len();
         let items = paginate(&scan.albums, request.offset, request.limit);
         Ok(PagedResponse::new(items, total))
@@ -212,11 +255,9 @@ impl MusicProvider for LocalProvider {
         &self,
         album_id: &AlbumId,
     ) -> ProviderResult<AlbumDetailResponse> {
+        self.ensure_scanned()?;
         let snapshot = self.state.read();
-        let scan = snapshot
-            .scan
-            .as_ref()
-            .ok_or_else(|| ProviderError::Other("local provider not scanned".into()))?;
+        let scan = snapshot.scan.as_ref().expect("ensure_scanned set this");
         let album = scan
             .albums
             .iter()
@@ -238,22 +279,18 @@ impl MusicProvider for LocalProvider {
     }
 
     async fn tracks(&self, request: PagedRequest) -> ProviderResult<PagedResponse<Track>> {
+        self.ensure_scanned()?;
         let snapshot = self.state.read();
-        let scan = snapshot
-            .scan
-            .as_ref()
-            .ok_or_else(|| ProviderError::Other("local provider not scanned".into()))?;
+        let scan = snapshot.scan.as_ref().expect("ensure_scanned set this");
         let total = scan.tracks.len();
         let items = paginate(&scan.tracks, request.offset, request.limit);
         Ok(PagedResponse::new(items, total))
     }
 
     async fn track(&self, track_id: &TrackId) -> ProviderResult<Track> {
+        self.ensure_scanned()?;
         let snapshot = self.state.read();
-        let scan = snapshot
-            .scan
-            .as_ref()
-            .ok_or_else(|| ProviderError::Other("local provider not scanned".into()))?;
+        let scan = snapshot.scan.as_ref().expect("ensure_scanned set this");
         scan.tracks
             .iter()
             .find(|t| t.id == *track_id)
@@ -262,9 +299,10 @@ impl MusicProvider for LocalProvider {
     }
 
     async fn music_folders(&self) -> ProviderResult<Vec<MusicFolder>> {
+        self.ensure_scanned()?;
         let snapshot = self.state.read();
-        let scan = snapshot.scan.as_ref();
-        let track_count = scan.map(|s| s.tracks.len()).unwrap_or(0) as u32;
+        let scan = snapshot.scan.as_ref().expect("ensure_scanned set this");
+        let track_count = scan.tracks.len() as u32;
         let folder_name = self
             .root
             .file_name()
@@ -296,11 +334,9 @@ impl MusicProvider for LocalProvider {
     }
 
     async fn artists(&self, request: PagedRequest) -> ProviderResult<PagedResponse<Artist>> {
+        self.ensure_scanned()?;
         let snapshot = self.state.read();
-        let scan = snapshot
-            .scan
-            .as_ref()
-            .ok_or_else(|| ProviderError::Other("local provider not scanned".into()))?;
+        let scan = snapshot.scan.as_ref().expect("ensure_scanned set this");
         let total = scan.artists.len();
         let items = paginate(&scan.artists, request.offset, request.limit);
         Ok(PagedResponse::new(items, total))
@@ -317,11 +353,9 @@ impl MusicProvider for LocalProvider {
         &self,
         artist_id: &ArtistId,
     ) -> ProviderResult<ArtistDetailResponse> {
+        self.ensure_scanned()?;
         let snapshot = self.state.read();
-        let scan = snapshot
-            .scan
-            .as_ref()
-            .ok_or_else(|| ProviderError::Other("local provider not scanned".into()))?;
+        let scan = snapshot.scan.as_ref().expect("ensure_scanned set this");
         let artist = scan
             .artists
             .iter()
@@ -384,11 +418,9 @@ impl MusicProvider for LocalProvider {
         // (which the SQLite cache already populates) is what the UI
         // uses; this fallback covers the case where the provider is
         // asked directly.
+        self.ensure_scanned()?;
         let snapshot = self.state.read();
-        let scan = snapshot
-            .scan
-            .as_ref()
-            .ok_or_else(|| ProviderError::Other("local provider not scanned".into()))?;
+        let scan = snapshot.scan.as_ref().expect("ensure_scanned set this");
         let needle = query.to_lowercase();
         let limit = 20;
         let mut albums = Vec::new();

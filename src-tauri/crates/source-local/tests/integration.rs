@@ -218,3 +218,92 @@ fn provider_search_finds_substring() {
     assert_eq!(result.tracks.len(), 1);
     assert!(result.tracks[0].title.contains("alpha"));
 }
+
+// ─── Lazy scan regression ───────────────────────────────────────────
+//
+// Bug: `LocalProvider` is reconstructed without a scan on every app
+// start (`try_restore_provider`, `provider_set_active`). The first
+// `albums()` / `artists()` / `tracks()` call afterwards errored with
+// `"local provider not scanned"`. The fix is `ensure_scanned`, a
+// cheap idempotent guard that triggers a single rescan the first
+// time any data method is called. These tests assert the contract.
+
+#[test]
+fn lazy_scan_triggers_on_first_albums_call_after_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let root_path = root.path();
+    write_wav(&root_path.join("album1/track1.wav"));
+    write_wav(&root_path.join("album2/track2.wav"));
+
+    // Simulate a cold start: `LocalProvider::new` does NOT scan.
+    let provider = LocalProvider::new(root_path);
+    assert!(provider.snapshot().is_none(), "precondition: snapshot empty");
+
+    // First data access should auto-scan and succeed.
+    let result = futures::executor::block_on(
+        provider.albums(PagedRequest::new(0, 50)),
+    );
+    let page = result.expect("albums() must succeed without explicit rescan");
+    assert!(page.total >= 2, "expected at least 2 albums, got {}", page.total);
+}
+
+#[test]
+fn lazy_scan_does_not_re_scan_when_already_populated() {
+    let root = tempfile::tempdir().unwrap();
+    let root_path = root.path();
+    write_wav(&root_path.join("track.wav"));
+
+    let provider = LocalProvider::new(root_path);
+    provider.rescan().unwrap();
+    let first_root_modified = std::fs::metadata(root_path.join("track.wav"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    // Add another file AFTER the first scan; the cached snapshot
+    // should remain authoritative until the caller explicitly
+    // rescan()s. This pins down `ensure_scanned`'s "skip when
+    // Some" branch.
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    write_wav(&root_path.join("added.wav"));
+
+    let page = futures::executor::block_on(
+        provider.albums(PagedRequest::new(0, 50)),
+    )
+    .expect("albums() should not error");
+    assert_eq!(page.total, 1, "snapshot must not auto-refresh");
+
+    // File on disk is unchanged, so its mtime is what we captured.
+    let _ = first_root_modified;
+}
+
+#[test]
+fn lazy_scan_makes_artists_tracks_music_folders_and_search_work() {
+    let root = tempfile::tempdir().unwrap();
+    let root_path = root.path();
+    write_wav(&root_path.join("album/track.wav"));
+
+    let provider = LocalProvider::new(root_path);
+    // All four data methods must succeed without an explicit rescan.
+    let albums = futures::executor::block_on(
+        provider.albums(PagedRequest::new(0, 50)),
+    )
+    .expect("albums");
+    let artists = futures::executor::block_on(
+        provider.artists(PagedRequest::new(0, 50)),
+    )
+    .expect("artists");
+    let tracks = futures::executor::block_on(
+        provider.tracks(PagedRequest::new(0, 50)),
+    )
+    .expect("tracks");
+    let folders = futures::executor::block_on(provider.music_folders())
+        .expect("music_folders");
+    let search = futures::executor::block_on(provider.search("track"))
+        .expect("search");
+
+    assert!(albums.total >= 1);
+    assert!(artists.total >= 1);
+    assert!(tracks.total >= 1);
+    assert_eq!(folders.len(), 1);
+    assert!(!search.tracks.is_empty());
+}

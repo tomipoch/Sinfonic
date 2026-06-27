@@ -364,6 +364,11 @@ pub struct PlaylistDto {
     pub created: Option<String>,
     #[serde(default)]
     pub changed: Option<String>,
+    /// Subsonic returns the playlist's cover art id here. Empty /
+    /// missing means "no cover" — the frontend falls back to the
+    /// gradient placeholder.
+    #[serde(default)]
+    pub cover_art: Option<String>,
 }
 
 /// `/rest/getPlaylist` — one playlist with all its tracks.
@@ -391,6 +396,9 @@ pub struct PlaylistDetailDto {
     pub duration: u32,
     #[serde(default)]
     pub entry: Vec<PlaylistEntryDto>,
+    /// Subsonic includes the playlist's cover id on `getPlaylist`.
+    #[serde(default)]
+    pub cover_art: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

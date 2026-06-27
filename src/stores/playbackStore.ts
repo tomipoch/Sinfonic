@@ -9,7 +9,7 @@ import { create } from "zustand";
 import type {
   PlaybackStatePayload,
   TrackChangedPayload,
-} from "../types/domain";
+} from "@/types/domain";
 
 export interface PlaybackStore {
   isPlaying: boolean;
@@ -22,6 +22,7 @@ export interface PlaybackStore {
   shuffle: boolean;
 
   setState: (state: PlaybackStatePayload) => void;
+  setIsPlaying: (isPlaying: boolean) => void;
   setTrack: (track: TrackChangedPayload) => void;
   setPosition: (position: number) => void;
   setVolume: (volume: number) => void;
@@ -51,6 +52,8 @@ export const usePlaybackStore = create<PlaybackStore>((set) => ({
       repeat: state.repeat,
       shuffle: state.shuffle,
     }),
+
+  setIsPlaying: (isPlaying: boolean) => set({ isPlaying }),
 
   setTrack: (track) =>
     set({

@@ -5,8 +5,9 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
-import { getSmartPlaylists, createSmartPlaylist, deleteSmartPlaylist, type SmartPlaylist, type CreateSmartPlaylistArgs } from "../../lib/tauri";
-import { useServerStore } from "../../stores/serverStore";
+import { getSmartPlaylists, createSmartPlaylist, deleteSmartPlaylist, type SmartPlaylist, type CreateSmartPlaylistArgs } from "@/lib/tauri";
+import { extractError } from "@/lib/errors";
+import { useServerStore } from "@/stores/serverStore";
 
 const FIELDS = [
   { value: "title", label: "Title" },
@@ -100,7 +101,7 @@ export function SmartPlaylistsView() {
       setForm({ name: "", field: "title", operator: "contains", value: "", sortField: "title", sortDir: "asc", limitN: 50 });
       void load();
     } catch (e) {
-      toast.error(`Couldn't create: ${(e as Error).message}`);
+      toast.error(`Couldn't create: ${extractError(e, "unknown error")}`);
     } finally {
       setCreating(false);
     }
@@ -112,7 +113,7 @@ export function SmartPlaylistsView() {
       toast.success("Deleted");
       void load();
     } catch (e) {
-      toast.error(`Couldn't delete: ${(e as Error).message}`);
+      toast.error(`Couldn't delete: ${extractError(e, "unknown error")}`);
     } finally {
       setDeleteId(null);
     }
@@ -120,9 +121,9 @@ export function SmartPlaylistsView() {
 
   if (!activeServerId) {
     return (
-      <div className="flex flex-col items-start gap-3 rounded-md border border-bg-raised bg-bg-subtle p-6">
-        <div className="text-base font-medium text-fg">No server connected</div>
-        <p className="text-sm text-fg-subtle">Connect a server in Settings to manage smart playlists.</p>
+      <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
+        <div className="text-base font-medium text-foreground">No server connected</div>
+        <p className="text-sm text-muted-foreground">Connect a server in Settings to manage smart playlists.</p>
       </div>
     );
   }
@@ -131,15 +132,15 @@ export function SmartPlaylistsView() {
     <section className="flex flex-col gap-6 p-6">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-2xl font-semibold">Smart Playlists</h1>
-        <span className="text-xs text-fg-muted">Single-rule evaluation — Phase 9</span>
+        <span className="text-xs text-muted">Single-rule evaluation — Phase 9</span>
       </header>
 
       {/* Create form */}
-      <div className="flex flex-col gap-4 rounded-md border border-bg-raised bg-bg-subtle p-4">
-        <h2 className="text-sm font-medium text-fg">Create new smart playlist</h2>
+      <div className="flex flex-col gap-4 rounded-md border border-border bg-muted p-4">
+        <h2 className="text-sm font-medium text-foreground">Create new smart playlist</h2>
         <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-2 items-end">
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-fg-subtle" htmlFor="sp-name">Name</label>
+            <label className="text-xs text-muted-foreground" htmlFor="sp-name">Name</label>
             <input
               id="sp-name"
               type="text"
@@ -150,18 +151,18 @@ export function SmartPlaylistsView() {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-fg-subtle" htmlFor="sp-field">Field</label>
+            <label className="text-xs text-muted-foreground" htmlFor="sp-field">Field</label>
             <select
               id="sp-field"
               value={form.field}
-              onChange={(e) => setForm((f) => ({ ...f, field: e.target.value as typeof form.field }))}
+              onChange={(e) => setForm((f) => ({ ...f, field: e.target.value as typeof f.field }))}
               className="input w-full"
             >
               {FIELDS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
             </select>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-fg-subtle" htmlFor="sp-op">Operator</label>
+            <label className="text-xs text-muted-foreground" htmlFor="sp-op">Operator</label>
             <select
               id="sp-op"
               value={form.operator}
@@ -172,7 +173,7 @@ export function SmartPlaylistsView() {
             </select>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-fg-subtle" htmlFor="sp-value">Value</label>
+            <label className="text-xs text-muted-foreground" htmlFor="sp-value">Value</label>
             <input
               id="sp-value"
               type="text"
@@ -191,7 +192,7 @@ export function SmartPlaylistsView() {
             {creating ? "Creating…" : "Create"}
           </button>
         </div>
-        <div className="flex gap-2 items-center text-xs text-fg-subtle">
+        <div className="flex gap-2 items-center text-xs text-muted-foreground">
           <span>Sort by:</span>
           <select
             value={form.sortField}
@@ -221,7 +222,7 @@ export function SmartPlaylistsView() {
 
       {/* List */}
       {loading ? (
-        <p className="text-fg-subtle text-sm" role="status">Loading smart playlists…</p>
+        <p className="text-muted-foreground text-sm" role="status">Loading smart playlists…</p>
       ) : error ? (
         <div className="flex flex-col items-start gap-3 rounded-md border border-red-900 bg-red-950 p-6">
           <div className="text-base font-medium text-red-400">Failed to load</div>
@@ -229,21 +230,21 @@ export function SmartPlaylistsView() {
           <button type="button" onClick={() => void load()} className="btn-ghost text-sm">Retry</button>
         </div>
       ) : playlists.length === 0 ? (
-        <div className="flex flex-col items-start gap-3 rounded-md border border-bg-raised bg-bg-subtle p-6">
-          <div className="text-base font-medium text-fg">No smart playlists yet</div>
-          <p className="text-sm text-fg-subtle">Fill in the form above to create your first one.</p>
+        <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
+          <div className="text-base font-medium text-foreground">No smart playlists yet</div>
+          <p className="text-sm text-muted-foreground">Fill in the form above to create your first one.</p>
         </div>
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(20rem,1fr))] gap-4">
           {playlists.map((sp) => (
             <div
               key={sp.id}
-              className="flex flex-col gap-2 rounded-md border border-bg-raised bg-bg-subtle p-4 hover:border-accent/50 hover:bg-bg-raised transition-colors"
+              className="flex flex-col gap-2 rounded-md border border-border bg-muted p-4 hover:border-primary/50 hover:bg-card transition-colors"
             >
               <div className="flex items-start justify-between gap-2">
                 <Link
                   to={`/smart-playlists/${encodeURIComponent(sp.id)}`}
-                  className="text-sm font-medium text-fg hover:text-white truncate"
+                  className="text-sm font-medium text-foreground hover:text-white truncate"
                 >
                   {sp.name}
                 </Link>
@@ -251,17 +252,17 @@ export function SmartPlaylistsView() {
                   type="button"
                   onClick={() => setDeleteId(sp.id)}
                   aria-label={`Delete ${sp.name}`}
-                  className="shrink-0 rounded-md p-1 text-fg-muted hover:bg-bg-raised hover:text-red-400 focus:outline-none"
+                  className="shrink-0 rounded-md p-1 text-muted hover:bg-card hover:text-red-400 focus:outline-none"
                 >
                   ✕
                 </button>
               </div>
-              <div className="text-xs text-fg-subtle">
+              <div className="text-xs text-muted-foreground">
                 {FIELDS.find((f) => f.value === sp.rule.field)?.label ?? sp.rule.field}{" "}
                 {OPERATORS.find((o) => o.value === sp.rule.operator)?.label ?? sp.rule.operator}{" "}
-                <span className="font-medium text-fg">"{sp.rule.value}"</span>
+                <span className="font-medium text-foreground">"{sp.rule.value}"</span>
               </div>
-              <div className="flex gap-3 text-xs text-fg-muted">
+              <div className="flex gap-3 text-xs text-muted">
                 <span>Sort: {SORT_FIELDS.find((f) => f.value === sp.sortField)?.label}</span>
                 <span>· Limit: {sp.limitN}</span>
               </div>
@@ -279,7 +280,7 @@ export function SmartPlaylistsView() {
                   <button
                     type="button"
                     onClick={() => setDeleteId(null)}
-                    className="rounded px-2 py-0.5 bg-bg-raised text-fg hover:text-fg"
+                    className="rounded px-2 py-0.5 bg-card text-foreground hover:text-foreground"
                   >
                     No
                   </button>

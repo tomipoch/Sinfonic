@@ -9,12 +9,17 @@
 // The blob URL is created from a Uint8Array (the IPC payload comes
 // back as a plain number[]) and revoked on unmount to free the
 // browser-side blob handle.
+//
+// `source` is intentionally generic (`{ id, title, imageRef }`) so
+// tracks (which carry their own `imageRef` in the cache) can be
+// rendered the same way as albums.
 
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 
-import { providerImageBytes } from "../../lib/tauri";
-import type { Album } from "../../types/domain";
+import { providerImageBytes } from "@/lib/tauri";
+import { buildBlobUrl, getCached, setCached } from "@/lib/albumArtCache";
+import type { ImageRef } from "@/types/domain";
 
 const PALETTE: ReadonlyArray<readonly [number, number]> = [
   [260, 25],
@@ -35,32 +40,59 @@ function hash(input: string): number {
   return Math.abs(h);
 }
 
-interface AlbumCoverProps {
-  album: Pick<Album, "id" | "title" | "imageRef">;
-  className?: string;
+export interface AlbumCoverSource {
+  id: string;
+  // Optional — callers that have a "title" (albums) pass it; entities
+  // like artists without a title field still get an aria-label via
+  // the `ariaLabel` prop and a fallback initial via the `initial` prop.
+  title?: string;
+  imageRef?: ImageRef | null;
 }
 
-export function AlbumCover({ album, className }: AlbumCoverProps) {
+interface AlbumCoverProps {
+  source: AlbumCoverSource;
+  className?: string;
+  ariaLabel?: string;
+  initial?: string;
+}
+
+export function AlbumCover({
+  source,
+  className,
+  ariaLabel,
+  initial,
+}: AlbumCoverProps) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    const itemId = album.imageRef?.itemId;
+    const itemId = source.imageRef?.itemId;
     if (!itemId) {
       setBlobUrl(null);
       setFailed(false);
       return;
     }
-    let cancelled = false;
+    const tag = source.imageRef?.tag ?? null;
+
+    // Synchronous cache hit — render the blob URL immediately
+    // without an IPC roundtrip or a re-render.
+    const cached = getCached(itemId, tag);
+    if (cached) {
+      setBlobUrl(cached);
+      setFailed(false);
+      return;
+    }
+
+    setBlobUrl(null);
     setFailed(false);
+    let cancelled = false;
 
     (async () => {
       try {
-        const res = await providerImageBytes(itemId, album.imageRef?.tag ?? null);
+        const res = await providerImageBytes(itemId, tag);
         if (cancelled) return;
-        const bytes = new Uint8Array(res.bytes);
-        const blob = new Blob([bytes], { type: res.contentType });
-        const url = URL.createObjectURL(blob);
+        const url = buildBlobUrl(res.bytes, res.contentType);
+        setCached(itemId, tag, url);
         setBlobUrl(url);
       } catch {
         if (!cancelled) setFailed(true);
@@ -69,14 +101,10 @@ export function AlbumCover({ album, className }: AlbumCoverProps) {
 
     return () => {
       cancelled = true;
-      setBlobUrl((current) => {
-        if (current) URL.revokeObjectURL(current);
-        return null;
-      });
     };
-  }, [album.id, album.imageRef?.itemId, album.imageRef?.tag]);
+  }, [source.id, source.imageRef?.itemId, source.imageRef?.tag]);
 
-  const seed = hash(album.id);
+  const seed = hash(source.id);
   const slot = PALETTE[seed % PALETTE.length] ?? PALETTE[0]!;
   const baseHue = slot[0];
   const sat = slot[1];
@@ -84,7 +112,8 @@ export function AlbumCover({ album, className }: AlbumCoverProps) {
   const gradientStyle: CSSProperties = {
     background: `linear-gradient(135deg, hsl(${baseHue} ${sat}% 22%) 0%, hsl(${accentHue} ${sat}% 35%) 100%)`,
   };
-  const initial = (album.title.trim().charAt(0) || "?").toUpperCase();
+  const fallbackInitial =
+    initial ?? (source.title?.trim().charAt(0) || "?").toUpperCase();
 
   return (
     <div
@@ -92,14 +121,14 @@ export function AlbumCover({ album, className }: AlbumCoverProps) {
         "relative aspect-square w-full overflow-hidden rounded-md shadow-sm " +
         (className ?? "")
       }
-      aria-label={`Cover art for ${album.title}`}
+      aria-label={ariaLabel ?? `Cover art for ${source.title}`}
     >
       <div
         style={gradientStyle}
         className="absolute inset-0 flex items-center justify-center text-4xl font-bold text-white/90"
         aria-hidden
       >
-        {initial}
+        {fallbackInitial}
       </div>
       {blobUrl && !failed && (
         <img

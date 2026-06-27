@@ -5,7 +5,7 @@
 
 import { create } from "zustand";
 
-import type { QueueSnapshot } from "../types/domain";
+import type { QueueSnapshot } from "@/types/domain";
 
 export interface QueueStore extends QueueSnapshot {
   setSnapshot: (snapshot: QueueSnapshot) => void;

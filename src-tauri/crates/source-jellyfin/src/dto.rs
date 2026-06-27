@@ -160,7 +160,8 @@ pub struct UserData {
 
 /// Playlist-specific fields. Jellyfin returns the metadata as a
 /// `BaseItemDto`; the convenience wrapper below strips everything we
-/// don't need.
+/// don't need. `ImageTags` carries the cover art id used by the
+/// `/Items/{id}/Images/Primary` endpoint.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct PlaylistDto {
@@ -176,6 +177,8 @@ pub struct PlaylistDto {
     pub owner_user_id: Option<String>,
     #[serde(default)]
     pub open_access: Option<bool>,
+    #[serde(default)]
+    pub image_tags: Option<super::dto::ImageTags>,
 }
 
 /// UDP discovery response payload. The Jellyfin server broadcasts a

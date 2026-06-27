@@ -17,7 +17,10 @@ pub enum EventName {
     QueueChanged,
     TrackChanged,
     LibrarySyncStatus,
-    ServerDiscovered,
+    /// Per-batch progress emitted by long-running sync phases. The
+    /// frontend may surface this as a progress bar; missing listeners
+    /// are harmless (the emit is fire-and-forget).
+    SyncProgress,
 }
 
 impl EventName {
@@ -27,7 +30,7 @@ impl EventName {
             Self::QueueChanged => "queue-changed",
             Self::TrackChanged => "track-changed",
             Self::LibrarySyncStatus => "library-sync-status",
-            Self::ServerDiscovered => "server-discovered",
+            Self::SyncProgress => "sync-progress",
         }
     }
 }
@@ -116,4 +119,18 @@ pub struct LibrarySyncStatusPayload {
     pub server_id: Option<String>,
     pub state: String,
     pub progress: f32,
+}
+
+/// Payload for `sync-progress`.
+///
+/// `phase` is a free-form label (e.g. `"tracks"`, `"albums"`) so the
+/// frontend can distinguish phases without hard-coding a number per
+/// provider. `done` / `total` are counts of completed work units
+/// within the current phase.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncProgressPayload {
+    pub phase: String,
+    pub done: usize,
+    pub total: usize,
 }

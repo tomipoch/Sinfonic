@@ -51,6 +51,9 @@ lofty = "0.21"
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-store = "2"
+tauri-plugin-os = "2"
+tauri-plugin-dialog = "2"
 
 # Local workspace crates
 sinfonic-domain = { path = "crates/domain" }
@@ -92,10 +95,15 @@ tauri-build = { workspace = true }
 [dependencies]
 tauri = { workspace = true }
 tauri-plugin-opener = { workspace = true }
+tauri-plugin-store = { workspace = true }
+tauri-plugin-os = { workspace = true }
+tauri-plugin-dialog = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+rusqlite = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+futures = { workspace = true }
 async-trait = { workspace = true }
 md5 = { workspace = true }
 hex = { workspace = true }

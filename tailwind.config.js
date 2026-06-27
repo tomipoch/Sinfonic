@@ -1,23 +1,46 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  content: ["./index.html", "./settings.html", "./src/**/*.{ts,tsx}"],
+  darkMode: "class",
   theme: {
     extend: {
       colors: {
-        // Dark theme defaults — Sinfonic ships with a Spotify-like look
+        background: "var(--background)",
+        foreground: "var(--foreground)",
+        primary: "var(--primary)",
+        "primary-foreground": "var(--primary-foreground)",
+        secondary: "var(--secondary)",
+        "secondary-foreground": "var(--secondary-foreground)",
+        muted: "var(--muted)",
+        "muted-foreground": "var(--muted-foreground)",
+        accent: "var(--accent)",
+        "accent-foreground": "var(--accent-foreground)",
+        destructive: "var(--destructive)",
+        border: "var(--border)",
+        input: "var(--input)",
+        ring: "var(--ring)",
+        card: "var(--card)",
+        "card-foreground": "var(--card-foreground)",
+        popover: "var(--popover)",
+        "popover-foreground": "var(--popover-foreground)",
+        sidebar: "var(--sidebar)",
+        "sidebar-foreground": "var(--sidebar-foreground)",
+        "sidebar-primary": "var(--sidebar-primary)",
+        "sidebar-primary-foreground": "var(--sidebar-primary-foreground)",
+        "sidebar-accent": "var(--sidebar-accent)",
+        "sidebar-accent-foreground": "var(--sidebar-accent-foreground)",
+        "sidebar-border": "var(--sidebar-border)",
+        "sidebar-ring": "var(--sidebar-ring)",
+        radius: "var(--radius)",
         bg: {
-          DEFAULT: "#0b0b0e",
-          subtle: "#15151a",
-          raised: "#1f1f25",
+          DEFAULT: "var(--background)",
+          subtle: "var(--muted)",
+          raised: "var(--card)",
         },
         fg: {
-          DEFAULT: "#f5f5f7",
-          subtle: "#a1a1aa",
-          muted: "#71717a",
-        },
-        accent: {
-          DEFAULT: "#10b981",
-          hover: "#34d399",
+          DEFAULT: "var(--foreground)",
+          subtle: "var(--muted-foreground)",
+          muted: "var(--muted)",
         },
       },
       fontFamily: {

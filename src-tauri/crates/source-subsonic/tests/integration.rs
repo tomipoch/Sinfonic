@@ -200,12 +200,22 @@ async fn fetch_artists_uses_get_artists() {
 #[tokio::test]
 async fn fetch_tracks_maps_child_to_track() {
     let server = MockServer::start().await;
+    // `tracks()` now fans out via `getAlbumList2` + `getAlbum`.
+    // Mock a single album with two tracks and a 1-page album list.
     Mock::given(method("GET"))
-        .and(path("/rest/search3"))
+        .and(path("/rest/getAlbumList2"))
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope_ok(json!({
-            "searchResult3": {
-                "artist": [],
-                "album": [],
+            "albumList2": { "album": [album_dto("al-1", "Album", "Artist")] }
+        }))))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/rest/getAlbum"))
+        .and(query_param("id", "al-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope_ok(json!({
+            "album": {
+                "id": "al-1",
+                "name": "Album",
                 "song": [child_dto("t-1", "al-1"), child_dto("t-2", "al-1")],
             }
         }))))
@@ -217,11 +227,240 @@ async fn fetch_tracks_maps_child_to_track() {
         .tracks(PagedRequest::new(0, 50))
         .await
         .expect("tracks ok");
+    assert_eq!(page.items.len(), 2);
     assert_eq!(page.items[0].id.as_str(), "track-t-1");
     assert_eq!(page.items[0].album_id.as_str(), "album-al-1");
     assert_eq!(page.items[0].duration_seconds, 240);
     assert_eq!(page.items[0].track_number, 1);
     assert!(page.items[0].favorite);
+}
+
+#[tokio::test]
+async fn tracks_paginates_across_multiple_album_list_pages() {
+    // 8 pages × 200 albums = 1600 albums, each with 5 tracks =
+    // 8000 tracks total. The implementation requests 200 albums at
+    // a time internally (`ALBUM_LIST_PAGE_SIZE`); the test verifies
+    // that all pages are fetched and every page of tracks contains
+    // distinct, non-overlapping ids. Without album fan-out, the
+    // Subsonic `search3` cap (~200) would only ever return the
+    // first album's tracks.
+    let server = MockServer::start().await;
+    // Pages 0..7 return 200 albums each; page 8 (offset 1600)
+    // returns an empty list to terminate the bootstrap loop. Each
+    // page is matched by every `tracks()` call (the impl re-bootstraps
+    // on every page request), so we use unbounded expectations and
+    // rely on the per-offset matcher to distinguish pages.
+    for page_idx in 0..8 {
+        let albums: Vec<serde_json::Value> = (0..200)
+            .map(|i| {
+                let id = format!("al-{}-{}", page_idx, i);
+                json!({
+                    "id": id,
+                    "name": format!("Album {} {}", page_idx, i),
+                    "title": format!("Album {} {}", page_idx, i),
+                    "artist": "Artist",
+                    "artistId": "ar-1",
+                    "songCount": 5,
+                    "duration": 1200,
+                    "coverArt": id,
+                    "starred": "2024-01-01T00:00:00Z",
+                })
+            })
+            .collect();
+        let template = ResponseTemplate::new(200)
+            .set_body_json(envelope_ok(json!({ "albumList2": { "album": albums } })));
+        Mock::given(method("GET"))
+            .and(path("/rest/getAlbumList2"))
+            .and(query_param("offset", (page_idx * 200).to_string()))
+            .respond_with(template)
+            .mount(&server)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path("/rest/getAlbumList2"))
+        .and(query_param("offset", "1600"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope_ok(json!({
+            "albumList2": { "album": [] }
+        }))))
+        .mount(&server)
+        .await;
+
+    // Each `getAlbum` returns 5 distinct tracks. The id is parsed
+    // from the request URL so every album gets unique track ids.
+    use wiremock::Request;
+    use wiremock::Respond;
+    struct AlbumResponder;
+    impl Respond for AlbumResponder {
+        fn respond(&self, req: &Request) -> ResponseTemplate {
+            let id = req
+                .url
+                .as_str()
+                .split('&')
+                .find_map(|kv| kv.strip_prefix("id="))
+                .unwrap_or("al-0-0")
+                .to_string();
+            let tracks: Vec<serde_json::Value> = (0..5)
+                .map(|i| child_dto(&format!("{id}-t-{i}"), &id))
+                .collect();
+            ResponseTemplate::new(200).set_body_json(envelope_ok(json!({
+                "album": { "id": id, "name": "Album", "song": tracks }
+            })))
+        }
+    }
+    Mock::given(method("GET"))
+        .and(path("/rest/getAlbum"))
+        .respond_with(AlbumResponder)
+        .mount(&server)
+        .await;
+
+    let provider = SubsonicProvider::new(session_for(&server)).unwrap();
+    // Page 1: offset 0, limit 200 → 200 tracks.
+    let p1 = provider
+        .tracks(PagedRequest::new(0, 200))
+        .await
+        .expect("page 1 ok");
+    assert_eq!(p1.items.len(), 200);
+    assert_eq!(p1.total, 8000);
+    // Page 2: offset 200, limit 200 → different 200 tracks.
+    let p2 = provider
+        .tracks(PagedRequest::new(200, 200))
+        .await
+        .expect("page 2 ok");
+    assert_eq!(p2.items.len(), 200);
+    let p1_ids: std::collections::HashSet<&str> =
+        p1.items.iter().map(|t| t.id.as_str()).collect();
+    let p2_ids: std::collections::HashSet<&str> =
+        p2.items.iter().map(|t| t.id.as_str()).collect();
+    assert!(
+        p1_ids.is_disjoint(&p2_ids),
+        "page 2 must not overlap page 1 ({} vs {})",
+        p1_ids.len(),
+        p2_ids.len()
+    );
+    // Last partial page: offset 7800 → 8000 - 7800 = 200 (still full).
+    let p_last = provider
+        .tracks(PagedRequest::new(7800, 200))
+        .await
+        .expect("last page ok");
+    assert_eq!(p_last.items.len(), 200);
+    // Beyond-end request: empty page, but `total` still accurate.
+    let p_over = provider
+        .tracks(PagedRequest::new(8000, 200))
+        .await
+        .expect("over-end ok");
+    assert!(p_over.items.is_empty());
+    assert_eq!(p_over.total, 8000);
+}
+
+#[tokio::test]
+async fn tracks_respects_offset_and_limit_exactly() {
+    let server = MockServer::start().await;
+    // 5 albums × 4 tracks = 20 tracks. Asking for offset=6, limit=8
+    // should yield tracks at global positions 6..14, which crosses
+    // the second→third album boundary.
+    let albums: Vec<serde_json::Value> = (0..5)
+        .map(|i| {
+            json!({
+                "id": format!("al-{i}"),
+                "name": format!("Album {i}"),
+                "title": format!("Album {i}"),
+                "artist": "Artist",
+                "songCount": 4,
+                "duration": 960,
+                "coverArt": format!("al-{i}"),
+            })
+        })
+        .collect();
+    Mock::given(method("GET"))
+        .and(path("/rest/getAlbumList2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope_ok(json!({
+            "albumList2": { "album": albums }
+        }))))
+        .mount(&server)
+        .await;
+
+    use wiremock::Request;
+    use wiremock::Respond;
+    struct AlbumResponder;
+    impl Respond for AlbumResponder {
+        fn respond(&self, req: &Request) -> ResponseTemplate {
+            let id = req
+                .url
+                .as_str()
+                .split('&')
+                .find_map(|kv| kv.strip_prefix("id="))
+                .unwrap_or("al-0")
+                .to_string();
+            let tracks: Vec<serde_json::Value> = (0..4)
+                .map(|i| child_dto(&format!("{id}-t-{i}"), &id))
+                .collect();
+            ResponseTemplate::new(200).set_body_json(envelope_ok(json!({
+                "album": { "id": id, "name": "Album", "song": tracks }
+            })))
+        }
+    }
+    Mock::given(method("GET"))
+        .and(path("/rest/getAlbum"))
+        .respond_with(AlbumResponder)
+        .mount(&server)
+        .await;
+
+    let provider = SubsonicProvider::new(session_for(&server)).unwrap();
+    let page = provider
+        .tracks(PagedRequest::new(6, 8))
+        .await
+        .expect("tracks ok");
+    assert_eq!(page.items.len(), 8);
+    assert_eq!(page.total, 20);
+    // Track ids must be the global-position 6..14 entries.
+    // Album 0 → al-0-t-0..3 (global 0..3)
+    // Album 1 → al-1-t-0..3 (global 4..7)
+    // Album 2 → al-2-t-0..3 (global 8..11)
+    // Album 3 → al-3-t-0..3 (global 12..15)
+    let expected = [
+        "track-al-1-t-2", // global 6
+        "track-al-1-t-3", // global 7
+        "track-al-2-t-0", // global 8
+        "track-al-2-t-1", // global 9
+        "track-al-2-t-2", // global 10
+        "track-al-2-t-3", // global 11
+        "track-al-3-t-0", // global 12
+        "track-al-3-t-1", // global 13
+    ];
+    for (i, exp) in expected.iter().enumerate() {
+        assert_eq!(
+            page.items[i].id.as_str(),
+            *exp,
+            "mismatch at index {i} (got {}, want {})",
+            page.items[i].id.as_str(),
+            exp
+        );
+    }
+}
+
+#[tokio::test]
+async fn tracks_returns_empty_when_offset_past_end() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/getAlbumList2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope_ok(json!({
+            "albumList2": { "album": [json!({
+                "id": "al-1",
+                "name": "Album",
+                "songCount": 5,
+                "coverArt": "al-1"
+            })] }
+        }))))
+        .mount(&server)
+        .await;
+
+    let provider = SubsonicProvider::new(session_for(&server)).unwrap();
+    let page = provider
+        .tracks(PagedRequest::new(100, 50))
+        .await
+        .expect("tracks ok");
+    assert!(page.items.is_empty());
+    assert_eq!(page.total, 5);
 }
 
 #[tokio::test]
@@ -387,6 +626,83 @@ async fn search_combines_artists_albums_and_songs() {
     assert_eq!(results.albums.len(), 1);
     assert_eq!(results.tracks.len(), 1);
     assert!(results.playlists.is_empty());
+}
+
+#[tokio::test]
+async fn playlists_passes_size_param_and_respects_offset() {
+    // Regression: previously `playlists()` only sent `?username=` and
+    // ignored `request.limit` server-side, so the orchestrator's
+    // `fetch_all_pages` loop tripped its `received < page_size` break
+    // on the first call (Navidrome's default page is 10). The fix
+    // adds `?size=<limit>` so the server returns a full page and the
+    // loop continues until every playlist is fetched.
+    let server = MockServer::start().await;
+
+    // Page 1: 200 playlists. Mock the request by size so any value
+    // the orchestrator asks for comes back as 200 distinct items.
+    for page_idx in 0..2 {
+        let playlists: Vec<serde_json::Value> = (0..200)
+            .map(|i| {
+                let id = format!("pl-{}-{}", page_idx, i);
+                json!({
+                    "id": id,
+                    "name": format!("Playlist {} {}", page_idx, i),
+                    "songCount": 12,
+                    "duration": 3540,
+                    "coverArt": id,
+                    "owner": "alice",
+                    "public": false,
+                })
+            })
+            .collect();
+        // The impl requests `size=N` where N == request.limit. We
+        // match the size param on the first two pages and use the
+        // offset to distinguish them.
+        let offset_str = (page_idx * 200).to_string();
+        Mock::given(method("GET"))
+            .and(path("/rest/getPlaylists"))
+            .and(query_param("offset", offset_str))
+            .and(query_param("size", "200"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(envelope_ok(json!({
+                "playlists": { "playlist": playlists }
+            }))))
+            .mount(&server)
+            .await;
+    }
+    // Page 3: empty (offset=400) so the orchestrator's loop breaks.
+    Mock::given(method("GET"))
+        .and(path("/rest/getPlaylists"))
+        .and(query_param("offset", "400"))
+        .and(query_param("size", "200"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope_ok(json!({
+            "playlists": { "playlist": [] }
+        }))))
+        .mount(&server)
+        .await;
+
+    let provider = SubsonicProvider::new(session_for(&server)).unwrap();
+    // Page 1.
+    let p1 = provider
+        .playlists(PagedRequest::new(0, 200))
+        .await
+        .expect("page 1 ok");
+    assert_eq!(p1.items.len(), 200);
+    assert_eq!(p1.total, 200);
+    assert_eq!(p1.items[0].id.as_str(), "playlist-pl-0-0");
+    // Page 2 — distinct ids, no overlap with page 1.
+    let p2 = provider
+        .playlists(PagedRequest::new(200, 200))
+        .await
+        .expect("page 2 ok");
+    assert_eq!(p2.items.len(), 200);
+    let p1_ids: std::collections::HashSet<&str> =
+        p1.items.iter().map(|pl| pl.id.as_str()).collect();
+    let p2_ids: std::collections::HashSet<&str> =
+        p2.items.iter().map(|pl| pl.id.as_str()).collect();
+    assert!(
+        p1_ids.is_disjoint(&p2_ids),
+        "page 2 must not overlap page 1"
+    );
 }
 
 #[tokio::test]

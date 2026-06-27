@@ -10,8 +10,8 @@ import {
   deletePlaylist,
   removePlaylistEntries,
   playAlbum,
-} from "../lib/tauri";
-import type { Playlist, Track } from "../types/domain";
+} from "@/lib/tauri";
+import type { Playlist, Track } from "@/types/domain";
 
 export interface PlaylistWithTracks {
   playlist: Playlist;

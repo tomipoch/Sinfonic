@@ -27,9 +27,12 @@ pub mod client;
 pub mod dto;
 pub mod mapping;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::stream::{StreamExt, TryStreamExt};
+use serde::Serialize;
 use sinfonic_domain::{
     Album, AlbumId, Artist, ArtistId, FolderDetail, FolderId, Genre, GenreDetail, GenreId,
     MusicFolder, MusicFolderId, PagedRequest, PagedResponse, Playlist, PlaylistDetail, PlaylistId,
@@ -40,6 +43,7 @@ use sinfonic_source::{
     ImageBytes, ImageMetadata, ImageRequest, Lyrics, MusicProvider, PlaybackReport,
     ProviderCapabilities, ProviderError, ProviderIdentity, ProviderResult, RandomTrackRequest,
 };
+use tauri::Emitter;
 
 pub use auth::{LoginRequest, LoginSuccess, SubsonicSession};
 use client::{SubsonicClient, SUBSONIC_API_VERSION};
@@ -49,6 +53,48 @@ use dto::{
     PlaylistDto, RandomSongsPayload, SearchResult3Payload,
 };
 
+/// Progress event name for `sync-progress`. Mirrors the frontend
+/// `listen("sync-progress", …)` subscription. Defined here (not in the
+/// `events` module) because the provider is a library crate and we
+/// don't want a circular dependency on the app crate.
+const SYNC_PROGRESS_EVENT: &str = "sync-progress";
+
+/// Phase label sent in the `sync-progress` payload for the album
+/// fan-out phase of `tracks()`. Free-form string the UI can branch on.
+const TRACKS_PHASE: &str = "tracks";
+
+/// Page size used internally when paginating `getAlbumList2` to
+/// collect every album hint before slicing into tracks. Navidrome
+/// caps responses at `getAlbumListMaxSize` (default 500) but legacy
+/// Subsonic servers cap lower. 200 is small enough to fit every
+/// server cap and large enough that the bootstrap loop stays
+/// sub-second on libraries with thousands of albums.
+const ALBUM_LIST_PAGE_SIZE: usize = 200;
+
+/// Concurrency for the per-album `getAlbum` fan-out. 8 in-flight
+/// requests is enough to saturate a typical home connection without
+/// overwhelming small servers.
+const ALBUM_FETCH_CONCURRENCY: usize = 8;
+
+/// Payload of the `sync-progress` event. Kept in this crate so the
+/// provider doesn't have to import the app's `events` module.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncProgressPayload {
+    phase: &'static str,
+    done: usize,
+    total: usize,
+}
+
+/// Internal album hint — `(server_id, song_count)` — collected from
+/// `getAlbumList2` so `tracks()` knows which albums to fetch and the
+/// total track count for the response.
+#[derive(Clone, Debug)]
+struct AlbumHint {
+    id: String,
+    song_count: u16,
+}
+
 /// Public entry point for the Subsonic provider.
 #[derive(Clone)]
 pub struct SubsonicProvider {
@@ -56,6 +102,11 @@ pub struct SubsonicProvider {
     client: SubsonicClient,
     identity: Arc<ProviderIdentity>,
     capabilities: Arc<ProviderCapabilities>,
+    /// Optional Tauri handle. When `Some`, the provider emits
+    /// `sync-progress` events during the long `tracks()` fan-out so
+    /// the UI can show a progress bar. When `None` (tests, library
+    /// users) sync still works but no events fire.
+    app_handle: Option<tauri::AppHandle>,
 }
 
 impl SubsonicProvider {
@@ -79,12 +130,23 @@ impl SubsonicProvider {
             client,
             identity,
             capabilities,
+            app_handle: None,
         })
     }
 
     /// Borrow the active session (used by tests + command layer).
     pub fn session(&self) -> &SubsonicSession {
         &self.session
+    }
+
+    /// Attach a Tauri `AppHandle` so the provider can emit
+    /// `sync-progress` events during long fan-out phases. Without
+    /// this, sync still works correctly — progress events just don't
+    /// fire. Called once per provider instance, right after login
+    /// or restore.
+    pub fn with_app_handle(mut self, app: tauri::AppHandle) -> Self {
+        self.app_handle = Some(app);
+        self
     }
 
     /// `GET /rest/ping` — health check. Returns the
@@ -322,42 +384,126 @@ impl MusicProvider for SubsonicProvider {
     }
 
     async fn tracks(&self, request: PagedRequest) -> ProviderResult<PagedResponse<Track>> {
-        // Subsonic doesn't have a direct "list all songs" endpoint;
-        // search3 with an empty query returns a few recent tracks.
-        // For a robust paged list we'd have to call getAlbumList2
-        // and fan out per album, which is expensive. We provide a
-        // best-effort by searching with the wildcard.
-        let auth = self.session.sign();
-        let resp: SearchResult3Payload = self
-            .client
-            .get_json(
-                "rest/search3",
-                &auth,
-                SUBSONIC_API_VERSION,
-                [
-                    ("query", String::new()),
-                    ("songCount", (request.limit.max(500)).to_string()),
-                ],
-            )
-            .await?;
-        let body = resp.search_result3.unwrap_or_default();
-        let total = body.song.len();
-        let start = request.offset.min(total);
-        let end = (start + request.limit).min(total);
-        let mut tracks: Vec<Track> = body
-            .song
+        // Subsonic has no "list every song" endpoint — `search3` is
+        // capped server-side (Navidrome: ~200), and `getIndexes` only
+        // returns artists. The robust strategy is two-phase:
+        //
+        // 1. Paginate `getAlbumList2` to collect every album's
+        //    `(id, song_count)`. Cheap, no per-album detail payload.
+        // 2. Compute which album range covers the requested
+        //    `[offset..offset+limit]` window and fan out `getAlbum`
+        //    for just those albums in parallel (concurrency = 8).
+        //    Emit `sync-progress` after each album completes.
+        // 3. Concatenate and slice exactly to the requested window.
+        //
+        // Step 1 is repeated for every page request — there is no
+        // per-`SubsonicProvider` cache because the trait can't expose
+        // one. The cost is acceptable: a 5000-track library fetches
+        // ~10 album-list pages of 500 albums each, ~50 KB total, in a
+        // fraction of a second.
+        let album_hints = self.collect_all_album_hints().await?;
+        let total_tracks: usize = album_hints.iter().map(|a| a.song_count as usize).sum();
+
+        if album_hints.is_empty() || request.offset >= total_tracks {
+            return Ok(PagedResponse::new(Vec::new(), total_tracks));
+        }
+
+        // Determine the inclusive album range that covers
+        // `[request.offset .. request.offset+request.limit)`.
+        let window_end = request.offset.saturating_add(request.limit).min(total_tracks);
+        let mut cumulative: usize = 0;
+        let mut start_idx: Option<usize> = None;
+        let mut end_idx_exclusive: usize = 0;
+        for (idx, album) in album_hints.iter().enumerate() {
+            let next = cumulative + album.song_count as usize;
+            if start_idx.is_none() && request.offset < next {
+                start_idx = Some(idx);
+            }
+            if start_idx.is_some() && window_end <= next {
+                end_idx_exclusive = idx + 1;
+                break;
+            }
+            cumulative = next;
+        }
+        let Some(start_idx) = start_idx else {
+            return Ok(PagedResponse::new(Vec::new(), total_tracks));
+        };
+        if end_idx_exclusive == 0 {
+            end_idx_exclusive = album_hints.len();
+        }
+
+        // Fan out `getAlbum` for the selected albums. `buffered`
+        // preserves submission order (unlike `buffer_unordered`) so
+        // the resulting `chunks[i]` corresponds to
+        // `album_hints[start_idx + i]`, which is what the slice at
+        // the end assumes.
+        let total_to_fetch = end_idx_exclusive - start_idx;
+        let counter = Arc::new(AtomicUsize::new(0));
+        let chunks: Vec<Vec<Track>> = futures::stream::iter(
+            album_hints[start_idx..end_idx_exclusive]
+                .iter()
+                .cloned(),
+        )
+        .map(|hint| {
+            let client = self.client.clone();
+            let session = self.session.clone();
+            let counter = Arc::clone(&counter);
+            let app_handle = self.app_handle.clone();
+            async move {
+                let auth = session.sign();
+                let resp: AlbumDetailPayload = client
+                    .get_json(
+                        "rest/getAlbum",
+                        &auth,
+                        SUBSONIC_API_VERSION,
+                        [("id", hint.id.clone())],
+                    )
+                    .await?;
+                let tracks: Vec<Track> = resp
+                    .album
+                    .song
+                    .iter()
+                    .filter_map(mapping::track_from_child)
+                    .collect();
+                let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                if let Some(app) = app_handle.as_ref() {
+                    let _ = app.emit(
+                        SYNC_PROGRESS_EVENT,
+                        SyncProgressPayload {
+                            phase: TRACKS_PHASE,
+                            done,
+                            total: total_to_fetch,
+                        },
+                    );
+                }
+                Ok::<Vec<Track>, ProviderError>(tracks)
+            }
+        })
+        .buffered(ALBUM_FETCH_CONCURRENCY)
+        .try_collect()
+        .await?;
+
+        // Assemble and slice exactly to `[request.offset .. window_end)`.
+        // `chunks[i]` corresponds to `album_hints[start_idx + i]`
+        // because `buffered` preserves submission order.
+        let mut all: Vec<Track> = Vec::new();
+        for chunk in chunks {
+            all.extend(chunk);
+        }
+
+        let cumulative_before_start: usize = album_hints[..start_idx]
             .iter()
-            .filter_map(mapping::track_from_child)
-            .collect();
-        if start < tracks.len() {
-            tracks = tracks.split_off(start);
+            .map(|a| a.song_count as usize)
+            .sum();
+        let start_in_all = request.offset - cumulative_before_start;
+        let end_in_all = (start_in_all + (window_end - request.offset)).min(all.len());
+        let sliced: Vec<Track> = if start_in_all < all.len() {
+            all.drain(start_in_all..end_in_all).collect()
         } else {
-            tracks.clear();
-        }
-        if end - start < tracks.len() {
-            tracks.truncate(end - start);
-        }
-        Ok(PagedResponse::new(tracks, total))
+            Vec::new()
+        };
+
+        Ok(PagedResponse::new(sliced, total_tracks))
     }
 
     async fn track(&self, track_id: &TrackId) -> ProviderResult<Track> {
@@ -501,27 +647,39 @@ impl MusicProvider for SubsonicProvider {
 
     async fn playlists(&self, request: PagedRequest) -> ProviderResult<PagedResponse<Playlist>> {
         let auth = self.session.sign();
+        // `?username=` scopes the response to playlists owned by the
+        // current user (Navidrome) and hides public playlists shared
+        // from other accounts on the same server. `?size=` and
+        // `?offset=` mirror the request the orchestrator passes in
+        // — without them the server returns the same first page on
+        // every call (Navidrome's default page is 10) and the
+        // orchestrator's `fetch_all_pages` loop trips its
+        // `received < page_size` break on the first iteration.
+        //
+        // The server honours `offset`+`size`, so the response is
+        // already the requested window. We just map it; the
+        // orchestrator's loop terminates correctly when the server
+        // returns fewer items than `limit` (the last page is short).
         let resp: PlaylistsPayload = self
             .client
-            .get_json("rest/getPlaylists", &auth, SUBSONIC_API_VERSION, [])
+            .get_json(
+                "rest/getPlaylists",
+                &auth,
+                SUBSONIC_API_VERSION,
+                [
+                    ("username", self.session.username.clone()),
+                    ("size", request.limit.to_string()),
+                    ("offset", request.offset.to_string()),
+                ],
+            )
             .await?;
-        let total = resp.playlists.playlist.len();
-        let start = request.offset.min(total);
-        let end = (start + request.limit).min(total);
-        let mut playlists: Vec<Playlist> = resp
+        let playlists: Vec<Playlist> = resp
             .playlists
             .playlist
             .iter()
             .filter_map(mapping::playlist_from_dto)
             .collect();
-        if start < playlists.len() {
-            playlists = playlists.split_off(start);
-        } else {
-            playlists.clear();
-        }
-        if end - start < playlists.len() {
-            playlists.truncate(end - start);
-        }
+        let total = playlists.len();
         Ok(PagedResponse::new(playlists, total))
     }
 
@@ -549,6 +707,7 @@ impl MusicProvider for SubsonicProvider {
             public: resp.playlist.public,
             created: None,
             changed: None,
+            cover_art: resp.playlist.cover_art.clone(),
         })
         .ok_or_else(|| ProviderError::Other("playlist without id".into()))?;
         let tracks: Vec<Track> = resp
@@ -639,15 +798,17 @@ impl MusicProvider for SubsonicProvider {
             .or_else(|| real_id.strip_prefix("album-"))
             .or_else(|| real_id.strip_prefix("artist-"))
             .unwrap_or(real_id);
-        let path = "rest/getCoverArt".to_string();
+        // Subsonic's `getCoverArt` accepts an `id` plus an optional
+        // `size` hint. We use the cache's `item_id` for the lookup
+        // (album / track / artist — Subsonic doesn't care) and pass
+        // `size` so servers that respect it (Navidrome does) return
+        // a smaller payload.
+        let path = format!("rest/getCoverArt?id={}&size={}", stripped, request.size);
         let auth = self.session.sign();
         let (bytes, content_type) = self
             .client
             .get_bytes(&path, &auth, SUBSONIC_API_VERSION)
             .await?;
-        // size param is a hint; some servers ignore it. We use the
-        // request's size as the requested resolution.
-        let _ = (stripped, request.size);
         Ok(ImageBytes { bytes, content_type })
     }
 
@@ -907,6 +1068,32 @@ impl SubsonicProvider {
             })
             .filter_map(mapping::album_from_dto)
             .collect())
+    }
+
+    /// Paginate `getAlbumList2` to collect every `(id, song_count)`
+    /// pair on the server. Stops when the page comes back smaller
+    /// than `ALBUM_LIST_PAGE_SIZE` (server cap reached). Used by
+    /// `tracks()` to drive the album fan-out.
+    async fn collect_all_album_hints(&self) -> ProviderResult<Vec<AlbumHint>> {
+        let mut hints: Vec<AlbumHint> = Vec::new();
+        let mut offset: usize = 0;
+        loop {
+            let page = self
+                .fetch_albums(PagedRequest::new(offset, ALBUM_LIST_PAGE_SIZE))
+                .await?;
+            let received = page.items.len();
+            for album in page.items {
+                hints.push(AlbumHint {
+                    id: album.id.as_str().trim_start_matches("album-").to_string(),
+                    song_count: album.track_count,
+                });
+            }
+            if received < ALBUM_LIST_PAGE_SIZE {
+                break;
+            }
+            offset = offset.saturating_add(received);
+        }
+        Ok(hints)
     }
 }
 

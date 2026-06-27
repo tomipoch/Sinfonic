@@ -53,13 +53,29 @@ pub fn artist_from_dto(dto: &ArtistDto) -> Option<Artist> {
     if dto.id.is_empty() {
         return None;
     }
+    // Always build an `image_ref` for the artist. Subsonic's
+    // `getArtists` / `getIndexes` responses don't include the
+    // `coverArt` field (only `getArtist` does), so we fall back to
+    // the artist id itself: Navidrome accepts `getCoverArt?id=ar-…`
+    // and returns the artist image. The `tag` carries the original
+    // `coverArt` value when present so a server-side image swap
+    // invalidates the on-disk cache.
+    let tag = dto
+        .cover_art
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     Some(Artist {
         id: ArtistId::new(format!("artist-{}", dto.id)),
         name: dto.name.clone(),
         album_count: dto.album_count,
         track_count: 0,
         favorite: dto.starred.is_some(),
-        image_ref: image_ref_from_cover_art(&dto.id, dto.cover_art.as_deref()),
+        image_ref: Some(sinfonic_domain::ImageRef {
+            item_id: format!("coverArt:{}", dto.id),
+            kind: "coverArt".to_string(),
+            tag: tag.or_else(|| Some(dto.id.clone())),
+        }),
     })
 }
 
@@ -96,6 +112,7 @@ pub fn playlist_from_dto(dto: &PlaylistDto) -> Option<Playlist> {
     if dto.id.is_empty() {
         return None;
     }
+    let image_ref = playlist_image_ref(dto.id.as_str(), dto.cover_art.as_deref());
     Some(Playlist {
         id: PlaylistId::new(format!("playlist-{}", dto.id)),
         name: dto.name.clone(),
@@ -103,6 +120,23 @@ pub fn playlist_from_dto(dto: &PlaylistDto) -> Option<Playlist> {
         duration_seconds: dto.duration,
         owner: dto.owner.clone(),
         public: dto.public,
+        image_ref,
+    })
+}
+
+/// Build the `ImageRef` for a playlist. `cover_art` is the Subsonic
+/// cover id when present; we fall back to the playlist id itself so
+/// `getCoverArt?id=playlist-…` resolves to whatever the server has
+/// (Navidrome accepts playlist ids for `getCoverArt`).
+fn playlist_image_ref(playlist_id: &str, cover_art: Option<&str>) -> Option<ImageRef> {
+    let tag = cover_art
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| Some(playlist_id.to_string()));
+    Some(ImageRef {
+        item_id: format!("coverArt:{playlist_id}"),
+        kind: "coverArt".to_string(),
+        tag,
     })
 }
 
@@ -297,6 +331,29 @@ mod tests {
         assert_eq!(artist.name, "Radiohead");
         assert_eq!(artist.album_count, 9);
         assert!(!artist.favorite);
+        let image_ref = artist.image_ref.as_ref().expect("image_ref is set");
+        assert_eq!(image_ref.item_id, "coverArt:ar-1");
+        assert_eq!(image_ref.kind, "coverArt");
+        assert_eq!(image_ref.tag.as_deref(), Some("ar-1"));
+    }
+
+    #[test]
+    fn artist_dto_without_cover_art_still_gets_image_ref() {
+        // `getArtists` / `getIndexes` don't include the `coverArt`
+        // field — the artist image_ref must still be populated so
+        // the frontend can request `getCoverArt?id=ar-…`.
+        let dto = ArtistDto {
+            id: "ar-2".into(),
+            name: "Björk".into(),
+            album_count: 10,
+            cover_art: None,
+            artist_image_url: None,
+            starred: None,
+        };
+        let artist = artist_from_dto(&dto).expect("non-empty id");
+        let image_ref = artist.image_ref.as_ref().expect("image_ref is set");
+        assert_eq!(image_ref.item_id, "coverArt:ar-2");
+        assert_eq!(image_ref.tag.as_deref(), Some("ar-2"));
     }
 
     #[test]

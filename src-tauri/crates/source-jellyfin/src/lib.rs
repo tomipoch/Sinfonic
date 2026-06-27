@@ -413,7 +413,7 @@ impl MusicProvider for JellyfinProvider {
                     limit: Some(request.limit),
                     sort_by: Some("SortName"),
                     recursive: true,
-                    fields: Some("CumulativeRunTimeTicks,ChildCount,OpenAccess"),
+                    fields: Some("CumulativeRunTimeTicks,ChildCount,OpenAccess,ImageTags"),
                 }),
                 &self.session.auth(),
             )
@@ -433,7 +433,7 @@ impl MusicProvider for JellyfinProvider {
         let id = playlist_id.as_str().trim_start_matches("playlist-");
         let dto: dto::PlaylistDto = self
             .client
-            .get_json(&format!("Playlists/{id}"), &self.session.auth())
+            .get_json(&format!("Playlists/{id}?Fields=ImageTags"), &self.session.auth())
             .await?;
         let playlist = mapping::playlist_from_dto(&dto)
             .ok_or_else(|| ProviderError::Other("playlist without id".into()))?;

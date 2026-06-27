@@ -8,9 +8,9 @@
 import { useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { AlbumCover } from "../ui/AlbumCover";
-import { FavoriteButton } from "../ui/FavoriteButton";
-import { useLibraryStore } from "../../stores/libraryStore";
+import { AlbumCover } from "@/components/ui/AlbumCover";
+import { FavoriteButton } from "@/components/ui/FavoriteButton";
+import { useLibraryStore } from "@/stores/libraryStore";
 
 export function ArtistDetailView() {
   const { id } = useParams<{ id: string }>();
@@ -33,14 +33,14 @@ export function ArtistDetailView() {
   );
 
   if (!id) {
-    return <p className="text-fg-subtle text-sm">Missing artist id.</p>;
+    return <p className="text-muted-foreground text-sm">Missing artist id.</p>;
   }
 
   if (!artist) {
     return (
-      <div className="flex flex-col items-start gap-3 rounded-md border border-bg-raised bg-bg-subtle p-6">
-        <div className="text-base font-medium text-fg">Artist not found</div>
-        <p className="text-sm text-fg-subtle">
+      <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
+        <div className="text-base font-medium text-foreground">Artist not found</div>
+        <p className="text-sm text-muted-foreground">
           The library cache doesn't have this artist. Try syncing your library.
         </p>
       </div>
@@ -50,9 +50,9 @@ export function ArtistDetailView() {
   return (
     <section className="flex flex-col gap-6">
       <header className="flex flex-col gap-1">
-        <div className="text-xs uppercase tracking-wide text-fg-subtle">Artist</div>
+        <div className="text-xs uppercase tracking-wide text-muted-foreground">Artist</div>
         <h1 className="truncate text-3xl font-semibold">{artist.name}</h1>
-        <div className="flex items-center gap-3 text-sm text-fg-subtle">
+        <div className="flex items-center gap-3 text-sm text-muted-foreground">
           <span>
             {artist.albumCount} {artist.albumCount === 1 ? "album" : "albums"}
             {" · "}
@@ -63,7 +63,7 @@ export function ArtistDetailView() {
       </header>
 
       {artistAlbums.length === 0 ? (
-        <p className="text-fg-subtle text-sm">
+        <p className="text-muted-foreground text-sm">
           No albums cached for this artist yet.
         </p>
       ) : (
@@ -74,15 +74,15 @@ export function ArtistDetailView() {
           {artistAlbums.map((album) => (
             <li key={album.id}>
               <Link
-                to={`/library/album/${encodeURIComponent(album.id)}`}
+                to={`/albums/${encodeURIComponent(album.id)}`}
                 className="group block focus:outline-none"
               >
-                <AlbumCover album={album} />
-                <div className="mt-2 truncate text-sm font-medium text-fg group-hover:text-white">
+                <AlbumCover source={album} />
+                <div className="mt-2 truncate text-sm font-medium text-foreground group-hover:text-white">
                   {album.title}
                 </div>
                 {album.year ? (
-                  <div className="text-xs text-fg-subtle">{album.year}</div>
+                  <div className="text-xs text-muted-foreground">{album.year}</div>
                 ) : null}
               </Link>
             </li>

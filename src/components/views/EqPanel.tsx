@@ -16,9 +16,9 @@ import {
   resetEq,
   setEqBand,
   type EqBandPayload,
-} from "../../lib/tauri";
-import { useEqStore } from "../../stores/eqStore";
-import { useTauriEvent } from "../../hooks/useTauriEvent";
+} from "@/lib/tauri";
+import { useEqStore } from "@/stores/eqStore";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 
 const MIN_DB = -12;
 const MAX_DB = 12;
@@ -45,7 +45,7 @@ function EqBandSlider({ band, onCommit }: EqBandSliderProps) {
     onCommit(band.hz, clamped);
   };
   return (
-    <label className="flex flex-col items-center gap-2 text-xs text-fg-subtle">
+    <label className="flex flex-col items-center gap-2 text-xs text-muted-foreground">
       <span className="font-mono text-[10px]">{displayed.toFixed(1)} dB</span>
       <input
         type="range"
@@ -63,7 +63,7 @@ function EqBandSlider({ band, onCommit }: EqBandSliderProps) {
         className="eq-slider h-32 w-6"
         style={{ writingMode: "vertical-rl", direction: "rtl" }}
       />
-      <span className="font-mono text-[10px] text-fg-muted">
+      <span className="font-mono text-[10px] text-muted">
         {band.hz >= 1000 ? `${(band.hz / 1000).toFixed(band.hz % 1000 ? 1 : 0)}k` : band.hz}
       </span>
     </label>
@@ -121,21 +121,21 @@ export function EqPanel() {
 
   if (bands.length === 0) {
     return (
-      <div className="flex h-32 items-center justify-center text-xs text-fg-subtle">
+      <div className="flex h-32 items-center justify-center text-xs text-muted-foreground">
         Loading EQ…
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-2 rounded-md border border-bg-raised bg-bg-subtle p-3">
+    <div className="flex flex-col gap-2 rounded-md border border-border bg-muted p-3">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium">Equalizer</h3>
         <button
           type="button"
           onClick={onReset}
           disabled={busy}
-          className="text-xs text-fg-subtle hover:text-fg disabled:opacity-40"
+          className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-40"
         >
           Flat
         </button>

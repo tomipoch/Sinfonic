@@ -8,6 +8,11 @@ export type RepeatMode = "off" | "one" | "all";
 
 export type ImageKind = "primary" | "backdrop";
 
+export type EqBandPayload = {
+  hz: number;
+  gainDb: number;
+};
+
 export interface ImageRef {
   itemId: string;
   kind: string;
@@ -64,6 +69,7 @@ export interface Playlist {
   durationSeconds: number;
   owner?: string | null;
   public: boolean;
+  imageRef?: ImageRef | null;
 }
 
 export interface PagedResponse<T> {

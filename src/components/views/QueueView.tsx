@@ -17,10 +17,10 @@ import {
   queueRemove,
   setRepeat,
   setShuffle,
-} from "../../lib/tauri";
-import { useQueueStore } from "../../stores/queueStore";
-import { formatDuration } from "../../lib/format";
-import type { RepeatMode } from "../../types/domain";
+} from "@/lib/tauri";
+import { useQueueStore } from "@/stores/queueStore";
+import { formatDuration } from "@/lib/format";
+import type { RepeatMode } from "@/types/domain";
 
 const REPEAT_CYCLE: ReadonlyArray<RepeatMode> = ["off", "all", "one"];
 
@@ -86,7 +86,7 @@ export function QueueView() {
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-2xl font-semibold">Queue</h1>
-          <p className="text-sm text-fg-subtle">
+          <p className="text-sm text-muted-foreground">
             {entries.length === 0
               ? "Empty — play a track or album to start."
               : `${entries.length} ${entries.length === 1 ? "track" : "tracks"}`}
@@ -101,7 +101,7 @@ export function QueueView() {
             aria-label={shuffle ? "Disable shuffle" : "Enable shuffle"}
             className={
               "btn-ghost text-sm " +
-              (shuffle ? "bg-accent/20 text-accent" : "")
+              (shuffle ? "bg-primary/20 text-primary" : "")
             }
           >
             Shuffle {shuffle ? "on" : "off"}
@@ -113,7 +113,7 @@ export function QueueView() {
             aria-label={`Cycle repeat mode (currently ${repeatLabel(repeat)})`}
             className={
               "btn-ghost text-sm " +
-              (repeat !== "off" ? "bg-accent/20 text-accent" : "")
+              (repeat !== "off" ? "bg-primary/20 text-primary" : "")
             }
           >
             {repeatLabel(repeat)}
@@ -131,7 +131,7 @@ export function QueueView() {
 
       {entries.length > 0 && (
         <ol
-          className="divide-y divide-bg-raised overflow-hidden rounded-md border border-bg-raised"
+          className="divide-y divide-border overflow-hidden rounded-md border border-border"
           aria-label="Up next"
         >
           {entries.map((entry, index) => {
@@ -141,10 +141,10 @@ export function QueueView() {
                 key={entry.id}
                 className={
                   "grid grid-cols-[2.5rem_1fr_auto_auto] items-center gap-3 px-3 py-2 text-sm " +
-                  (isCurrent ? "bg-bg-subtle" : "hover:bg-bg-subtle/60")
+                  (isCurrent ? "bg-muted" : "hover:bg-muted/60")
                 }
               >
-                <div className="text-right font-mono text-xs text-fg-muted">
+                <div className="text-right font-mono text-xs text-muted">
                   {isCurrent ? "▶" : index + 1}
                 </div>
                 <button
@@ -157,7 +157,7 @@ export function QueueView() {
                   <div
                     className={
                       "truncate font-medium " +
-                      (isCurrent ? "text-accent" : "text-fg")
+                      (isCurrent ? "text-primary" : "text-foreground")
                     }
                   >
                     {entry.title}
@@ -176,7 +176,7 @@ export function QueueView() {
                   onClick={() => void onRemove(entry.id)}
                   disabled={busy}
                   aria-label={`Remove ${entry.title}`}
-                  className="rounded-md p-1 text-fg-muted hover:bg-bg-raised hover:text-fg focus:outline-none disabled:opacity-40"
+                  className="rounded-md p-1 text-muted hover:bg-card hover:text-foreground focus:outline-none disabled:opacity-40"
                 >
                   ✕
                 </button>

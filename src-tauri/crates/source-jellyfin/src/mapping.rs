@@ -126,6 +126,15 @@ pub fn playlist_from_dto(dto: &PlaylistDto) -> Option<Playlist> {
         duration_seconds: ticks_to_seconds(dto.cumulative_run_time_ticks),
         owner: dto.owner_user_id.clone(),
         public: dto.open_access.unwrap_or(false),
+        image_ref: dto
+            .image_tags
+            .as_ref()
+            .and_then(|t| t.primary.as_ref().filter(|s| !s.is_empty()))
+            .map(|tag| ImageRef {
+                item_id: dto.id.clone(),
+                kind: "Primary".to_string(),
+                tag: Some(tag.clone()),
+            }),
     })
 }
 

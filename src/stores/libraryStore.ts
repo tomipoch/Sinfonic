@@ -1,4 +1,4 @@
-// Library store — cached albums / artists / tracks views.
+// Library store — cached albums / artists / genres / tracks views.
 //
 // Fetch actions hit the SQLite cache via the typed IPC wrappers in
 // `lib/tauri.ts`. The store is the single source of truth for the
@@ -10,15 +10,17 @@ import { create } from "zustand";
 import {
   getAlbums,
   getArtists,
+  getGenres,
   getTracks,
-} from "../lib/tauri";
-import type { Album, Artist, Track } from "../types/domain";
+} from "@/lib/tauri";
+import type { Album, Artist, Genre, Track } from "@/types/domain";
 
 const PAGE_SIZE = 200;
 
 export interface LibraryStore {
   albums: Album[];
   artists: Artist[];
+  genres: Genre[];
   tracks: Track[];
 
   loading: boolean;
@@ -27,6 +29,7 @@ export interface LibraryStore {
 
   loadAlbums: () => Promise<void>;
   loadArtists: () => Promise<void>;
+  loadGenres: () => Promise<void>;
   loadTracks: () => Promise<void>;
   loadAll: () => Promise<void>;
   reset: () => void;
@@ -35,6 +38,7 @@ export interface LibraryStore {
 export const useLibraryStore = create<LibraryStore>((set) => ({
   albums: [],
   artists: [],
+  genres: [],
   tracks: [],
 
   loading: false,
@@ -61,6 +65,16 @@ export const useLibraryStore = create<LibraryStore>((set) => ({
     }
   },
 
+  loadGenres: async () => {
+    set({ loading: true, error: null });
+    try {
+      const genres = await getGenres();
+      set({ genres, loading: false, loaded: true });
+    } catch (e) {
+      set({ loading: false, error: (e as Error).message ?? String(e) });
+    }
+  },
+
   loadTracks: async () => {
     set({ loading: true, error: null });
     try {
@@ -74,15 +88,17 @@ export const useLibraryStore = create<LibraryStore>((set) => ({
   loadAll: async () => {
     set({ loading: true, error: null });
     try {
-      const [albums, artists, tracks] = await Promise.all([
+      const [albums, artists, tracks, genres] = await Promise.all([
         getAlbums(0, PAGE_SIZE),
         getArtists(0, PAGE_SIZE),
         getTracks(0, PAGE_SIZE),
+        getGenres(),
       ]);
       set({
         albums: albums.items,
         artists: artists.items,
         tracks: tracks.items,
+        genres,
         loading: false,
         loaded: true,
       });
@@ -95,6 +111,7 @@ export const useLibraryStore = create<LibraryStore>((set) => ({
     set({
       albums: [],
       artists: [],
+      genres: [],
       tracks: [],
       loading: false,
       loaded: false,

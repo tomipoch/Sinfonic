@@ -5,6 +5,7 @@
 //! operation, and releases it. Long-running operations should spawn a
 //! background task and notify the UI via events.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use sinfonic_domain::{PlaybackState, QueueEngine, ServerId};
@@ -64,6 +65,11 @@ pub struct AppState {
     /// succeeds; the session key is persisted in the OS keyring so
     /// the next launch can `resume` it without re-prompting.
     pub lastfm: Arc<Mutex<Option<LastFmClient>>>,
+    /// Set to `true` once the `try_restore_provider` background task
+    /// finishes. The frontend polls `bootstrap_state` until this flips
+    /// so the route guard can decide between the main UI and the
+    /// setup view with the latest snapshot of the saved servers.
+    pub bootstrap_complete: Arc<AtomicBool>,
 }
 
 impl Default for AppState {
@@ -81,6 +87,7 @@ impl Default for AppState {
             device_id: default_device_id(),
             album_art: None,
             lastfm: Arc::new(Mutex::new(None)),
+            bootstrap_complete: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -104,6 +111,7 @@ impl AppState {
             device_id: default_device_id(),
             album_art: None,
             lastfm: Arc::new(Mutex::new(None)),
+            bootstrap_complete: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -127,6 +135,7 @@ impl AppState {
             device_id: default_device_id(),
             album_art: Some(Arc::new(album_art)),
             lastfm: Arc::new(Mutex::new(None)),
+            bootstrap_complete: Arc::new(AtomicBool::new(false)),
         })
     }
 

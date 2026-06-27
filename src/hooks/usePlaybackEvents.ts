@@ -10,14 +10,17 @@
 import { useEffect } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-import { getPlaybackState, getQueue } from "../lib/tauri";
-import { usePlaybackStore } from "../stores/playbackStore";
-import { useQueueStore } from "../stores/queueStore";
+import { getPlaybackState, getQueue } from "@/lib/tauri";
+import { makeLogger } from "@/utils/log";
+import { usePlaybackStore } from "@/stores/playbackStore";
+import { useQueueStore } from "@/stores/queueStore";
 import type {
   PlaybackStatePayload,
   QueueSnapshotPayload,
   TrackChangedPayload,
-} from "../types/domain";
+} from "@/types/domain";
+
+const log = makeLogger("usePlaybackEvents");
 
 export function usePlaybackEvents(): void {
   useEffect(() => {
@@ -27,6 +30,11 @@ export function usePlaybackEvents(): void {
     void Promise.all([getPlaybackState(), getQueue()])
       .then(([pb, queue]) => {
         if (cancelled) return;
+        log.log("bootstrap: playback state loaded", {
+          isPlaying: pb.isPlaying,
+          volume: pb.volume,
+          repeat: pb.repeat,
+        });
         usePlaybackStore.getState().setState(pb);
         useQueueStore.setState({
           serverId: queue.serverId,
@@ -37,19 +45,35 @@ export function usePlaybackEvents(): void {
           shuffleSeed: queue.shuffleSeed,
         });
       })
-      .catch(() => {
+      .catch((err) => {
+        log.warn("bootstrap: backend not ready", err);
         // Backend may not be ready yet (e.g., during dev HMR). The
         // next event from the backend will catch the stores up.
       });
 
     void Promise.all([
       listen<PlaybackStatePayload>("playback-state-changed", (e) => {
+        log.log("playback-state-changed", {
+          isPlaying: e.payload.isPlaying,
+          position: e.payload.positionSeconds,
+          duration: e.payload.durationSeconds,
+        });
         usePlaybackStore.getState().setState(e.payload);
       }),
       listen<TrackChangedPayload>("track-changed", (e) => {
+        log.log("track-changed", {
+          trackId: e.payload.trackId,
+          title: e.payload.title,
+        });
         usePlaybackStore.getState().setTrack(e.payload);
       }),
       listen<QueueSnapshotPayload>("queue-changed", (e) => {
+        log.log("queue-changed", {
+          entries: e.payload.entries.length,
+          currentIndex: e.payload.currentIndex,
+          repeat: e.payload.repeat,
+          shuffle: e.payload.shuffle,
+        });
         useQueueStore.setState({
           entries: e.payload.entries,
           currentIndex: e.payload.currentIndex,
@@ -62,6 +86,7 @@ export function usePlaybackEvents(): void {
         arr.forEach((u) => u());
       } else {
         unsubs = arr;
+        log.log("subscribed: 3 listeners");
       }
     });
 
