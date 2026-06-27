@@ -163,6 +163,21 @@ struct TrackOutcome {
     embedded_art: Option<EmbeddedArt>,
 }
 
+/// Derive an album name from the parent directory when no tag
+/// provides one. Returns "Unknown album" if the path has no usable
+/// file name (e.g. the music root itself).
+fn dir_album(path: &Path, root: &Path) -> String {
+    path.strip_prefix(root)
+        .ok()
+        .and_then(|p| p.parent().or(Some(p)))
+        .and_then(|p| p.file_name())
+        .and_then(|n| {
+            let s = n.to_string_lossy();
+            if s.is_empty() { None } else { Some(s.into_owned()) }
+        })
+        .unwrap_or_else(|| "Unknown album".to_string())
+}
+
 fn scan_one(path: &Path, root: &Path) -> Result<TrackOutcome, String> {
     let tagged = Probe::open(path)
         .map_err(|e| format!("probe: {e}"))?
@@ -184,19 +199,6 @@ fn scan_one(path: &Path, root: &Path) -> Result<TrackOutcome, String> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "Unknown artist".to_string());
-
-    /// Derives an album name from the parent directory when no tag provides one.
-    fn dir_album(path: &Path, root: &Path) -> String {
-        path.strip_prefix(root)
-            .ok()
-            .and_then(|p| p.parent().or(Some(p)))
-            .and_then(|p| p.file_name())
-            .and_then(|n| {
-                let s = n.to_string_lossy();
-                if s.is_empty() { None } else { Some(s.into_owned()) }
-            })
-            .unwrap_or_else(|| "Unknown album".to_string())
-    }
 
     let album = tag
         .as_ref()
