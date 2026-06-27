@@ -192,8 +192,12 @@ impl Store {
         let tx = conn.transaction()?;
 
         let existing = collect_ids(&tx, "albums", "album_id", server_id.as_str())?;
-        let new_ids: Vec<String> = albums.iter().map(|a| a.id.as_str().to_string()).collect();
-        for id in existing.iter().filter(|id| !new_ids.contains(id)) {
+        // Convert to a HashSet so the orphan-detection scan is O(existing)
+        // instead of O(existing × new). For a 5 k-album library the old
+        // code ran ~25 M string comparisons; this is now ~5 k.
+        let new_ids: std::collections::HashSet<&str> =
+            albums.iter().map(|a| a.id.as_str()).collect();
+        for id in existing.iter().filter(|id| !new_ids.contains(id.as_str())) {
             tx.execute(
                 "DELETE FROM albums WHERE server_id = ?1 AND album_id = ?2",
                 rusqlite::params![server_id.as_str(), id],
@@ -280,8 +284,9 @@ impl Store {
         let tx = conn.transaction()?;
 
         let existing = collect_ids(&tx, "artists", "artist_id", server_id.as_str())?;
-        let new_ids: Vec<String> = artists.iter().map(|a| a.id.as_str().to_string()).collect();
-        for id in existing.iter().filter(|id| !new_ids.contains(id)) {
+        let new_ids: std::collections::HashSet<&str> =
+            artists.iter().map(|a| a.id.as_str()).collect();
+        for id in existing.iter().filter(|id| !new_ids.contains(id.as_str())) {
             tx.execute(
                 "DELETE FROM artists WHERE server_id = ?1 AND artist_id = ?2",
                 rusqlite::params![server_id.as_str(), id],
@@ -345,8 +350,9 @@ impl Store {
         let tx = conn.transaction()?;
 
         let existing = collect_ids(&tx, "tracks", "track_id", server_id.as_str())?;
-        let new_ids: Vec<String> = tracks.iter().map(|t| t.id.as_str().to_string()).collect();
-        for id in existing.iter().filter(|id| !new_ids.contains(id)) {
+        let new_ids: std::collections::HashSet<&str> =
+            tracks.iter().map(|t| t.id.as_str()).collect();
+        for id in existing.iter().filter(|id| !new_ids.contains(id.as_str())) {
             tx.execute(
                 "DELETE FROM tracks WHERE server_id = ?1 AND track_id = ?2",
                 rusqlite::params![server_id.as_str(), id],
