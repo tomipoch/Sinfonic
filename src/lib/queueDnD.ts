@@ -7,6 +7,7 @@ export interface TrackDragData {
     | "albums-tab"
     | "album-detail"
     | "tracks-tab"
+    | "songs-view"
     | "playlist-detail"
     | "favorites"
     | "queue";

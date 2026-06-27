@@ -1,57 +1,45 @@
-// ServerManager — server connection + sync UI.
-//
-// Shared between the standalone Settings window (via `GeneralSection`)
-// and any future in-app Settings view. All state + IPC lives in
-// `useServerForms` so the wrapping layout only decides *where* to
-// render it, not *what*.
+// ServerManager — server connection + sync UI for the Settings window.
 //
 // Sections (top to bottom):
-//   1. Music Source — provider picker + connection form / status
-//   2. Discovery     — Jellyfin LAN scan + result list
-//   3. Saved         — saved servers list
-//   4. Local files   — path picker + scan / rescan
-//   5. Last.fm       — scrobbling status + credentials form
+//   1. Music Source — connected-state chrome (sync + disconnect) or the
+//      shared `ServerConnectionForm` (handles both source picker and
+//      the per-source form body).
+//   2. Saved servers — saved servers list with active marker + delete.
+//   3. Local files   — rescan action when local is active.
+//   4. Last.fm       — scrobbling status + credentials form.
 
 import {
-  HardDriveIcon,
-  Link04Icon,
+  Add01Icon,
+  Delete03Icon,
   Tick02Icon,
-  Wifi01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
 
-import { useServerForms } from "@/hooks/useServerForms";
-import { useServerStore } from "@/stores/serverStore";
 import {
-  ChoiceCard,
+  ServerConnectionForm,
+  type ConnectionValues,
+} from "@/components/dialogs/ServerConnectionForm";
+import { LoginDialog } from "@/components/dialogs/LoginDialog";
+import { useServerSettings } from "@/hooks/useServerSettings";
+import { useServerStore } from "@/stores/serverStore";
+import { extractError } from "@/lib/errors";
+import {
   SettingsCard,
   SettingsSection,
 } from "@/components/settings/primitives";
 
-const SOURCES: { id: "jellyfin" | "subsonic" | "local"; label: string; icon: typeof Link04Icon }[] = [
-  { id: "jellyfin", label: "Jellyfin", icon: Link04Icon },
-  { id: "subsonic", label: "Subsonic", icon: Wifi01Icon },
-  { id: "local", label: "Local files", icon: HardDriveIcon },
-];
-
 export function ServerManager() {
   const {
     servers,
-    source,
-    setSource,
-    baseUrl,
-    setBaseUrl,
-    username,
-    setUsername,
-    password,
-    setPassword,
-    busy,
-    discovering,
-    localPath,
-    setLocalPath,
-    localBusy,
-    localStats,
+    discovered,
+    activeServer,
+    isLocalActive,
+    activeServerId,
+    lastSync,
+    error,
     lastfm,
     lastfmApiKey,
     setLastfmApiKey,
@@ -62,44 +50,77 @@ export function ServerManager() {
     lastfmPassword,
     setLastfmPassword,
     lastfmBusy,
-    discovered,
-    activeServer,
-    isLocalActive,
-    isLocalSource,
-    activeServerId,
-    lastSync,
-    error,
-    onDiscover,
-    onRemoteLogin,
-    onLocalScan,
-    onLocalRescan,
-    onPickLocalPath,
-    onLogout,
-    onSync,
     onLastfmConnect,
     onLastfmDisconnect,
-  } = useServerForms();
+  } = useServerSettings();
 
   useEffect(() => {
     useServerStore.getState().clearError();
-  }, [source]);
+  }, []);
+
+  const login = useServerStore((s) => s.login);
+  const syncLibrary = useServerStore((s) => s.syncLibrary);
+
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+
+  // From the Settings window we can't `navigate("/loading")` — that
+  // would target the Settings router (which has no /loading route)
+  // and silently no-op. So we bypass the LoadingView handoff and
+  // call login() directly. The new server becomes active in-place,
+  // the saved-servers list refreshes, and the user can click Sync
+  // to populate the cache.
+  const handleAddSubmit = async (values: ConnectionValues) => {
+    setAdding(true);
+    try {
+      const connected = await login(values);
+      toast.success(`Connected to ${connected.name}`);
+      setAddDialogOpen(false);
+    } catch (err) {
+      const message = extractError(err, "login failed");
+      const clean = message
+        .replace(/^local scan:\s*/i, "")
+        .replace(/^login failed:\s*/i, "");
+      toast.error(
+        `${values.kind === "local" ? "Local scan" : "Login"}: ${clean}`,
+      );
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const handleSubmit = async (values: ConnectionValues) => {
+    try {
+      const connected = await login(values);
+      toast.success(`Connected to ${connected.name}`);
+    } catch (err) {
+      const message = extractError(err, "login failed");
+      const clean = message.replace(/^local scan:\s*/i, "").replace(/^login failed:\s*/i, "");
+      toast.error(`${values.kind === "local" ? "Local scan" : "Login"}: ${clean}`);
+      throw err;
+    }
+  };
+
+  const handlePickLocalPath = async () => {
+    try {
+      const picked = await openDialog({
+        directory: true,
+        multiple: false,
+        title: "Select your music folder",
+      });
+      return picked ?? undefined;
+    } catch (err) {
+      toast.error(
+        `Couldn't open folder picker: ${(err as Error).message ?? String(err)}`,
+      );
+      return undefined;
+    }
+  };
 
   return (
     <div className="flex flex-col gap-8">
       {/* ─── Music Source ────────────────────────────────────── */}
       <SettingsSection label="Music Source">
-        <div className="grid grid-cols-3 gap-2">
-          {SOURCES.map((s) => (
-            <ChoiceCard
-              key={s.id}
-              selected={source === s.id}
-              onClick={() => setSource(s.id)}
-              icon={<HugeiconsIcon icon={s.icon} size={20} strokeWidth={1.5} />}
-              label={s.label}
-            />
-          ))}
-        </div>
-
         {activeServerId ? (
           <SettingsCard>
             <div className="flex items-start justify-between gap-4 px-4 py-4">
@@ -124,213 +145,47 @@ export function ServerManager() {
               <div className="flex shrink-0 gap-2">
                 <button
                   type="button"
-                  onClick={onSync}
-                  disabled={busy || lastSync === "syncing"}
+                  onClick={() => void syncLibrary()}
+                  disabled={lastSync === "syncing"}
                   className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
                 >
                   {lastSync === "syncing" ? "Syncing…" : "Sync"}
                 </button>
                 <button
                   type="button"
-                  onClick={onLogout}
-                  disabled={busy}
-                  className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                  onClick={() => setAddDialogOpen(true)}
+                  disabled={adding}
+                  className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                >
+                  <HugeiconsIcon icon={Add01Icon} size={14} strokeWidth={2} />
+                  Add new
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void useServerStore.getState().logout()}
+                  className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
                 >
                   Disconnect
                 </button>
               </div>
             </div>
-          </SettingsCard>
-        ) : isLocalSource ? (
-          <SettingsCard>
-            <form onSubmit={onLocalScan} className="flex flex-col gap-3 px-4 py-4">
-              <div className="text-xs text-muted-foreground">
-                Point Sinfonic at a directory of audio files (MP3, FLAC, OGG,
-                Opus, MP4/M4A, WAV). The directory is walked recursively;
-                metadata comes from the file tags.
+            {isLocalActive ? (
+              <div className="border-t border-border px-4 py-3">
+                <LocalRescanButton />
               </div>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-muted-foreground">Music folder</span>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={localPath}
-                    onChange={(e) => setLocalPath(e.currentTarget.value)}
-                    placeholder="/Users/you/Music"
-                    required
-                    spellCheck={false}
-                    autoCorrect="off"
-                    autoCapitalize="off"
-                    className="flex-1 rounded-md border border-input bg-background px-3 py-2 font-mono text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => void onPickLocalPath()}
-                    className="shrink-0 rounded-md border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
-                  >
-                    Browse…
-                  </button>
-                </div>
-              </label>
-              {error ? (
-                <div
-                  role="alert"
-                  className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-                >
-                  {error.replace(/^local scan:\s*/i, "")}
-                </div>
-              ) : null}
-              <button
-                type="submit"
-                disabled={localBusy}
-                className="w-fit rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
-              >
-                {localBusy ? "Scanning…" : "Scan library"}
-              </button>
-            </form>
+            ) : null}
           </SettingsCard>
         ) : (
-          <SettingsCard>
-            <form onSubmit={onRemoteLogin} className="flex flex-col gap-3 px-4 py-4">
-              <div className="text-xs text-muted-foreground">
-                {source === "jellyfin"
-                  ? "Jellyfin supports both auto-discovery on the local network and manual entry."
-                  : "Subsonic / Navidrome / Funkwhale — manual entry only. Salt and token are computed per request, so your password never leaves the device."}
-              </div>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-muted-foreground">Server URL</span>
-                <input
-                  type="url"
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.currentTarget.value)}
-                  placeholder={
-                    source === "jellyfin"
-                      ? "http://192.168.1.10:8096"
-                      : "http://192.168.1.10:4533"
-                  }
-                  required
-                  className="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none"
-                />
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-muted-foreground">Username</span>
-                  <input
-                    type="text"
-                    value={username}
-                    onChange={(e) => setUsername(e.currentTarget.value)}
-                    required
-                    autoComplete="username"
-                    className="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none"
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-sm">
-                  <span className="text-muted-foreground">Password</span>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.currentTarget.value)}
-                    required
-                    autoComplete="current-password"
-                    className="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none"
-                  />
-                </label>
-              </div>
-              {error ? (
-                <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                  {error}
-                </div>
-              ) : null}
-              <button
-                type="submit"
-                disabled={busy}
-                className="w-fit rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
-              >
-                {busy ? "Connecting…" : "Connect"}
-              </button>
-            </form>
-          </SettingsCard>
+          <ServerConnectionForm
+            variant="card"
+            discovered={discovered}
+            error={error}
+            onSubmit={handleSubmit}
+            onDiscover={() => void useServerStore.getState().discover()}
+            onPickLocalPath={handlePickLocalPath}
+          />
         )}
-
-        {isLocalActive && localStats ? (
-          <div className="text-xs text-muted-foreground">
-            {localStats.tracks} tracks · {localStats.albums} albums ·{" "}
-            {localStats.artists} artists
-            {localStats.errors > 0 ? (
-              <span className="ml-1 text-yellow-400">
-                · {localStats.errors} file(s) skipped
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-
-        {isLocalActive ? (
-          <button
-            type="button"
-            onClick={onLocalRescan}
-            disabled={localBusy}
-            className="w-fit rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
-          >
-            {localBusy ? "Rescanning…" : "Rescan local library"}
-          </button>
-        ) : null}
       </SettingsSection>
-
-      {/* ─── Discovery (Jellyfin only) ────────────────────────── */}
-      {source === "jellyfin" && !activeServerId ? (
-        <SettingsSection label="Discovery">
-          <SettingsCard>
-            <div className="flex items-center justify-between gap-4 px-4 py-4">
-              <div className="flex min-w-0 flex-col gap-0.5">
-                <div className="text-sm font-medium text-foreground">
-                  Local network
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {discovered.length === 0
-                    ? "No Jellyfin servers detected yet."
-                    : `${discovered.length} server${discovered.length === 1 ? "" : "s"} found.`}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={onDiscover}
-                disabled={discovering}
-                className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
-              >
-                {discovering ? "Scanning…" : "Scan"}
-              </button>
-            </div>
-          </SettingsCard>
-          {discovered.length > 0 ? (
-            <SettingsCard>
-              <ul className="divide-y divide-border">
-                {discovered.map((d) => (
-                  <li
-                    key={d.serverId}
-                    className="flex items-center justify-between gap-3 px-4 py-2.5"
-                  >
-                    <div className="flex min-w-0 flex-col">
-                      <div className="truncate text-sm font-medium text-foreground">
-                        {d.name}
-                      </div>
-                      <div className="truncate text-xs text-muted-foreground">
-                        {d.baseUrl}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setBaseUrl(d.baseUrl)}
-                      className="rounded-md border border-border px-2 py-1 text-xs text-foreground transition-colors hover:bg-muted"
-                    >
-                      Use URL
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </SettingsCard>
-          ) : null}
-        </SettingsSection>
-      ) : null}
 
       {/* ─── Saved servers ───────────────────────────────────── */}
       <SettingsSection label="Saved Servers">
@@ -357,12 +212,23 @@ export function ServerManager() {
                       {s.baseUrl ? ` · ${s.baseUrl}` : ""}
                     </div>
                   </div>
-                  {s.id === activeServerId ? (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">
-                      <HugeiconsIcon icon={Tick02Icon} size={11} strokeWidth={2.5} />
-                      active
-                    </span>
-                  ) : null}
+                  <div className="flex items-center gap-2">
+                    {s.id === activeServerId ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">
+                        <HugeiconsIcon icon={Tick02Icon} size={11} strokeWidth={2.5} />
+                        active
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void useServerStore.getState().deleteServer(s.id)}
+                        className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                        title="Delete server"
+                      >
+                        <HugeiconsIcon icon={Delete03Icon} size={16} strokeWidth={1.75} />
+                      </button>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>
@@ -404,7 +270,7 @@ export function ServerManager() {
             <div className="border-t border-border px-4 py-3">
               <button
                 type="button"
-                onClick={onLastfmDisconnect}
+                onClick={() => void onLastfmDisconnect()}
                 disabled={lastfmBusy}
                 className="rounded-md border border-border px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
               >
@@ -413,7 +279,7 @@ export function ServerManager() {
             </div>
           ) : (
             <form
-              onSubmit={onLastfmConnect}
+              onSubmit={(e) => void onLastfmConnect(e)}
               className="flex flex-col gap-3 border-t border-border px-4 py-4"
             >
               <div className="text-xs text-muted-foreground">
@@ -483,6 +349,41 @@ export function ServerManager() {
           )}
         </SettingsCard>
       </SettingsSection>
+
+      <LoginDialog
+        open={addDialogOpen}
+        onClose={() => setAddDialogOpen(false)}
+        onSubmit={handleAddSubmit}
+      />
     </div>
+  );
+}
+
+function LocalRescanButton() {
+  const [busy, setBusy] = useState(false);
+  const handleRescan = async () => {
+    setBusy(true);
+    try {
+      const { localRescan } = await import("@/lib/tauri");
+      const stats = await localRescan();
+      toast.success(
+        `Rescanned ${stats.tracks} tracks / ${stats.albums} albums` +
+          (stats.errors > 0 ? ` (${stats.errors} file(s) skipped)` : ""),
+      );
+    } catch (err) {
+      toast.error(`Local rescan: ${(err as Error).message ?? String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={() => void handleRescan()}
+      disabled={busy}
+      className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
+    >
+      {busy ? "Rescanning…" : "Rescan local library"}
+    </button>
   );
 }

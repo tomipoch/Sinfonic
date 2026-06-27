@@ -69,6 +69,7 @@ export interface Playlist {
   durationSeconds: number;
   owner?: string | null;
   public: boolean;
+  imageRef?: ImageRef | null;
 }
 
 export interface PagedResponse<T> {

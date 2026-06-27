@@ -14,6 +14,7 @@ import type {
   ConnectedServer,
   DiscoveredServer,
   EqBandPayload,
+  Genre,
   PagedResponse,
   PlaybackStatePayload,
   Playlist,
@@ -21,6 +22,8 @@ import type {
   SearchResults,
   Track,
 } from "@/types/domain";
+
+export type { ConnectedServer };
 
 interface AlbumDetail {
   album: Album;
@@ -35,8 +38,13 @@ export const getAlbums = (offset = 0, limit = 50) =>
 export const getArtists = (offset = 0, limit = 50) =>
   invoke<PagedResponse<Artist>>("get_artists", { offset, limit });
 
+export const getGenres = () => invoke<Genre[]>("get_genres");
+
 export const getTracks = (offset = 0, limit = 50) =>
   invoke<PagedResponse<Track>>("get_tracks", { offset, limit });
+
+export const getAlbum = (albumId: string) =>
+  invoke<Album | null>("get_album", { albumId });
 
 export const getAlbumDetail = (albumId: string) =>
   invoke<AlbumDetail | null>("get_album_detail", { albumId });
@@ -234,11 +242,25 @@ export const subsonicLogin = (params: {
 
 export const providerLogout = () => invoke<void>("provider_logout");
 
+export const providerDelete = (serverId: string) =>
+  invoke<void>("provider_delete", { serverId });
+
 export const providerServers = () =>
   invoke<ConnectedServer[]>("provider_servers");
 
 export const providerActiveServer = () =>
   invoke<string | null>("provider_active_server");
+
+export interface BootstrapState {
+  ready: boolean;
+  activeServerId: string | null;
+  savedServers: ConnectedServer[];
+}
+
+export const bootstrapState = () => invoke<BootstrapState>("bootstrap_state");
+
+export const providerSetActive = (serverId: string) =>
+  invoke<ConnectedServer>("provider_set_active", { serverId });
 
 export const providerSyncLibrary = () =>
   invoke<void>("provider_sync_library");
@@ -271,6 +293,27 @@ export interface AlbumArtResponse {
 export const providerImageBytes = (albumId: string, tag?: string | null) =>
   invoke<AlbumArtResponse>("provider_image_bytes", { albumId, tag });
 
+export interface AlbumArtRequest {
+  albumId: string;
+  tag?: string | null;
+}
+
+export interface AlbumArtBulkItem {
+  albumId: string;
+  tag: string | null;
+  bytes: number[];
+  contentType: string;
+  cached: boolean;
+}
+
+export interface AlbumArtBulkResponse {
+  images: AlbumArtBulkItem[];
+  notFound: string[];
+}
+
+export const providerImageBytesBulk = (requests: AlbumArtRequest[]) =>
+  invoke<AlbumArtBulkResponse>("provider_image_bytes_bulk", { requests });
+
 // ─── Last.fm (Phase 7) ─────────────────────────────────────────
 
 export interface LastFmStatus {
@@ -296,7 +339,3 @@ export const lastfmDisconnect = () =>
   invoke<LastFmStatus>("lastfm_disconnect");
 
 export const lastfmStatus = () => invoke<LastFmStatus>("lastfm_status");
-
-// ─── Misc ───────────────────────────────────────────────────────
-
-export const greet = (name: string) => invoke<string>("greet", { name });

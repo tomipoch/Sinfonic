@@ -56,7 +56,28 @@
     border: none;
   }
 
-  .player-range::-webkit-slider-thumb {
+  /* Same control, used inside the wavy seek bar wrapper. The track
+     is taller (12px) and fully transparent because the wave shape
+     is drawn by an SVG sibling. */
+  .player-range-wave {
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+  }
+
+  .player-range-wave::-webkit-slider-runnable-track {
+    background: transparent;
+    height: 12px;
+  }
+
+  .player-range-wave::-moz-range-track {
+    background: transparent;
+    height: 12px;
+    border: none;
+  }
+
+  .player-range::-webkit-slider-thumb,
+  .player-range-wave::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
     width: 14px;
@@ -69,7 +90,8 @@
     margin-top: -5px;
   }
 
-  .player-range::-moz-range-thumb {
+  .player-range::-moz-range-thumb,
+  .player-range-wave::-moz-range-thumb {
     width: 14px;
     height: 14px;
     border-radius: 9999px;
@@ -79,11 +101,13 @@
     cursor: pointer;
   }
 
-  .player-range:focus-visible::-webkit-slider-thumb {
+  .player-range:focus-visible::-webkit-slider-thumb,
+  .player-range-wave:focus-visible::-webkit-slider-thumb {
     box-shadow: 0 0 0 2px var(--ring);
   }
 
-  .player-range:focus-visible::-moz-range-thumb {
+  .player-range:focus-visible::-moz-range-thumb,
+  .player-range-wave:focus-visible::-moz-range-thumb {
     box-shadow: 0 0 0 2px var(--ring);
   }
 }
