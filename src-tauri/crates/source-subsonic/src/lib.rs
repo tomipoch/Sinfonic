@@ -861,7 +861,7 @@ impl MusicProvider for SubsonicProvider {
             .post_json("rest/createPlaylist", &auth, SUBSONIC_API_VERSION, params)
             .await?;
         let _ = id_refs;
-        Ok(PlaylistId::new(format!("playlist-{}", resp.playlist.id)))
+        Ok(PlaylistId::from_external(&resp.playlist.id))
     }
 
     async fn rename_playlist(

@@ -38,15 +38,14 @@ pub fn album_from_dto(dto: &BaseItemDto) -> Option<Album> {
     let artist_id = dto
         .album_artists
         .first()
-        .map(|p| ArtistId::new(format!("artist-{}", p.id)))
-        .filter(|id| !id.as_str().is_empty());
+        .map(|p| ArtistId::from_external(&p.id));
 
     let year = dto
         .production_year
         .or_else(|| dto.premiere_date.as_deref().and_then(extract_year));
 
     Some(Album {
-        id: AlbumId::new(format!("album-{}", dto.id)),
+        id: AlbumId::from_external(&dto.id),
         title: dto.name.clone().unwrap_or_default(),
         artist: artist_name,
         artist_id,
@@ -68,7 +67,7 @@ pub fn artist_from_dto(dto: &BaseItemDto) -> Option<Artist> {
         return None;
     }
     Some(Artist {
-        id: ArtistId::new(format!("artist-{}", dto.id)),
+        id: ArtistId::from_external(&dto.id),
         name: dto.name.clone().unwrap_or_default(),
         album_count: dto.child_count.unwrap_or(0),
         track_count: 0,
@@ -94,11 +93,10 @@ pub fn track_from_dto(dto: &BaseItemDto) -> Option<Track> {
     let artist_id = dto
         .artist_items
         .first()
-        .map(|p| ArtistId::new(format!("artist-{}", p.id)))
-        .filter(|id| !id.as_str().is_empty());
+        .map(|p| ArtistId::from_external(&p.id));
     Some(Track {
-        id: TrackId::new(format!("track-{}", dto.id)),
-        album_id: AlbumId::new(format!("album-{}", dto.album_id.clone().unwrap_or_default())),
+        id: TrackId::from_external(&dto.id),
+        album_id: AlbumId::from_external(dto.album_id.as_deref().unwrap_or("")),
         title: dto.name.clone().unwrap_or_default(),
         artist: artist_name,
         artist_id,
@@ -120,7 +118,7 @@ pub fn playlist_from_dto(dto: &PlaylistDto) -> Option<Playlist> {
         return None;
     }
     Some(Playlist {
-        id: PlaylistId::new(format!("playlist-{}", dto.id)),
+        id: PlaylistId::from_external(&dto.id),
         name: dto.name.clone().unwrap_or_default(),
         track_count: dto.child_count.unwrap_or(0),
         duration_seconds: ticks_to_seconds(dto.cumulative_run_time_ticks),

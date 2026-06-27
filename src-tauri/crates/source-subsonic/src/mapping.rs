@@ -33,10 +33,10 @@ pub fn album_from_dto(dto: &AlbumDto) -> Option<Album> {
         .artist_id
         .as_deref()
         .filter(|id| !id.is_empty())
-        .map(|id| ArtistId::new(format!("artist-{id}")));
+        .map(ArtistId::from_external);
     let genres = collect_genres(dto.genre.as_deref(), &dto.genres);
     Some(Album {
-        id: AlbumId::new(format!("album-{}", dto.id)),
+        id: AlbumId::from_external(&dto.id),
         title,
         artist,
         artist_id,
@@ -66,7 +66,7 @@ pub fn artist_from_dto(dto: &ArtistDto) -> Option<Artist> {
         .filter(|s| !s.is_empty())
         .map(str::to_string);
     Some(Artist {
-        id: ArtistId::new(format!("artist-{}", dto.id)),
+        id: ArtistId::from_external(&dto.id),
         name: dto.name.clone(),
         album_count: dto.album_count,
         track_count: 0,
@@ -88,14 +88,11 @@ pub fn track_from_child(dto: &ChildDto) -> Option<Track> {
         .artist_id
         .as_deref()
         .filter(|id| !id.is_empty())
-        .map(|id| ArtistId::new(format!("artist-{id}")));
+        .map(ArtistId::from_external);
     let _genres = collect_genres(dto.genre.as_deref(), &dto.genres);
     Some(Track {
-        id: TrackId::new(format!("track-{}", dto.id)),
-        album_id: AlbumId::new(format!(
-            "album-{}",
-            dto.album_id.clone().unwrap_or_default()
-        )),
+        id: TrackId::from_external(&dto.id),
+        album_id: AlbumId::from_external(dto.album_id.as_deref().unwrap_or("")),
         title: dto.title.clone(),
         artist: artist_name,
         artist_id,
@@ -114,7 +111,7 @@ pub fn playlist_from_dto(dto: &PlaylistDto) -> Option<Playlist> {
     }
     let image_ref = playlist_image_ref(dto.id.as_str(), dto.cover_art.as_deref());
     Some(Playlist {
-        id: PlaylistId::new(format!("playlist-{}", dto.id)),
+        id: PlaylistId::from_external(&dto.id),
         name: dto.name.clone(),
         track_count: dto.song_count,
         duration_seconds: dto.duration,

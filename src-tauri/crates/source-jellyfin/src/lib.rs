@@ -571,7 +571,7 @@ impl MusicProvider for JellyfinProvider {
             .client
             .post_json("Playlists", &self.session.auth(), &body)
             .await?;
-        Ok(PlaylistId::new(format!("playlist-{}", resp.id)))
+        Ok(PlaylistId::from_external(&resp.id))
     }
 
     async fn rename_playlist(

@@ -7,6 +7,8 @@
 /// - `Serialize`/`Deserialize` (transparent)
 /// - `new(value)` (panics on empty — use only for trusted internal values)
 /// - `try_new(value) -> Result<Self, DomainError>` (preferred for IPC input)
+/// - `from_external(value)` — prepends the macro prefix to a raw id
+///   coming from a remote provider (Jellyfin/Subsonic/local).
 /// - `fake(n)` (test helper, uses prefix)
 /// - `as_str()` accessor
 /// - `From<&str>` / `From<String>` / `Display`
@@ -64,6 +66,16 @@ macro_rules! opaque_id {
                     );
                 }
                 ::core::result::Result::Ok(Self(value))
+            }
+
+            /// Wrap a raw id from a remote provider (Jellyfin/Subsonic/
+            /// local filesystem hash) by prepending this id type's prefix.
+            ///
+            /// Equivalent to `Self::new(format!("{}{}", $prefix, raw))` but
+            /// makes the intent explicit at call sites and lets us change
+            /// the prefix scheme in one place.
+            pub fn from_external(raw: impl AsRef<str>) -> Self {
+                Self(format!("{}{}", $prefix, raw.as_ref()))
             }
 
             /// Test helper: returns a synthetic ID like `"prefix-42"`.
@@ -192,5 +204,20 @@ mod tests {
     fn queue_entry_try_new_rejects_empty() {
         assert!(QueueEntryId::try_new("").is_err());
         assert!(QueueEntryId::try_new("q-1").is_ok());
+    }
+
+    #[test]
+    fn from_external_prepends_prefix() {
+        assert_eq!(AlbumId::from_external("abc").as_str(), "album-abc");
+        assert_eq!(TrackId::from_external("xyz").as_str(), "track-xyz");
+        assert_eq!(ArtistId::from_external("1").as_str(), "artist-1");
+    }
+
+    #[test]
+    fn from_external_accepts_string_and_str() {
+        let a = AlbumId::from_external(String::from("owned"));
+        let b = AlbumId::from_external("borrowed");
+        assert_eq!(a.as_str(), "album-owned");
+        assert_eq!(b.as_str(), "album-borrowed");
     }
 }
