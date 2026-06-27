@@ -32,7 +32,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream::{StreamExt, TryStreamExt};
-use serde::Serialize;
 use sinfonic_domain::{
     Album, AlbumId, Artist, ArtistId, FolderDetail, FolderId, Genre, GenreDetail, GenreId,
     MusicFolder, MusicFolderId, PagedRequest, PagedResponse, Playlist, PlaylistDetail, PlaylistId,
@@ -53,11 +52,10 @@ use dto::{
     PlaylistDto, RandomSongsPayload, SearchResult3Payload,
 };
 
-/// Progress event name for `sync-progress`. Mirrors the frontend
-/// `listen("sync-progress", …)` subscription. Defined here (not in the
-/// `events` module) because the provider is a library crate and we
-/// don't want a circular dependency on the app crate.
-const SYNC_PROGRESS_EVENT: &str = "sync-progress";
+/// Progress event name for `sync-progress`. Now sourced from
+/// `sinfonic_domain::events::EventName` so the wire string stays in
+/// lockstep with the app crate and the frontend subscription.
+const SYNC_PROGRESS_EVENT: &str = sinfonic_domain::EventName::SyncProgress.as_str();
 
 /// Phase label sent in the `sync-progress` payload for the album
 /// fan-out phase of `tracks()`. Free-form string the UI can branch on.
@@ -77,15 +75,6 @@ const ALBUM_LIST_PAGE_SIZE: usize = 200;
 const ALBUM_FETCH_CONCURRENCY: usize = 8;
 
 /// Payload of the `sync-progress` event. Kept in this crate so the
-/// provider doesn't have to import the app's `events` module.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SyncProgressPayload {
-    phase: &'static str,
-    done: usize,
-    total: usize,
-}
-
 /// Internal album hint — `(server_id, song_count)` — collected from
 /// `getAlbumList2` so `tracks()` knows which albums to fetch and the
 /// total track count for the response.
@@ -469,8 +458,8 @@ impl MusicProvider for SubsonicProvider {
                 if let Some(app) = app_handle.as_ref() {
                     let _ = app.emit(
                         SYNC_PROGRESS_EVENT,
-                        SyncProgressPayload {
-                            phase: TRACKS_PHASE,
+                        sinfonic_domain::SyncProgressPayload {
+                            phase: TRACKS_PHASE.to_string(),
                             done,
                             total: total_to_fetch,
                         },

@@ -9,6 +9,7 @@
 
 pub mod entities;
 pub mod error;
+pub mod events;
 pub mod ids;
 pub mod playback;
 pub mod queue;
@@ -23,6 +24,10 @@ pub use entities::{
     SmartPlaylistSortField, Track,
 };
 pub use error::{DomainError, DomainResult};
+pub use events::{
+    EventName, LibrarySyncStatusPayload, PlaybackStatePayload, QueueEntryView,
+    QueueSnapshotPayload, SyncProgressPayload, TrackChangedPayload,
+};
 pub use ids::{
     AlbumId, ArtistId, FolderId, GenreId, MusicFolderId, PlaylistId, QueueEntryId, ServerId,
     SmartPlaylistId, TrackId,
