@@ -237,7 +237,7 @@ mod tests {
         assert_eq!(album.track_count, 12);
         assert_eq!(album.duration_seconds, 3540);
         assert!(album.favorite);
-        assert_eq!(album.image_ref.as_ref().unwrap().kind, "Primary");
+        assert_eq!(album.image_ref.as_ref().unwrap().kind, ImageKindHint::Primary);
         assert_eq!(album.image_ref.as_ref().unwrap().tag.as_deref(), Some("tag-1"));
         assert_eq!(album.genres, vec!["Rock".to_string()]);
     }

@@ -256,7 +256,7 @@ mod tests {
         assert_eq!(album.track_count, 12);
         assert_eq!(album.duration_seconds, 3540);
         assert!(album.favorite);
-        assert_eq!(album.image_ref.as_ref().unwrap().kind, "coverArt");
+        assert_eq!(album.image_ref.as_ref().unwrap().kind, ImageKindHint::CoverArt);
         assert_eq!(
             album.image_ref.as_ref().unwrap().tag.as_deref(),
             Some("al-1")
@@ -331,7 +331,7 @@ mod tests {
         assert!(!artist.favorite);
         let image_ref = artist.image_ref.as_ref().expect("image_ref is set");
         assert_eq!(image_ref.item_id, "coverArt:ar-1");
-        assert_eq!(image_ref.kind, "coverArt");
+        assert_eq!(image_ref.kind, ImageKindHint::CoverArt);
         assert_eq!(image_ref.tag.as_deref(), Some("ar-1"));
     }
 
