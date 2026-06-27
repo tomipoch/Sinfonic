@@ -18,8 +18,8 @@ use sinfonic_domain::{
 };
 use sinfonic_source::{
     AlbumDetailResponse, ArtistDetailResponse, Capabilities, FavoriteItemId, HomeSection, Identity,
-    ImageBytes, ImageMetadata, ImageRequest, Lyrics, MusicProvider, PlaybackReport, ProviderError,
-    ProviderIdentity, ProviderResult, RandomTrackRequest,
+    ImageBytes, ImageMetadata, ImageRequest, Lyrics, MusicProvider, PlaybackReport, ProviderCapabilities,
+    ProviderError, ProviderIdentity, ProviderResult, RandomTrackRequest,
 };
 
 pub mod scanner;
@@ -55,40 +55,35 @@ pub struct LocalProvider {
     root: PathBuf,
     state: Arc<RwLock<LocalState>>,
     identity: ProviderIdentity,
-    capabilities: ProviderCapabilities,
+    /// Wrapped in an Arc so the trait `capabilities()` can return
+    /// a reference that outlives any temporary clone of `self`.
+    /// Matches the convention used by Jellyfin / Subsonic providers.
+    capabilities: Arc<ProviderCapabilities>,
 }
 
-#[derive(Clone, Debug)]
-pub struct ProviderCapabilities {
-    flags: Capabilities,
-}
-
-impl ProviderCapabilities {
-    fn local() -> Self {
-        // Every field listed explicitly so clippy is happy and the
-        // capability surface is obvious at a glance.
-        let flags = Capabilities {
-            albums: true,
-            tracks: true,
-            artists: true,
-            album_artists: true,
-            genres: false,
-            playlists: false,
-            favorites: false,
-            lyrics: false,
-            playback_reporting: false,
-            playlist_mutations: false,
-            playlist_delete: false,
-            favorite_mutations: false,
-            auto_dj: false,
-            random_tracks: false,
-            random_played_filter: false,
-            search: true,
-            image_metadata: true,
-            music_folders: true,
-            folder_browsing: false,
-        };
-        Self { flags }
+fn local_capabilities() -> ProviderCapabilities {
+    // Every field listed explicitly so clippy is happy and the
+    // capability surface is obvious at a glance.
+    ProviderCapabilities {
+        albums: true,
+        tracks: true,
+        artists: true,
+        album_artists: true,
+        genres: false,
+        playlists: false,
+        favorites: false,
+        lyrics: false,
+        playback_reporting: false,
+        playlist_mutations: false,
+        playlist_delete: false,
+        favorite_mutations: false,
+        auto_dj: false,
+        random_tracks: false,
+        random_played_filter: false,
+        search: true,
+        image_metadata: true,
+        music_folders: true,
+        folder_browsing: false,
     }
 }
 
@@ -110,7 +105,7 @@ impl LocalProvider {
             root,
             state: Arc::new(RwLock::new(LocalState::default())),
             identity,
-            capabilities: ProviderCapabilities::local(),
+            capabilities: Arc::new(local_capabilities()),
         }
     }
 
@@ -225,7 +220,7 @@ impl MusicProvider for LocalProvider {
     }
 
     fn capabilities(&self) -> &Capabilities {
-        &self.capabilities.flags
+        &self.capabilities
     }
 
     async fn home_sections(&self) -> ProviderResult<Vec<HomeSection>> {
