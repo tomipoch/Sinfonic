@@ -40,6 +40,10 @@ keyring = "3"
 # Synchronisation primitives (faster, non-poisoning Mutexes for hot paths)
 parking_lot = "0.12"
 
+# Structured logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
 # Filesystem (Phase 8 — local-files provider)
 walkdir = "2"
 # Audio metadata parsing (Phase 8 — local-files provider). lofty 0.21 ships
@@ -119,3 +123,7 @@ sinfonic-playback = { workspace = true }
 sinfonic-library = { workspace = true }
 sinfonic-secrets = { workspace = true }
 sinfonic-lastfm = { workspace = true }
+
+# Structured logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
