@@ -172,9 +172,23 @@ where
     for id in &take {
         params.push(Box::new((*id).clone()));
     }
-    let items = stmt
+    let items: Vec<T> = stmt
         .query_map(rusqlite::params_from_iter(params.iter().map(|b| b.as_ref())), row_to_entity)?
-        .collect::<rusqlite::Result<Vec<T>>>()?;
+        // Tolerate per-row decode failures: a single NULL or schema
+        // mismatch on one cached row shouldn't blackhole the whole
+        // search result page. The error is logged for diagnostics.
+        .filter_map(|r| match r {
+            Ok(row) => Some(row),
+            Err(e) => {
+                tracing::warn!(
+                    target: "sinfonic::library",
+                    error = %e,
+                    "skipping undecodable row in search result"
+                );
+                None
+            }
+        })
+        .collect();
     Ok(items)
 }
 

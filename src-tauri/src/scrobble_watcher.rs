@@ -16,10 +16,20 @@
 //!
 //! Errors are logged at warn-level and never bubble up — a flaky
 //! Last.fm must never disrupt playback.
+//!
+//! # Resilience
+//!
+//! Each iteration runs inside [`std::panic::AssertUnwindSafe`] +
+//! [`futures::FutureExt::catch_unwind`]. A panic in any inner future
+//! is logged but does **not** terminate the watcher — the next tick
+//! runs normally. This guarantees scrobbling continues even after a
+//! future bug in the HTTP client or domain mapping.
 
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::FutureExt;
 use sinfonic_domain::{QueueEngine, TrackId};
 use sinfonic_lastfm::{LastFmClient, Scrobble, ScrobbleSource};
 use sinfonic_playback::AudioPlayer;
@@ -57,7 +67,35 @@ pub async fn run(
 
     loop {
         ticker.tick().await;
-        tick(&queue, &player, &lastfm_slot, &mut state).await;
+
+        // Catch panics from inner logic so a transient bug cannot kill
+        // the whole watcher. Recover by logging and continuing on the
+        // next tick.
+        let tick_future = tick(&queue, &player, &lastfm_slot, &mut state);
+        let outcome = AssertUnwindSafe(tick_future).catch_unwind().await;
+
+        if let Err(payload) = outcome {
+            let message = panic_message(&payload);
+            tracing::error!(
+                target: "sinfonic::scrobble_watcher",
+                panic = %message,
+                "scrobble watcher tick panicked; recovering on next interval"
+            );
+            // Reset transient state on panic so we re-detect changes.
+            state.last_track_id = None;
+            state.scrobbled_track_ids.clear();
+        }
+    }
+}
+
+/// Extracts a printable message from a `catch_unwind` payload.
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> &str {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        s
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.as_str()
+    } else {
+        "<non-string panic payload>"
     }
 }
 
@@ -100,7 +138,12 @@ async fn tick(
 
         if let (Some(track_id), Some(entry)) = (&current_track_id, &current_entry) {
             if entry.track_id == *track_id {
-                eprintln!("[SCROBBLE] track changed: {} - {}", entry.artist, entry.title);
+                tracing::info!(
+                    target: "sinfonic::scrobble_watcher",
+                    artist = %entry.artist,
+                    title = %entry.title,
+                    "track changed; sending now-playing"
+                );
                 let scrobble = Scrobble {
                     artist: entry.artist.clone(),
                     track: entry.title.clone(),
@@ -109,10 +152,16 @@ async fn tick(
                     timestamp_unix: now_unix(),
                     mbid: None,
                 };
-                if let Err(err) = client.now_playing(&scrobble, ScrobbleSource::User).await {
-                    eprintln!("[SCROBBLE] now_playing failed: {err}");
-                } else {
-                    eprintln!("[SCROBBLE] now_playing sent OK");
+                match client.now_playing(&scrobble, ScrobbleSource::User).await {
+                    Ok(()) => tracing::debug!(
+                        target: "sinfonic::scrobble_watcher",
+                        "now-playing accepted by Last.fm"
+                    ),
+                    Err(err) => tracing::warn!(
+                        target: "sinfonic::scrobble_watcher",
+                        error = %err,
+                        "now-playing request failed"
+                    ),
                 }
             }
         }
@@ -124,7 +173,12 @@ async fn tick(
             if entry.track_id == *track_id
                 && !state.scrobbled_track_ids.contains(track_id)
             {
-                eprintln!("[SCROBBLE] position crossed 50%, scrobbling: {} - {}", entry.artist, entry.title);
+                tracing::info!(
+                    target: "sinfonic::scrobble_watcher",
+                    artist = %entry.artist,
+                    title = %entry.title,
+                    "position crossed 50%; submitting scrobble"
+                );
                 let scrobble = Scrobble {
                     artist: entry.artist.clone(),
                     track: entry.title.clone(),
@@ -135,12 +189,20 @@ async fn tick(
                 };
                 match client.scrobble(&scrobble, ScrobbleSource::User).await {
                     Ok(accepted) => {
-                        eprintln!("[SCROBBLE] scrobble accepted={}", accepted);
+                        tracing::info!(
+                            target: "sinfonic::scrobble_watcher",
+                            accepted,
+                            "scrobble submitted"
+                        );
                         if accepted {
                             state.scrobbled_track_ids.insert(track_id.clone());
                         }
                     }
-                    Err(err) => eprintln!("[SCROBBLE] scrobble failed: {err}"),
+                    Err(err) => tracing::warn!(
+                        target: "sinfonic::scrobble_watcher",
+                        error = %err,
+                        "scrobble submission failed"
+                    ),
                 }
             }
         }
@@ -152,4 +214,27 @@ fn now_unix() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panic_message_handles_str_payload() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new("oops");
+        assert_eq!(panic_message(&payload), "oops");
+    }
+
+    #[test]
+    fn panic_message_handles_string_payload() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(String::from("owned"));
+        assert_eq!(panic_message(&payload), "owned");
+    }
+
+    #[test]
+    fn panic_message_handles_unknown_payload() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(42_i32);
+        assert_eq!(panic_message(&payload), "<non-string panic payload>");
+    }
 }

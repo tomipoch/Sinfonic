@@ -11,7 +11,8 @@
 //! match on the prefix (the same convention as Jellyfin).
 
 use sinfonic_domain::{
-    Album, AlbumId, Artist, ArtistId, ImageRef, Playlist, PlaylistId, Track, TrackId,
+    Album, AlbumId, Artist, ArtistId, ImageKindHint, ImageRef, Playlist, PlaylistId, Track,
+    TrackId,
 };
 
 use super::dto::{AlbumDto, ArtistDto, ChildDto, PlaylistDto, PlaylistEntryDto};
@@ -33,10 +34,10 @@ pub fn album_from_dto(dto: &AlbumDto) -> Option<Album> {
         .artist_id
         .as_deref()
         .filter(|id| !id.is_empty())
-        .map(|id| ArtistId::new(format!("artist-{id}")));
+        .map(ArtistId::from_external);
     let genres = collect_genres(dto.genre.as_deref(), &dto.genres);
     Some(Album {
-        id: AlbumId::new(format!("album-{}", dto.id)),
+        id: AlbumId::from_external(&dto.id),
         title,
         artist,
         artist_id,
@@ -66,14 +67,14 @@ pub fn artist_from_dto(dto: &ArtistDto) -> Option<Artist> {
         .filter(|s| !s.is_empty())
         .map(str::to_string);
     Some(Artist {
-        id: ArtistId::new(format!("artist-{}", dto.id)),
+        id: ArtistId::from_external(&dto.id),
         name: dto.name.clone(),
         album_count: dto.album_count,
         track_count: 0,
         favorite: dto.starred.is_some(),
         image_ref: Some(sinfonic_domain::ImageRef {
             item_id: format!("coverArt:{}", dto.id),
-            kind: "coverArt".to_string(),
+            kind: sinfonic_domain::ImageKindHint::CoverArt,
             tag: tag.or_else(|| Some(dto.id.clone())),
         }),
     })
@@ -88,14 +89,11 @@ pub fn track_from_child(dto: &ChildDto) -> Option<Track> {
         .artist_id
         .as_deref()
         .filter(|id| !id.is_empty())
-        .map(|id| ArtistId::new(format!("artist-{id}")));
+        .map(ArtistId::from_external);
     let _genres = collect_genres(dto.genre.as_deref(), &dto.genres);
     Some(Track {
-        id: TrackId::new(format!("track-{}", dto.id)),
-        album_id: AlbumId::new(format!(
-            "album-{}",
-            dto.album_id.clone().unwrap_or_default()
-        )),
+        id: TrackId::from_external(&dto.id),
+        album_id: AlbumId::from_external(dto.album_id.as_deref().unwrap_or("")),
         title: dto.title.clone(),
         artist: artist_name,
         artist_id,
@@ -114,7 +112,7 @@ pub fn playlist_from_dto(dto: &PlaylistDto) -> Option<Playlist> {
     }
     let image_ref = playlist_image_ref(dto.id.as_str(), dto.cover_art.as_deref());
     Some(Playlist {
-        id: PlaylistId::new(format!("playlist-{}", dto.id)),
+        id: PlaylistId::from_external(&dto.id),
         name: dto.name.clone(),
         track_count: dto.song_count,
         duration_seconds: dto.duration,
@@ -135,7 +133,7 @@ fn playlist_image_ref(playlist_id: &str, cover_art: Option<&str>) -> Option<Imag
         .or_else(|| Some(playlist_id.to_string()));
     Some(ImageRef {
         item_id: format!("coverArt:{playlist_id}"),
-        kind: "coverArt".to_string(),
+        kind: ImageKindHint::CoverArt,
         tag,
     })
 }
@@ -197,7 +195,7 @@ fn image_ref_from_cover_art(id: &str, cover_art: Option<&str>) -> Option<ImageRe
     // server-relative path or a full URL.
     Some(ImageRef {
         item_id: format!("coverArt:{id}"),
-        kind: "coverArt".to_string(),
+        kind: ImageKindHint::CoverArt,
         tag: Some(value.to_string()),
     })
 }
@@ -258,7 +256,7 @@ mod tests {
         assert_eq!(album.track_count, 12);
         assert_eq!(album.duration_seconds, 3540);
         assert!(album.favorite);
-        assert_eq!(album.image_ref.as_ref().unwrap().kind, "coverArt");
+        assert_eq!(album.image_ref.as_ref().unwrap().kind, ImageKindHint::CoverArt);
         assert_eq!(
             album.image_ref.as_ref().unwrap().tag.as_deref(),
             Some("al-1")
@@ -333,7 +331,7 @@ mod tests {
         assert!(!artist.favorite);
         let image_ref = artist.image_ref.as_ref().expect("image_ref is set");
         assert_eq!(image_ref.item_id, "coverArt:ar-1");
-        assert_eq!(image_ref.kind, "coverArt");
+        assert_eq!(image_ref.kind, ImageKindHint::CoverArt);
         assert_eq!(image_ref.tag.as_deref(), Some("ar-1"));
     }
 

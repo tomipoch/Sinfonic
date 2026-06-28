@@ -166,7 +166,7 @@ async fn fetch_albums_returns_paged_response() {
     assert_eq!(page.items.len(), 3);
     assert_eq!(page.items[0].title, "Album");
     assert!(page.items[0].favorite);
-    assert_eq!(page.items[0].image_ref.as_ref().unwrap().kind, "coverArt");
+    assert_eq!(page.items[0].image_ref.as_ref().unwrap().kind, sinfonic_domain::ImageKindHint::CoverArt);
 }
 
 #[tokio::test]

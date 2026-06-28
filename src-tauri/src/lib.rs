@@ -41,6 +41,7 @@ pub use commands::sync_library_data;
 /// Entrypoint invoked by `main.rs` (and the mobile target on iOS/Android).
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    init_tracing();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
@@ -54,20 +55,34 @@ pub fn run() {
             let state = match app.path().app_data_dir() {
                 Ok(dir) => {
                     if let Err(e) = std::fs::create_dir_all(&dir) {
-                        eprintln!("sinfonic: could not create {dir:?}: {e}");
+                        tracing::warn!(
+                            target: "sinfonic::app",
+                            dir = %dir.display(),
+                            error = %e,
+                            "could not create app data dir; falling back to in-memory cache"
+                        );
                         AppState::new()
                     } else {
                         let db = dir.join("library.sqlite");
                         let art_dir = dir.join("album_art");
                         AppState::with_paths(&db, &art_dir)
                             .unwrap_or_else(|e| {
-                                eprintln!("sinfonic: open({db:?}) failed: {e}, falling back to memory");
+                                tracing::warn!(
+                                    target: "sinfonic::app",
+                                    db = %db.display(),
+                                    error = %e,
+                                    "library sqlite open failed; falling back to in-memory cache"
+                                );
                                 AppState::new()
                             })
                     }
                 }
                 Err(e) => {
-                    eprintln!("sinfonic: app_data_dir unavailable: {e}, using in-memory cache");
+                    tracing::warn!(
+                        target: "sinfonic::app",
+                        error = %e,
+                        "app_data_dir unavailable; using in-memory cache"
+                    );
                     AppState::new()
                 }
             };
@@ -258,4 +273,23 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Initialise the global tracing subscriber.
+///
+/// Honours `RUST_LOG` (e.g. `RUST_LOG=sinfonic::sync=debug`). If no
+/// filter env var is set, defaults to `info` for `sinfonic::*` and
+/// `warn` for everything else. Idempotent — repeated calls (e.g. in
+/// integration tests) are a no-op via the `try_init` guard.
+fn init_tracing() {
+    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new("info,sinfonic=debug")
+    });
+
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt::layer().with_target(true).with_ansi(false))
+        .try_init();
 }

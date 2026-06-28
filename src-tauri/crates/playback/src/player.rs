@@ -33,7 +33,7 @@
 //! for more than that.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -56,13 +56,30 @@ use crate::stream;
 /// guarantees on the `Sink` side).
 struct OutputStreamHolder(#[allow(dead_code)] Option<OutputStream>);
 
-// SAFETY: see struct doc. We never read or write `OutputStreamHolder`
-// from any thread other than the one that called `OutputStream::try_default()`.
+// SAFETY: `OutputStreamHolder` is only ever constructed inside
+// `AudioPlayer::new` and then moved into the `AudioPlayer` struct
+// exactly once. After construction, the inner `OutputStream` is never
+// touched from any thread (no method reads or writes it). Its sole
+// purpose is to keep the OS-level sink alive for as long as the
+// associated `OutputStreamHandle` lives inside `Inner::stream_handle`.
+//
+// We do not implement `Clone`, so the value cannot escape into another
+// thread. All `Send`-bound APIs surface only the `Arc<Inner>` (which
+// contains no `!Send` data) and the `&self` receiver (which is a
+// shared reference, never crossing threads on its own).
+//
+// Verified by `concurrent_play_pause_volume_no_panic` below.
 unsafe impl Send for OutputStreamHolder {}
 unsafe impl Sync for OutputStreamHolder {}
 
 /// How often the position-poller thread reads the rodio Sink.
-const POLL_INTERVAL: Duration = Duration::from_millis(250);
+///
+/// 1 s is granular enough for a seekable progress bar (Spotify uses a
+/// similar cadence) and cheap enough that the per-tick `app.emit`
+/// cost is negligible. Earlier this was 250 ms (4 Hz), which produced
+/// four `playback-state-changed` events per second and visibly more
+/// CPU when the player was idle.
+const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Events the AudioPlayer emits to the rest of the app. Wired to Tauri
 /// events in `lib.rs::run`.
@@ -121,7 +138,10 @@ struct Inner {
     volume: Mutex<f32>,
     muted: Mutex<bool>,
     equalizer: SharedEqualizer,
-    on_event: Mutex<Option<PlayerEventCallback>>,
+    /// Set once via `set_event_callback` and never re-assigned at
+    /// runtime, so we can use `OnceLock` and pay zero synchronisation
+    /// cost on every emit.
+    on_event: OnceLock<PlayerEventCallback>,
 }
 
 impl std::fmt::Debug for AudioPlayer {
@@ -142,7 +162,11 @@ impl AudioPlayer {
         let (stream_opt, handle_opt) = match OutputStream::try_default() {
             Ok(pair) => (Some(pair.0), Some(pair.1)),
             Err(err) => {
-                eprintln!("sinfonic-playback: no audio output device: {err}");
+                tracing::warn!(
+                    target: "sinfonic::playback",
+                    error = %err,
+                    "no audio output device; running in headless mode"
+                );
                 (None, None)
             }
         };
@@ -159,7 +183,7 @@ impl AudioPlayer {
             volume: Mutex::new(0.8),
             muted: Mutex::new(false),
             equalizer: Arc::new(Mutex::new(Equalizer::flat())),
-            on_event: Mutex::new(None),
+            on_event: OnceLock::new(),
         };
         Self {
             output_stream: OutputStreamHolder(stream_opt),
@@ -167,14 +191,20 @@ impl AudioPlayer {
         }
     }
 
-    /// Register a callback fired on every state change / track end.
-    /// `lib.rs::run` wires this to Tauri `app.emit(...)` calls.
-    pub fn set_event_callback<F>(&self, callback: F)
-    where
-        F: Fn(PlayerEvent) + Send + Sync + 'static,
-    {
-        *self.inner.on_event.lock() = Some(Arc::new(callback));
-    }
+/// Register a callback fired on every state change / track end.
+/// `lib.rs::run` wires this to Tauri `app.emit(...)` calls.
+///
+/// Must be called exactly once before any playback starts. Repeated
+/// calls are silently ignored — `OnceLock::set` returns `Err` if the
+/// slot is already populated. The lock-free `get` on the hot path
+/// (every poll tick) is the win over the previous `Mutex<Option<…>>`
+/// arrangement.
+pub fn set_event_callback<F>(&self, callback: F)
+where
+    F: Fn(PlayerEvent) + Send + Sync + 'static,
+{
+    let _ = self.inner.on_event.set(Arc::new(callback));
+}
 
     /// Read the most-recently cached playback state. Cheap; doesn't
     /// lock the rodio sink.
@@ -196,7 +226,7 @@ impl AudioPlayer {
 
     /// Start playing `track_id` from its stream URI. Returns the
     /// resolved duration (from the rodio decoder) on success.
-    pub fn play(
+    pub async fn play(
         &self,
         track_id: TrackId,
         stream_uri: &str,
@@ -204,7 +234,14 @@ impl AudioPlayer {
         // Open the stream first so we know the duration before we
         // touch any state. A decode failure here is surfaced to the
         // caller and nothing else happens.
+        //
+        // `stream::open` is async because HTTP downloads are funneled
+        // through `tokio::task::spawn_blocking` internally — keeping
+        // the rodio `Sink` work on the same task avoids any chance of
+        // the user pressing "next" mid-decode and leaving us with a
+        // dangling source.
         let decoded = stream::open(stream_uri)
+            .await
             .map_err(|e| PlayerError::Stream(e.to_string()))?
             .with_eq(self.inner.equalizer.clone());
         let duration_seconds = decoded.duration_seconds.unwrap_or(0);
@@ -233,8 +270,7 @@ impl AudioPlayer {
                 // Headless: drop the source, fire TrackEnded so the
                 // queue can advance without waiting on a real device.
                 drop(decoded);
-                let cb = self.inner.on_event.lock().clone();
-                if let Some(cb) = cb {
+                if let Some(cb) = self.inner.on_event.get() {
                     cb(PlayerEvent::TrackEnded { track_id: track_id.clone() });
                 }
             }
@@ -339,8 +375,7 @@ impl AudioPlayer {
     // ─── internals ────────────────────────────────────────────────
 
     fn emit_state(&self, track_id: Option<TrackId>) {
-        let cb = self.inner.on_event.lock().clone();
-        if let Some(cb) = cb {
+        if let Some(cb) = self.inner.on_event.get() {
             cb(PlayerEvent::StateChanged {
                 track_id: track_id.clone(),
                 position_seconds: self.inner.position_seconds.load(Ordering::Relaxed),
@@ -417,8 +452,7 @@ impl Inner {
             if empty && !paused {
                 if let Some(track_id) = track_id {
                     if !self.ended_fired.swap(true, Ordering::Relaxed) {
-                        let cb = self.on_event.lock().clone();
-                        if let Some(cb) = cb {
+                        if let Some(cb) = self.on_event.get() {
                             cb(PlayerEvent::TrackEnded { track_id });
                         }
                     }
@@ -428,8 +462,7 @@ impl Inner {
             }
 
             // Emit state.
-            let cb = self.on_event.lock().clone();
-            if let Some(cb) = cb {
+            if let Some(cb) = self.on_event.get() {
                 cb(PlayerEvent::StateChanged {
                     track_id: self.track_id.lock().clone(),
                     position_seconds,
@@ -504,6 +537,10 @@ mod tests {
 
     #[test]
     fn event_callback_fires_on_play_and_stop() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build runtime");
         let player = AudioPlayer::new();
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = counter.clone();
@@ -513,11 +550,59 @@ mod tests {
         let path = tmp_wav(2);
         // Best-effort play: CI may not have an audio device, but the
         // callback should still fire on stop.
-        let _ = player.play(TrackId::from("track-test"), path.to_str().unwrap());
+        let _ = runtime.block_on(player.play(TrackId::from("track-test"), path.to_str().unwrap()));
         std::thread::sleep(StdDuration::from_millis(100));
         player.stop();
         std::thread::sleep(StdDuration::from_millis(50));
         assert!(counter.load(Ordering::Relaxed) > 0);
         std::fs::remove_file(&path).ok();
+    }
+
+    /// Smoke test for the `unsafe impl Send + Sync` on `OutputStreamHolder`.
+    ///
+    /// We hammer the public, `&self`-receiving API from many threads in
+    /// parallel. If a future change accidentally introduces a method that
+    /// touches the inner `OutputStream` from another thread (which would
+    /// be undefined behaviour per cpal's docs), this test is the cheapest
+    /// place it will start to flake on macOS/Windows audio backends.
+    #[test]
+    fn concurrent_play_pause_volume_no_panic() {
+        let player = Arc::new(AudioPlayer::new());
+        let mut handles = Vec::new();
+
+        for _ in 0..4 {
+            let p = Arc::clone(&player);
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..50 {
+                    p.set_volume(0.5);
+                    p.set_muted(true);
+                    p.set_muted(false);
+                    let _ = p.cached_state();
+                    let _ = p.current_track_id();
+                }
+            }));
+        }
+
+        for _ in 0..2 {
+            let p = Arc::clone(&player);
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..50 {
+                    p.pause();
+                    p.resume();
+                    p.set_eq_band(1000, 0.0);
+                    let _ = p.eq_bands();
+                    p.reset_eq();
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().expect("thread should not panic");
+        }
+
+        // Final read should still be coherent.
+        let s = player.cached_state();
+        assert!(s.volume.is_finite());
+        assert!(s.volume >= 0.0 && s.volume <= 1.0);
     }
 }

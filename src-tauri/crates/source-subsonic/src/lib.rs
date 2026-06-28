@@ -32,7 +32,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream::{StreamExt, TryStreamExt};
-use serde::Serialize;
 use sinfonic_domain::{
     Album, AlbumId, Artist, ArtistId, FolderDetail, FolderId, Genre, GenreDetail, GenreId,
     MusicFolder, MusicFolderId, PagedRequest, PagedResponse, Playlist, PlaylistDetail, PlaylistId,
@@ -53,11 +52,10 @@ use dto::{
     PlaylistDto, RandomSongsPayload, SearchResult3Payload,
 };
 
-/// Progress event name for `sync-progress`. Mirrors the frontend
-/// `listen("sync-progress", …)` subscription. Defined here (not in the
-/// `events` module) because the provider is a library crate and we
-/// don't want a circular dependency on the app crate.
-const SYNC_PROGRESS_EVENT: &str = "sync-progress";
+/// Progress event name for `sync-progress`. Now sourced from
+/// `sinfonic_domain::events::EventName` so the wire string stays in
+/// lockstep with the app crate and the frontend subscription.
+const SYNC_PROGRESS_EVENT: &str = sinfonic_domain::EventName::SyncProgress.as_str();
 
 /// Phase label sent in the `sync-progress` payload for the album
 /// fan-out phase of `tracks()`. Free-form string the UI can branch on.
@@ -77,15 +75,6 @@ const ALBUM_LIST_PAGE_SIZE: usize = 200;
 const ALBUM_FETCH_CONCURRENCY: usize = 8;
 
 /// Payload of the `sync-progress` event. Kept in this crate so the
-/// provider doesn't have to import the app's `events` module.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SyncProgressPayload {
-    phase: &'static str,
-    done: usize,
-    total: usize,
-}
-
 /// Internal album hint — `(server_id, song_count)` — collected from
 /// `getAlbumList2` so `tracks()` knows which albums to fetch and the
 /// total track count for the response.
@@ -469,8 +458,8 @@ impl MusicProvider for SubsonicProvider {
                 if let Some(app) = app_handle.as_ref() {
                     let _ = app.emit(
                         SYNC_PROGRESS_EVENT,
-                        SyncProgressPayload {
-                            phase: TRACKS_PHASE,
+                        sinfonic_domain::SyncProgressPayload {
+                            phase: TRACKS_PHASE.to_string(),
                             done,
                             total: total_to_fetch,
                         },
@@ -872,7 +861,7 @@ impl MusicProvider for SubsonicProvider {
             .post_json("rest/createPlaylist", &auth, SUBSONIC_API_VERSION, params)
             .await?;
         let _ = id_refs;
-        Ok(PlaylistId::new(format!("playlist-{}", resp.playlist.id)))
+        Ok(PlaylistId::from_external(&resp.playlist.id))
     }
 
     async fn rename_playlist(
@@ -1098,20 +1087,13 @@ impl SubsonicProvider {
 }
 
 fn strip_prefix<'a>(s: &'a str, prefix: &str) -> &'a str {
-    s.strip_prefix(prefix).unwrap_or(s)
+    sinfonic_source::strip_prefix(s, prefix)
 }
 
 fn split_image_id(item_id: &str) -> (&str, &str) {
-    if let Some((kind, id)) = item_id.split_once(':') {
-        (kind, id)
-    } else {
-        ("", item_id)
-    }
+    sinfonic_source::split_image_id(item_id)
 }
 
 fn slugify(name: &str) -> String {
-    name.chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
-        .map(|c| c.to_ascii_lowercase())
-        .collect()
+    sinfonic_source::slugify(name)
 }

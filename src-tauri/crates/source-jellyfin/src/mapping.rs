@@ -10,7 +10,8 @@
 //! `"Backdrop"`. Anything Jellyfin doesn't tag is dropped.
 
 use sinfonic_domain::{
-    Album, AlbumId, Artist, ArtistId, ImageRef, Playlist, PlaylistId, Track, TrackId,
+    Album, AlbumId, Artist, ArtistId, ImageKindHint, ImageRef, Playlist, PlaylistId, Track,
+    TrackId,
 };
 
 use super::dto::{BaseItemDto, PlaylistDto};
@@ -38,15 +39,14 @@ pub fn album_from_dto(dto: &BaseItemDto) -> Option<Album> {
     let artist_id = dto
         .album_artists
         .first()
-        .map(|p| ArtistId::new(format!("artist-{}", p.id)))
-        .filter(|id| !id.as_str().is_empty());
+        .map(|p| ArtistId::from_external(&p.id));
 
     let year = dto
         .production_year
         .or_else(|| dto.premiere_date.as_deref().and_then(extract_year));
 
     Some(Album {
-        id: AlbumId::new(format!("album-{}", dto.id)),
+        id: AlbumId::from_external(&dto.id),
         title: dto.name.clone().unwrap_or_default(),
         artist: artist_name,
         artist_id,
@@ -58,7 +58,7 @@ pub fn album_from_dto(dto: &BaseItemDto) -> Option<Album> {
             .as_ref()
             .map(|u| u.is_favorite)
             .unwrap_or(false),
-        image_ref: image_ref_from_tags(dto, "Primary"),
+        image_ref: image_ref_from_tags(dto, ImageKindHint::Primary),
         genres: dto.genres.clone(),
     })
 }
@@ -68,7 +68,7 @@ pub fn artist_from_dto(dto: &BaseItemDto) -> Option<Artist> {
         return None;
     }
     Some(Artist {
-        id: ArtistId::new(format!("artist-{}", dto.id)),
+        id: ArtistId::from_external(&dto.id),
         name: dto.name.clone().unwrap_or_default(),
         album_count: dto.child_count.unwrap_or(0),
         track_count: 0,
@@ -77,7 +77,7 @@ pub fn artist_from_dto(dto: &BaseItemDto) -> Option<Artist> {
             .as_ref()
             .map(|u| u.is_favorite)
             .unwrap_or(false),
-        image_ref: image_ref_from_tags(dto, "Primary"),
+        image_ref: image_ref_from_tags(dto, ImageKindHint::Primary),
     })
 }
 
@@ -94,11 +94,10 @@ pub fn track_from_dto(dto: &BaseItemDto) -> Option<Track> {
     let artist_id = dto
         .artist_items
         .first()
-        .map(|p| ArtistId::new(format!("artist-{}", p.id)))
-        .filter(|id| !id.as_str().is_empty());
+        .map(|p| ArtistId::from_external(&p.id));
     Some(Track {
-        id: TrackId::new(format!("track-{}", dto.id)),
-        album_id: AlbumId::new(format!("album-{}", dto.album_id.clone().unwrap_or_default())),
+        id: TrackId::from_external(&dto.id),
+        album_id: AlbumId::from_external(dto.album_id.as_deref().unwrap_or("")),
         title: dto.name.clone().unwrap_or_default(),
         artist: artist_name,
         artist_id,
@@ -111,7 +110,7 @@ pub fn track_from_dto(dto: &BaseItemDto) -> Option<Track> {
             .as_ref()
             .map(|u| u.is_favorite)
             .unwrap_or(false),
-        image_ref: image_ref_from_tags(dto, "Primary"),
+        image_ref: image_ref_from_tags(dto, ImageKindHint::Primary),
     })
 }
 
@@ -120,7 +119,7 @@ pub fn playlist_from_dto(dto: &PlaylistDto) -> Option<Playlist> {
         return None;
     }
     Some(Playlist {
-        id: PlaylistId::new(format!("playlist-{}", dto.id)),
+        id: PlaylistId::from_external(&dto.id),
         name: dto.name.clone().unwrap_or_default(),
         track_count: dto.child_count.unwrap_or(0),
         duration_seconds: ticks_to_seconds(dto.cumulative_run_time_ticks),
@@ -132,7 +131,7 @@ pub fn playlist_from_dto(dto: &PlaylistDto) -> Option<Playlist> {
             .and_then(|t| t.primary.as_ref().filter(|s| !s.is_empty()))
             .map(|tag| ImageRef {
                 item_id: dto.id.clone(),
-                kind: "Primary".to_string(),
+                kind: ImageKindHint::Primary,
                 tag: Some(tag.clone()),
             }),
     })
@@ -152,18 +151,23 @@ pub fn track_stream_url(server_url: &str, track_id: &str, token: &str) -> String
     )
 }
 
-fn image_ref_from_tags(dto: &BaseItemDto, kind: &str) -> Option<ImageRef> {
+fn image_ref_from_tags(dto: &BaseItemDto, kind: ImageKindHint) -> Option<ImageRef> {
     let tag = dto.image_tags.as_ref().and_then(|t| match kind {
-        "Primary" => t.primary.clone(),
-        "Backdrop" => t.backdrop.clone(),
+        ImageKindHint::Primary => t.primary.clone(),
+        ImageKindHint::Backdrop => t.backdrop.clone(),
         _ => None,
     });
     if dto.id.is_empty() {
         return None;
     }
+    let kind_label = match kind {
+        ImageKindHint::Primary => "Primary",
+        ImageKindHint::Backdrop => "Backdrop",
+        _ => "Primary",
+    };
     tag.map(|t| ImageRef {
-        item_id: format!("{kind}:{}", dto.id),
-        kind: kind.to_string(),
+        item_id: format!("{kind_label}:{}", dto.id),
+        kind,
         tag: Some(t),
     })
 }
@@ -233,7 +237,7 @@ mod tests {
         assert_eq!(album.track_count, 12);
         assert_eq!(album.duration_seconds, 3540);
         assert!(album.favorite);
-        assert_eq!(album.image_ref.as_ref().unwrap().kind, "Primary");
+        assert_eq!(album.image_ref.as_ref().unwrap().kind, ImageKindHint::Primary);
         assert_eq!(album.image_ref.as_ref().unwrap().tag.as_deref(), Some("tag-1"));
         assert_eq!(album.genres, vec!["Rock".to_string()]);
     }

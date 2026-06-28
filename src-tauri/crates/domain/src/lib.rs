@@ -7,8 +7,14 @@
 //! That makes it cheap to compile and impossible to leak runtime concerns
 //! into the data model.
 
+// Pure-data crate: any `unsafe` here would be a bug. The compile-time
+// guard means a future unsafe PR is a build break, not a code review
+// finding.
+#![deny(unsafe_code)]
+
 pub mod entities;
 pub mod error;
+pub mod events;
 pub mod ids;
 pub mod playback;
 pub mod queue;
@@ -18,11 +24,15 @@ pub mod source;
 
 pub use entities::{
     Album, AlbumDetail, Artist, ArtistDetail, FolderDetail, FolderEntry, FolderEntryKind, Genre,
-    GenreDetail, ImageRef, MusicFolder, Playlist, PlaylistDetail, SmartPlaylist, SmartPlaylistRule,
-    SmartPlaylistRuleField, SmartPlaylistRuleOperator, SmartPlaylistSortDirection,
-    SmartPlaylistSortField, Track,
+    GenreDetail, ImageKindHint, ImageRef, MusicFolder, Playlist, PlaylistDetail, SmartPlaylist,
+    SmartPlaylistRule, SmartPlaylistRuleField, SmartPlaylistRuleOperator,
+    SmartPlaylistSortDirection, SmartPlaylistSortField, Track,
 };
 pub use error::{DomainError, DomainResult};
+pub use events::{
+    EventName, LibrarySyncStatusPayload, PlaybackStatePayload, QueueEntryView,
+    QueueSnapshotPayload, SyncProgressPayload, TrackChangedPayload,
+};
 pub use ids::{
     AlbumId, ArtistId, FolderId, GenreId, MusicFolderId, PlaylistId, QueueEntryId, ServerId,
     SmartPlaylistId, TrackId,

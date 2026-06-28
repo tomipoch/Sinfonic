@@ -6,11 +6,15 @@
 //! `ProviderError::Unsupported` and advertise the absence in
 //! `ProviderCapabilities`.
 
+// Trait-definition crate: no `unsafe` should ever land here.
+#![deny(unsafe_code)]
+
 pub mod capabilities;
 pub mod error;
 pub mod identity;
 pub mod provider;
 pub mod types;
+pub mod util;
 
 pub use capabilities::{Capabilities, ProviderCapabilities};
 pub use error::{ProviderError, ProviderResult};
@@ -21,3 +25,4 @@ pub use types::{
     ImageBytes, ImageMetadata, ImageRequest, Lyrics, PlaybackReport, PlaybackReportKind,
     RandomTrackRequest, StreamRequest,
 };
+pub use util::{slugify, split_image_id, strip_prefix};

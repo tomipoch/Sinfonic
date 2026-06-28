@@ -172,12 +172,11 @@ fn parse_base_url(raw: &str) -> ProviderResult<Url> {
 }
 
 /// Lowercase, alphanumeric-only derivation used to make a stable
-/// `server-id` from a server name. Spaces and punctuation are dropped.
+/// `server-id` from a server name. Delegates to
+/// `sinfonic_source::slugify` so the slug rules stay in lockstep
+/// with the ones used in `lib.rs::tracks()` for genre ids.
 fn slugify(name: &str) -> String {
-    name.chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .map(|c| c.to_ascii_lowercase())
-        .collect()
+    sinfonic_source::slugify(name)
 }
 
 // Kept referenced so the import isn't flagged as unused when the
