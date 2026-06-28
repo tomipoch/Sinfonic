@@ -218,18 +218,6 @@ where
         }
     }
 
-    /// Mirror the latest atomics into the in-memory `PlaybackState`
-    /// owned by `AppState`. Called from the event callback so the
-    /// payload that hits the frontend reflects the rodio sink's
-    /// authoritative position rather than whatever the
-    /// `playback.start(...)` mirror last wrote.
-    pub fn sync_to_playback(&self, playback: &mut PlaybackState) {
-        playback.position_seconds = self.inner.position_seconds.load(Ordering::Relaxed);
-        playback.duration_seconds = self.inner.duration_seconds.load(Ordering::Relaxed);
-        playback.is_playing = !self.inner.is_paused.load(Ordering::Relaxed)
-            && self.inner.track_id.lock().is_some();
-    }
-
     /// The track id currently being played, if any.
     pub fn current_track_id(&self) -> Option<TrackId> {
         self.inner.track_id.lock().clone()
