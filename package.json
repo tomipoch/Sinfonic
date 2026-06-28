@@ -27,6 +27,7 @@
     "@tauri-apps/plugin-store": "^2",
     "@types/react-window": "^2.0.0",
     "clsx": "^2.1.1",
+    "material-symbols": "^0.45.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^6.26.0",

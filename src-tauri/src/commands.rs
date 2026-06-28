@@ -50,7 +50,7 @@ use sinfonic_domain::{
 use sinfonic_library::ImageCacheKey;
 use sinfonic_secrets::SecretStore;
 use sinfonic_source::MusicProvider;
-use sinfonic_source::{ImageBytes, ImageRequest};
+use sinfonic_source::{ImageBytes, ImageRequest, Lyrics};
 use sinfonic_source_jellyfin::auth::{login as jellyfin_login_inner, LoginRequest as JellyfinAuthRequest};
 use sinfonic_source_subsonic::auth::{login as subsonic_login_inner, LoginRequest as SubsonicAuthRequest};
 
@@ -2211,6 +2211,39 @@ fn guess_image_content_type(bytes: &[u8]) -> &'static str {
     } else {
         "application/octet-stream"
     }
+}
+
+// ─── Lyrics ──────────────────────────────────────────────────────
+
+/// Fetch lyrics for a track through the active provider.
+///
+/// Only Subsonic / Navidrome currently implement this — every other
+/// provider returns `ProviderError::Unsupported`, which surfaces as
+/// `None` to the frontend so the lyrics panel can render a "no
+/// lyrics" placeholder instead of an error toast.
+///
+/// `allow_remote` is plumbed through for providers that offer a
+/// `&synced=maybe` option (Subsonic doesn't today, but the parameter
+/// keeps the door open without another IPC change later).
+#[tauri::command]
+pub async fn get_lyrics(
+    track_id: String,
+    allow_remote: Option<bool>,
+    state: SharedState<'_>,
+) -> Result<Option<Lyrics>, String> {
+    let parsed = TrackId::from(track_id.as_str());
+    let allow_remote = allow_remote.unwrap_or(true);
+
+    let guard = state.lock().await;
+    let provider_guard = guard.provider.lock().await;
+    let provider = match provider_guard.as_ref() {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    provider
+        .lyrics(&parsed, allow_remote)
+        .await
+        .map_err(|e| format!("lyrics: {e}"))
 }
 
 // ─── Last.fm (Phase 7) ─────────────────────────────────────────

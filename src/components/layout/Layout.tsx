@@ -15,7 +15,9 @@ export function Layout() {
   useKeyboardShortcuts();
   useLibraryAutoLoad();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [queueOpen, setQueueOpen] = useState(false);
+  const [panelMode, setPanelMode] = useState<"closed" | "queue" | "lyrics">("closed");
+
+  const panelOpen = panelMode !== "closed";
 
   return (
     <div className="flex h-full w-full flex-col">
@@ -29,15 +31,25 @@ export function Layout() {
         <main
           className={cn(
             "flex min-w-0 flex-1 flex-col transition-all duration-200",
-            queueOpen && "mr-80",
+            panelOpen && "mr-80",
           )}
         >
           <div className="flex-1 overflow-auto [overscroll-behavior:contain]">
             <Outlet />
           </div>
-          <PlayerBar queueOpen={queueOpen} onToggleQueue={() => setQueueOpen((v) => !v)} />
+          <PlayerBar
+            queueOpen={panelMode === "queue"}
+            onToggleQueue={() => setPanelMode((m) => (m === "queue" ? "closed" : "queue"))}
+            lyricsOpen={panelMode === "lyrics"}
+            onToggleLyrics={() => setPanelMode((m) => (m === "lyrics" ? "closed" : "lyrics"))}
+          />
         </main>
-        {queueOpen && <QueuePanel onClose={() => setQueueOpen(false)} />}
+        {panelOpen && (
+          <QueuePanel
+            initialMode={panelMode === "lyrics" ? "lyrics" : "queue"}
+            onClose={() => setPanelMode("closed")}
+          />
+        )}
       </div>
     </div>
   );

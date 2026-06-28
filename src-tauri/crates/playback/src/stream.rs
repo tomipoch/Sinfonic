@@ -71,6 +71,7 @@ impl StreamHandle {
 ///
 /// `uri` is one of:
 /// - An absolute filesystem path (e.g. `/music/track.flac`).
+/// - A `file://` URI (e.g. `file:///music/track.flac`).
 /// - An `http://` or `https://` URL.
 ///
 /// The HTTP path is asynchronous: it offloads the blocking download
@@ -85,8 +86,9 @@ pub async fn open(uri: &str) -> Result<StreamHandle, StreamError> {
     if uri.starts_with("http://") || uri.starts_with("https://") {
         return open_http(uri).await;
     }
-    if Path::new(uri).exists() {
-        return open_local(uri);
+    let path_str = uri.strip_prefix("file://").unwrap_or(uri);
+    if Path::new(path_str).exists() {
+        return open_local(path_str);
     }
     Err(StreamError::UnsupportedScheme(uri.to_string()))
 }
@@ -230,5 +232,30 @@ mod tests {
         // 44_100 Hz × 2 channels × 1 s = 88_200 samples.
         assert!((88_000..=88_500).contains(&count), "got {count} samples");
         std::fs::remove_file(&written).ok();
+    }
+
+    #[test]
+    fn open_file_uri_resolves_local_path() {
+        // Regression for the local-files provider: stream URIs are
+        // emitted as `file://...` and the open() dispatcher must strip
+        // the scheme before handing off to open_local.
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!(
+            "sinfonic-file-uri-{}-{}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        write_test_wav(&path, 1).expect("write wav");
+        let uri = format!("file://{}", path.display());
+        let handle = block_on(open(&uri)).expect("open file uri");
+        assert!(
+            handle.duration_seconds.unwrap_or(0) >= 1,
+            "expected duration ~1s, got {:?}",
+            handle.duration_seconds
+        );
+        std::fs::remove_file(&path).ok();
     }
 }

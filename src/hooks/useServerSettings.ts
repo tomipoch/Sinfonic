@@ -13,7 +13,13 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { extractError } from "@/lib/errors";
-import { type LastFmStatus, lastfmConnect, lastfmDisconnect, lastfmStatus } from "@/lib/tauri";
+import {
+  bootstrapState,
+  type LastFmStatus,
+  lastfmConnect,
+  lastfmDisconnect,
+  lastfmStatus,
+} from "@/lib/tauri";
 import { useServerStore } from "@/stores/serverStore";
 
 export interface ServerSettings {
@@ -48,6 +54,10 @@ export function useServerSettings(): ServerSettings {
   const lastSync = useServerStore((s) => s.lastSync);
   const error = useServerStore((s) => s.error);
   const discovered = useServerStore((s) => s.discovered);
+  // Post-login/disconnect refreshers returned below so ServerManager can
+  // repaint the saved-servers list after a mutation without waiting on
+  // the next bootstrap poll. Subscribed here (not just read from the
+  // store) so callers always get the latest fn reference.
   const refreshServers = useServerStore((s) => s.refreshServers);
   const refreshActive = useServerStore((s) => s.refreshActive);
 
@@ -71,11 +81,23 @@ export function useServerSettings(): ServerSettings {
     }
   }, []);
 
+  // Single round-trip: bootstrapState returns { ready, activeServerId,
+  // savedServers }. Lets the Settings window paint in one shot instead
+  // of waiting on three independent invokes that arrive out of order.
+  const refreshBootstrap = useCallback(async () => {
+    try {
+      const state = await bootstrapState();
+      useServerStore.getState().setServers(state.savedServers);
+      useServerStore.getState().setActiveServerId(state.activeServerId);
+    } catch (err) {
+      console.warn("bootstrapState failed", err);
+    }
+  }, []);
+
   useEffect(() => {
-    void refreshServers();
-    void refreshActive();
+    void refreshBootstrap();
     void refreshLastfm();
-  }, [refreshServers, refreshActive, refreshLastfm]);
+  }, [refreshBootstrap, refreshLastfm]);
 
   const onLastfmConnect = useCallback(
     async (event: FormEvent) => {

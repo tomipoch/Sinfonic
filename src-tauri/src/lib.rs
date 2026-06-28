@@ -262,6 +262,8 @@ pub fn run() {
             // Album art (Phase 7)
             commands::provider_image_bytes,
             commands::provider_image_bytes_bulk,
+            // Lyrics
+            commands::get_lyrics,
             // Local files (Phase 8)
             commands::local_login,
             commands::local_rescan,

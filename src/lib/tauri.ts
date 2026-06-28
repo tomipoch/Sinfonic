@@ -363,6 +363,29 @@ export interface AlbumArtBulkResponse {
 export const providerImageBytesBulk = (requests: AlbumArtRequest[]) =>
   invoke<AlbumArtBulkResponse>("provider_image_bytes_bulk", { requests });
 
+// ─── Lyrics ──────────────────────────────────────────────────────
+
+export interface LyricsPayload {
+  /** Plain-text lyrics (most providers). */
+  plain: string | null;
+  /**
+   * LRC-flavoured synced lyrics, one line per row, lines joined by
+   * `\n`. Empty when the provider only returns plain text or nothing.
+   */
+  synced: string | null;
+  /** Provider identifier that produced the lyrics (e.g. `subsonic`). */
+  source: string | null;
+}
+
+/**
+ * Fetch lyrics for the given track through the active provider.
+ * Returns `null` when the provider is disconnected or has no lyrics
+ * for this track — the lyrics panel renders a "no lyrics" placeholder
+ * in that case instead of an error toast.
+ */
+export const getLyrics = (trackId: string, allowRemote = true) =>
+  invoke<LyricsPayload | null>("get_lyrics", { trackId, allowRemote });
+
 // ─── Last.fm ──────────────────────────────────────────────────
 
 export interface LastFmStatus {

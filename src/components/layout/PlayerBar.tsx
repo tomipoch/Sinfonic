@@ -3,7 +3,7 @@
 // Three sections (Spotify / Apple Music-style):
 //   left:   cover + track title + artist
 //   center: shuffle + prev + play/pause + next + repeat, with seek row
-//   right:  volume + queue toggle + EQ toggle
+//   right:  volume + queue toggle + lyrics toggle + EQ toggle
 //
 // All state reads from the playback + queue stores, which are kept
 // in sync by the global event bridge at the app root. Click handlers
@@ -17,8 +17,8 @@
 // `<TransportControls />` and `<VolumeControls />` only re-render
 // when their specific inputs change.
 //
-// Seek slider commits on pointer-up / key-up / blur (not on every
-// onChange) to avoid spamming the backend while the user drags.
+// Seek + volume sliders commit on pointer-up / key-up / blur (not on
+// every onChange) to avoid spamming the backend while the user drags.
 //
 // EQ panel lives in a popover anchored above the player bar; toggle
 // state lives in the PlayerBar so the panel auto-closes when the
@@ -26,12 +26,6 @@
 
 import {
   LeftToRightListBulletIcon,
-  NextIcon,
-  PauseIcon,
-  PlayIcon,
-  PreviousIcon,
-  RepeatIcon,
-  ShuffleIcon,
   SlidersHorizontalIcon,
   VolumeHighIcon,
   VolumeLowIcon,
@@ -41,6 +35,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AlbumCover } from "@/components/ui/AlbumCover";
+import { MaterialSymbol } from "@/components/ui/MaterialSymbol";
 import { EqPanel } from "@/components/views/EqPanel";
 import { useDropTarget } from "@/hooks/useDropTarget";
 import { cn } from "@/lib/cn";
@@ -68,9 +63,11 @@ const VOLUME_MAX = 1;
 type Props = {
   queueOpen: boolean;
   onToggleQueue: () => void;
+  lyricsOpen: boolean;
+  onToggleLyrics: () => void;
 };
 
-export function PlayerBar({ queueOpen, onToggleQueue }: Props) {
+export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics }: Props) {
   // PlayerBar itself only needs the toggle-state from the queue +
   // EQ panels; transport position is read inside <SeekBar /> so the
   // rest of the chrome doesn't repaint every second.
@@ -78,41 +75,7 @@ export function PlayerBar({ queueOpen, onToggleQueue }: Props) {
   const tracks = useLibraryStore((s) => s.tracks);
   const albums = useLibraryStore((s) => s.albums);
 
-  const [busy, setBusy] = useState(false);
   const [eqOpen, setEqOpen] = useState(false);
-
-  const run = async (fn: () => Promise<void>, label: string) => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      await fn();
-    } catch (err) {
-      toast.error(`${label}: ${extractError(err, "unknown error")}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onPrev = () => void run(() => previous(), "Previous");
-  const onNext = () => void run(() => next(), "Next");
-  const onCommitSeek = (value: number) =>
-    void run(async () => {
-      await seek(value);
-      usePlaybackStore.getState().setPosition(value);
-    }, "Seek");
-
-  const onVolumeChange = (nextVolume: number) =>
-    void run(async () => {
-      await setVolume(nextVolume);
-      usePlaybackStore.getState().setVolume(nextVolume);
-    }, "Set volume");
-
-  const onMuteToggle = () =>
-    void run(async () => {
-      const nextMuted = !usePlaybackStore.getState().muted;
-      await setMuted(nextMuted);
-      usePlaybackStore.getState().setMuted(nextMuted);
-    }, "Toggle mute");
 
   useEffect(() => {
     if (!eqOpen) return;
@@ -152,18 +115,12 @@ export function PlayerBar({ queueOpen, onToggleQueue }: Props) {
       )}
 
       <NowPlaying albums={albums} tracks={tracks} />
-      <TransportControls
-        queueLength={queueLength}
-        busy={busy}
-        onPrev={onPrev}
-        onNext={onNext}
-        onCommitSeek={onCommitSeek}
-      />
+      <TransportControls queueLength={queueLength} />
       <VolumeControls
-        onVolumeChange={onVolumeChange}
-        onMuteToggle={onMuteToggle}
         queueOpen={queueOpen}
         onToggleQueue={onToggleQueue}
+        lyricsOpen={lyricsOpen}
+        onToggleLyrics={onToggleLyrics}
         eqOpen={eqOpen}
         onToggleEq={() => setEqOpen((open) => !open)}
       />
@@ -260,47 +217,66 @@ const NowPlaying = memo(function NowPlaying({ albums, tracks }: NowPlayingProps)
 
 interface TransportControlsProps {
   queueLength: number;
-  busy: boolean;
-  onPrev: () => void;
-  onNext: () => void;
-  onCommitSeek: (value: number) => void;
 }
 
-const TransportControls = memo(function TransportControls({
-  queueLength,
-  busy,
-  onPrev,
-  onNext,
-  onCommitSeek,
-}: TransportControlsProps) {
+const TransportControls = memo(function TransportControls({ queueLength }: TransportControlsProps) {
   const isPlaying = usePlaybackStore((s) => s.isPlaying);
 
+  // Per-action busy flags so the play button stays responsive even
+  // while a previous/next IPC round-trip is in flight. The previous
+  // shared flag could leave play/pause locked for the full duration of
+  // a slow seek commit.
+  const [actionBusy, setActionBusy] = useState<null | "prev" | "next" | "toggle">(null);
+
   const onTogglePlay = () => {
-    if (busy) return;
-    void (isPlaying ? pause() : resume()).then(() => {
-      usePlaybackStore.getState().setIsPlaying(!isPlaying);
-    });
+    if (actionBusy !== null) return;
+    setActionBusy("toggle");
+    const nextPlaying = !isPlaying;
+    (isPlaying ? pause() : resume())
+      .then(() => {
+        usePlaybackStore.getState().setIsPlaying(nextPlaying);
+      })
+      .catch((err) => {
+        toast.error(`Playback: ${extractError(err, "unknown error")}`);
+      })
+      .finally(() => setActionBusy(null));
   };
 
-  const transportDisabled = !isPlaying ? false : busy;
+  const onPrev = () => {
+    if (actionBusy !== null) return;
+    setActionBusy("prev");
+    previous()
+      .catch((err) => toast.error(`Previous: ${extractError(err, "unknown error")}`))
+      .finally(() => setActionBusy(null));
+  };
+
+  const onNext = () => {
+    if (actionBusy !== null) return;
+    setActionBusy("next");
+    next()
+      .catch((err) => toast.error(`Next: ${extractError(err, "unknown error")}`))
+      .finally(() => setActionBusy(null));
+  };
+
   const canStep = queueLength > 0;
 
   return (
     <div className="flex w-full max-w-2xl flex-col items-center gap-1.5">
       <div className="flex items-center gap-1">
         <IconButton ariaLabel="Shuffle" disabled className="opacity-40">
-          <HugeiconsIcon icon={ShuffleIcon} size={16} strokeWidth={1.75} />
+          <MaterialSymbol name="shuffle" size={18} />
         </IconButton>
         <IconButton
           ariaLabel="Previous track"
           onClick={onPrev}
-          disabled={transportDisabled || !canStep}
+          disabled={!canStep || actionBusy !== null}
         >
-          <HugeiconsIcon icon={PreviousIcon} size={18} strokeWidth={1.75} />
+          <MaterialSymbol name="skip_previous" size={20} fill />
         </IconButton>
         <button
           type="button"
           onClick={onTogglePlay}
+          disabled={actionBusy === "toggle"}
           aria-label={isPlaying ? "Pause" : "Play"}
           className={cn(
             "group relative flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-all",
@@ -309,29 +285,25 @@ const TransportControls = memo(function TransportControls({
             "disabled:opacity-40 disabled:hover:scale-100 disabled:hover:shadow-sm",
           )}
         >
-          {isPlaying ? (
-            <HugeiconsIcon icon={PauseIcon} size={18} strokeWidth={2} />
-          ) : (
-            <HugeiconsIcon
-              icon={PlayIcon}
-              size={18}
-              strokeWidth={2}
-              className="translate-x-[1px]"
-            />
-          )}
+          <MaterialSymbol
+            name={isPlaying ? "pause" : "play_arrow"}
+            size={22}
+            fill
+            className={isPlaying ? "" : "translate-x-[1px]"}
+          />
         </button>
         <IconButton
           ariaLabel="Next track"
           onClick={onNext}
-          disabled={transportDisabled || !canStep}
+          disabled={!canStep || actionBusy !== null}
         >
-          <HugeiconsIcon icon={NextIcon} size={18} strokeWidth={1.75} />
+          <MaterialSymbol name="skip_next" size={20} fill />
         </IconButton>
         <IconButton ariaLabel="Repeat" disabled className="opacity-40">
-          <HugeiconsIcon icon={RepeatIcon} size={16} strokeWidth={1.75} />
+          <MaterialSymbol name="repeat" size={18} />
         </IconButton>
       </div>
-      <SeekBar onCommit={onCommitSeek} disabled={busy} />
+      <SeekBar disabled={false} />
     </div>
   );
 });
@@ -340,21 +312,30 @@ const TransportControls = memo(function TransportControls({
 // of the transport doesn't repaint on every tick. ─────────────────
 
 interface SeekBarProps {
-  onCommit: (value: number) => void;
   disabled: boolean;
 }
 
-const SeekBar = memo(function SeekBar({ onCommit, disabled }: SeekBarProps) {
+const SeekBar = memo(function SeekBar({ disabled }: SeekBarProps) {
   const positionSeconds = usePlaybackStore((s) => s.positionSeconds);
   const durationSeconds = usePlaybackStore((s) => s.durationSeconds);
   const hasTrack = usePlaybackStore((s) => s.currentTrack !== null);
 
   const [drag, setDrag] = useState<number | null>(null);
   const dragRef = useRef<number | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const seekEnabled = hasTrack && durationSeconds > 0 && !disabled;
   const displayed = drag ?? positionSeconds;
   const progress = durationSeconds > 0 ? Math.min(100, (displayed / durationSeconds) * 100) : 0;
+
+  const commit = (value: number) => {
+    if (!seekEnabled) return;
+    setBusy(true);
+    seek(value)
+      .then(() => usePlaybackStore.getState().setPosition(value))
+      .catch((err) => toast.error(`Seek: ${extractError(err, "unknown error")}`))
+      .finally(() => setBusy(false));
+  };
 
   return (
     <div className="flex w-full max-w-md items-center gap-2.5">
@@ -399,22 +380,22 @@ const SeekBar = memo(function SeekBar({ onCommit, disabled }: SeekBarProps) {
             setDrag(nextValue);
           }}
           onPointerUp={() => {
-            if (dragRef.current !== null) onCommit(dragRef.current);
+            if (dragRef.current !== null) commit(dragRef.current);
             dragRef.current = null;
             setDrag(null);
           }}
           onKeyUp={(e) => {
             if (e.key === "Tab") return;
-            if (dragRef.current !== null) onCommit(dragRef.current);
+            if (dragRef.current !== null) commit(dragRef.current);
             dragRef.current = null;
             setDrag(null);
           }}
           onBlur={() => {
-            if (dragRef.current !== null) onCommit(dragRef.current);
+            if (dragRef.current !== null) commit(dragRef.current);
             dragRef.current = null;
             setDrag(null);
           }}
-          disabled={!seekEnabled}
+          disabled={!seekEnabled || busy}
           aria-label="Seek"
           aria-valuemin={0}
           aria-valuemax={durationSeconds}
@@ -429,28 +410,55 @@ const SeekBar = memo(function SeekBar({ onCommit, disabled }: SeekBarProps) {
   );
 });
 
-// ─── RIGHT — volume + queue + EQ ───────────────────────────────────
+// ─── RIGHT — volume + queue + lyrics + EQ ──────────────────────────
 
 interface VolumeControlsProps {
-  onVolumeChange: (v: number) => void;
-  onMuteToggle: () => void;
   queueOpen: boolean;
   onToggleQueue: () => void;
+  lyricsOpen: boolean;
+  onToggleLyrics: () => void;
   eqOpen: boolean;
   onToggleEq: () => void;
 }
 
 const VolumeControls = memo(function VolumeControls({
-  onVolumeChange,
-  onMuteToggle,
   queueOpen,
   onToggleQueue,
+  lyricsOpen,
+  onToggleLyrics,
   eqOpen,
   onToggleEq,
 }: VolumeControlsProps) {
   const volume = usePlaybackStore((s) => s.volume);
   const muted = usePlaybackStore((s) => s.muted);
+
+  // Drag-then-commit pattern, same as SeekBar: a single seek IPC per
+  // release instead of one per pixel of pointer movement. Without
+  // this the volume slider was firing 30+ invokes/second while the
+  // user dragged, which locked out every other IPC handler behind the
+  // shared busy flag.
+  const [drag, setDrag] = useState<number | null>(null);
+  const dragRef = useRef<number | null>(null);
+  const [busy, setBusy] = useState(false);
+
   const effectiveVolume = muted ? 0 : volume;
+  const displayed = drag ?? effectiveVolume;
+  const dragPct = Math.max(0, Math.min(1, displayed)) * 100;
+
+  const commit = (value: number) => {
+    setBusy(true);
+    setVolume(value)
+      .then(() => usePlaybackStore.getState().setVolume(value))
+      .catch((err) => toast.error(`Set volume: ${extractError(err, "unknown error")}`))
+      .finally(() => setBusy(false));
+  };
+
+  const onMuteToggle = () => {
+    const nextMuted = !muted;
+    setMuted(nextMuted)
+      .then(() => usePlaybackStore.getState().setMuted(nextMuted))
+      .catch((err) => toast.error(`Toggle mute: ${extractError(err, "unknown error")}`));
+  };
 
   return (
     <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
@@ -472,15 +480,34 @@ const VolumeControls = memo(function VolumeControls({
           min={VOLUME_MIN}
           max={VOLUME_MAX}
           step={VOLUME_STEP}
-          value={effectiveVolume}
-          onChange={(e) => onVolumeChange(Number(e.currentTarget.value))}
+          value={displayed}
+          onChange={(e) => {
+            const v = Number(e.currentTarget.value);
+            dragRef.current = v;
+            setDrag(v);
+          }}
+          onPointerUp={() => {
+            if (dragRef.current !== null) commit(dragRef.current);
+            dragRef.current = null;
+            setDrag(null);
+          }}
+          onKeyUp={(e) => {
+            if (e.key === "Tab") return;
+            if (dragRef.current !== null) commit(dragRef.current);
+            dragRef.current = null;
+            setDrag(null);
+          }}
+          onBlur={() => {
+            if (dragRef.current !== null) commit(dragRef.current);
+            dragRef.current = null;
+            setDrag(null);
+          }}
           aria-label="Volume"
           tabIndex={0}
+          disabled={busy}
           className="player-range h-1 w-0 cursor-pointer appearance-none rounded-full bg-muted opacity-0 outline-none accent-primary transition-[width,opacity,padding] duration-200 ease-out group-hover:w-24 group-hover:opacity-100 group-focus-within:w-24 group-focus-within:opacity-100 focus:w-24 focus:opacity-100"
           style={{
-            background: `linear-gradient(to right, var(--primary) 0%, var(--primary) ${
-              effectiveVolume * 100
-            }%, var(--muted) ${effectiveVolume * 100}%, var(--muted) 100%)`,
+            background: `linear-gradient(to right, var(--primary) 0%, var(--primary) ${dragPct}%, var(--muted) ${dragPct}%, var(--muted) 100%)`,
           }}
         />
       </div>
@@ -493,6 +520,15 @@ const VolumeControls = memo(function VolumeControls({
         active={queueOpen}
       >
         <HugeiconsIcon icon={LeftToRightListBulletIcon} size={16} strokeWidth={1.75} />
+      </IconButton>
+      <IconButton
+        ariaLabel="Toggle lyrics"
+        onClick={onToggleLyrics}
+        aria-expanded={lyricsOpen}
+        aria-pressed={lyricsOpen}
+        active={lyricsOpen}
+      >
+        <MaterialSymbol name="lyrics" size={18} />
       </IconButton>
       <IconButton
         ariaLabel="Toggle equalizer"

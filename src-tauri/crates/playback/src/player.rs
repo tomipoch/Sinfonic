@@ -74,12 +74,11 @@ unsafe impl Sync for OutputStreamHolder {}
 
 /// How often the position-poller thread reads the rodio Sink.
 ///
-/// 1 s is granular enough for a seekable progress bar (Spotify uses a
-/// similar cadence) and cheap enough that the per-tick `app.emit`
-/// cost is negligible. Earlier this was 250 ms (4 Hz), which produced
-/// four `playback-state-changed` events per second and visibly more
-/// CPU when the player was idle.
-const POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// 250 ms (4 Hz) gives a smooth progress bar without thrashing the
+/// Tauri event bus. Each tick is a `parking_lot::Mutex` snapshot plus
+/// an atomic store — measured well under 100 µs on macOS — so four
+/// events per second is cheap.
+const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Events the AudioPlayer emits to the rest of the app. Wired to Tauri
 /// events in `lib.rs::run`.
