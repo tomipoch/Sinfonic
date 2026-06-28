@@ -1,12 +1,9 @@
-import { SettingsCard, SettingsSection, SettingsTitle } from "@/components/settings/primitives";
+import { SettingsCard, SettingsSection, SettingsTitle } from "@/components/primitives/primitives";
 
 export function AboutSection() {
   return (
     <div className="flex flex-col gap-8">
-      <SettingsTitle
-        title="About"
-        subtitle="Cross-platform desktop music client."
-      />
+      <SettingsTitle title="About" subtitle="Cross-platform desktop music client." />
 
       <SettingsSection label="Sinfonic">
         <SettingsCard>

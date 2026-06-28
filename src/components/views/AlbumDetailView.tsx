@@ -14,10 +14,11 @@ import { toast } from "sonner";
 
 import { AlbumCover } from "@/components/ui/AlbumCover";
 import { FavoriteButton } from "@/components/ui/FavoriteButton";
-import { TrackTable, type TrackColumn } from "@/components/ui/TrackTable";
+import { type TrackColumn, TrackTable } from "@/components/ui/TrackTable";
+import { extractError } from "@/lib/errors";
+import { formatDuration } from "@/lib/format";
 import { getAlbumDetail, playAlbum, playTrack } from "@/lib/tauri";
 import { useServerStore } from "@/stores/serverStore";
-import { formatDuration } from "@/lib/format";
 import type { Album, Track } from "@/types/domain";
 
 const COLUMNS: TrackColumn[] = [
@@ -63,7 +64,7 @@ export function AlbumDetailView() {
       },
       (err) => {
         if (cancelled) return;
-        toast.error(`Couldn't load album: ${(err as Error).message ?? String(err)}`);
+        toast.error(`Couldn't load album: ${extractError(err, "unknown error")}`);
         setLoading(false);
       },
     );
@@ -103,7 +104,7 @@ export function AlbumDetailView() {
     try {
       await playAlbum(tracks);
     } catch (err) {
-      toast.error(`Couldn't play album: ${(err as Error).message ?? String(err)}`);
+      toast.error(`Couldn't play album: ${extractError(err, "unknown error")}`);
     } finally {
       setBusy(false);
     }
@@ -114,7 +115,7 @@ export function AlbumDetailView() {
     try {
       await playTrack(track);
     } catch (err) {
-      toast.error(`Couldn't play track: ${(err as Error).message ?? String(err)}`);
+      toast.error(`Couldn't play track: ${extractError(err, "unknown error")}`);
     } finally {
       setBusy(false);
     }

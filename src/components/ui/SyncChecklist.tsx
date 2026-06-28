@@ -8,7 +8,6 @@
 // same component can describe a remote library pull or a local folder
 // scan without duplicating the layout.
 
-import { HugeiconsIcon } from "@hugeicons/react";
 import {
   CheckmarkCircle01Icon,
   HardDriveIcon,
@@ -17,10 +16,10 @@ import {
   Tick02Icon,
   Wifi01Icon,
 } from "@hugeicons/core-free-icons";
-
-import { cn } from "@/lib/cn";
-import type { ServerKind } from "@/stores/serverStore";
+import { HugeiconsIcon } from "@hugeicons/react";
 import type { SyncState } from "@/hooks/useSyncProgress";
+import { cn } from "@/lib/cn";
+import type { ServerKind } from "@/types/domain";
 
 export type StepId = "connecting" | "scanning" | "indexing" | "caching" | "ready";
 
@@ -43,10 +42,11 @@ export function stepForState(state: SyncState): StepId {
       return "scanning";
     case "indexing":
       return "indexing";
+    case "caching":
+    case "syncing":
+      return "caching";
     case "complete":
       return "ready";
-    default:
-      return "caching";
   }
 }
 
@@ -86,13 +86,7 @@ export function buildChecklistSteps({
   currentStep,
   skipConnecting,
 }: BuildStepsOptions): ChecklistStep[] {
-  const order: StepId[] = [
-    "connecting",
-    "scanning",
-    "indexing",
-    "caching",
-    "ready",
-  ];
+  const order: StepId[] = ["connecting", "scanning", "indexing", "caching", "ready"];
   const curIdx = order.indexOf(currentStep);
   return [
     {
@@ -145,13 +139,7 @@ export function buildChecklistSteps({
 }
 
 function statusFor(stepId: StepId, current: StepId): StepStatus {
-  const order: StepId[] = [
-    "connecting",
-    "scanning",
-    "indexing",
-    "caching",
-    "ready",
-  ];
+  const order: StepId[] = ["connecting", "scanning", "indexing", "caching", "ready"];
   const stepIdx = order.indexOf(stepId);
   const curIdx = order.indexOf(current);
   if (stepIdx < 0 || curIdx < 0) return "pending";
@@ -203,9 +191,7 @@ export function SyncChecklist({ steps, className }: ChecklistProps) {
             <div
               className={cn(
                 "text-sm font-medium",
-                step.status === "pending"
-                  ? "text-muted-foreground"
-                  : "text-foreground",
+                step.status === "pending" ? "text-muted-foreground" : "text-foreground",
               )}
             >
               {step.label}
@@ -224,11 +210,7 @@ export interface ProgressBarProps {
   className?: string;
 }
 
-export function SyncProgressBar({
-  progress,
-  done,
-  className,
-}: ProgressBarProps) {
+export function SyncProgressBar({ progress, done, className }: ProgressBarProps) {
   return (
     <div className={cn("flex flex-col gap-2", className)}>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
@@ -239,9 +221,7 @@ export function SyncProgressBar({
       </div>
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>{Math.round(progress * 100)}%</span>
-        <span>
-          {done ? "Done" : "Hang tight — first run only takes a moment"}
-        </span>
+        <span>{done ? "Done" : "Hang tight — first run only takes a moment"}</span>
       </div>
     </div>
   );

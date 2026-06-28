@@ -20,9 +20,7 @@ export function AlbumCard({ album, className }: Props) {
         <div className="truncate text-sm font-medium text-foreground group-hover:text-primary">
           {album.title}
         </div>
-        <div className="truncate text-xs text-muted-foreground">
-          {album.artist}
-        </div>
+        <div className="truncate text-xs text-muted-foreground">{album.artist}</div>
       </div>
     </Link>
   );

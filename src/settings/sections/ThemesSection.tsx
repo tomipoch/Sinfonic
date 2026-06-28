@@ -1,14 +1,19 @@
-import { useTheme } from "@/modules/theme/ThemeProvider";
-import { listBuiltinThemes } from "@/modules/theme/themes";
-import { cn } from "@/lib/cn";
-import { CheckmarkCircle02Icon, Moon01Icon, Sun01Icon, ComputerIcon } from "@hugeicons/core-free-icons";
+import {
+  CheckmarkCircle02Icon,
+  ComputerIcon,
+  Moon01Icon,
+  Sun01Icon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   ChoiceCard,
   SettingsCard,
   SettingsSection,
   SettingsTitle,
-} from "@/components/settings/primitives";
+} from "@/components/primitives/primitives";
+import { cn } from "@/lib/cn";
+import { useTheme } from "@/modules/theme/ThemeProvider";
+import { listBuiltinThemes } from "@/modules/theme/themes";
 
 const MODES = [
   { id: "system", label: "System", icon: ComputerIcon },
@@ -22,10 +27,7 @@ export function ThemesSection() {
 
   return (
     <div className="flex flex-col gap-8">
-      <SettingsTitle
-        title="Themes"
-        subtitle="Choose how Sinfonic looks."
-      />
+      <SettingsTitle title="Themes" subtitle="Choose how Sinfonic looks." />
 
       <SettingsSection label="Appearance">
         <div className="grid grid-cols-3 gap-2">

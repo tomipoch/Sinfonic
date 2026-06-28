@@ -1,13 +1,7 @@
-import { useEffect, useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { toast } from "sonner";
-import {
-  next,
-  pause,
-  previous,
-  resume,
-  setMuted,
-  setVolume,
-} from "@/lib/tauri";
+import { extractError } from "@/lib/errors";
+import { next, pause, previous, resume, setMuted, setVolume } from "@/lib/tauri";
 import { usePlaybackStore } from "@/stores/playbackStore";
 
 const VOLUME_STEP = 0.05;
@@ -15,12 +9,7 @@ const VOLUME_STEP = 0.05;
 function isEditableTarget(e: KeyboardEvent): boolean {
   const target = e.target as HTMLElement;
   const tag = target.tagName;
-  return (
-    tag === "INPUT" ||
-    tag === "TEXTAREA" ||
-    tag === "SELECT" ||
-    target.isContentEditable
-  );
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
 }
 
 function isModifierKey(e: KeyboardEvent): boolean {
@@ -50,7 +39,7 @@ export function useKeyboardShortcuts() {
               usePlaybackStore.getState().setIsPlaying(true);
             }
           } catch (err) {
-            toast.error(`Playback: ${(err as Error).message}`);
+            toast.error(`Playback: ${extractError(err, "unknown error")}`);
           }
           break;
         }
@@ -60,7 +49,7 @@ export function useKeyboardShortcuts() {
           try {
             await previous();
           } catch (err) {
-            toast.error(`Previous: ${(err as Error).message}`);
+            toast.error(`Previous: ${extractError(err, "unknown error")}`);
           }
           break;
         }
@@ -70,7 +59,7 @@ export function useKeyboardShortcuts() {
           try {
             await next();
           } catch (err) {
-            toast.error(`Next: ${(err as Error).message}`);
+            toast.error(`Next: ${extractError(err, "unknown error")}`);
           }
           break;
         }
@@ -82,7 +71,7 @@ export function useKeyboardShortcuts() {
             await setVolume(nextVol);
             updateVolume(nextVol);
           } catch (err) {
-            toast.error(`Volume: ${(err as Error).message}`);
+            toast.error(`Volume: ${extractError(err, "unknown error")}`);
           }
           break;
         }
@@ -94,7 +83,7 @@ export function useKeyboardShortcuts() {
             await setVolume(nextVol);
             updateVolume(nextVol);
           } catch (err) {
-            toast.error(`Volume: ${(err as Error).message}`);
+            toast.error(`Volume: ${extractError(err, "unknown error")}`);
           }
           break;
         }
@@ -107,7 +96,7 @@ export function useKeyboardShortcuts() {
             await setMuted(nextMuted);
             updateMuted(nextMuted);
           } catch (err) {
-            toast.error(`Mute: ${(err as Error).message}`);
+            toast.error(`Mute: ${extractError(err, "unknown error")}`);
           }
           break;
         }

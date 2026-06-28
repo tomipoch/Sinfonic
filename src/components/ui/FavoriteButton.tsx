@@ -8,12 +8,8 @@ import { useOptimistic, useTransition } from "react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/cn";
-import {
-  setTrackFavorite,
-  setAlbumFavorite,
-  setArtistFavorite,
-} from "@/lib/tauri";
 import { extractError } from "@/lib/errors";
+import { setAlbumFavorite, setArtistFavorite, setTrackFavorite } from "@/lib/tauri";
 
 type FavoriteKind = "track" | "album" | "artist";
 
@@ -47,12 +43,17 @@ export function FavoriteButton({ kind, itemId, initialFavorite, onToggle }: Favo
   return (
     <button
       type="button"
-      onClick={(e) => { e.stopPropagation(); toggle(); }}
+      onClick={(e) => {
+        e.stopPropagation();
+        toggle();
+      }}
       aria-label={optimisticFavorited ? "Remove from favorites" : "Add to favorites"}
       aria-pressed={optimisticFavorited}
       className={cn(
         "rounded-md p-1 transition-colors focus:outline-none disabled:opacity-40",
-        optimisticFavorited ? "text-red-500 hover:text-red-400" : "text-fg-muted hover:text-red-400",
+        optimisticFavorited
+          ? "text-red-500 hover:text-red-400"
+          : "text-fg-muted hover:text-red-400",
       )}
     >
       {optimisticFavorited ? "♥" : "♡"}

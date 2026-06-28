@@ -18,9 +18,6 @@
 // uses. The store is fetched on mount (and on every server switch);
 // a refresh-on-sync listener in `Layout` keeps it current.
 
-import { useEffect, useMemo, useState } from "react";
-import { NavLink } from "react-router-dom";
-import { useShallow } from "zustand/react/shallow";
 import {
   Album01Icon,
   AlbumIcon,
@@ -34,6 +31,9 @@ import {
   UserIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { useEffect, useMemo, useState } from "react";
+import { NavLink } from "react-router-dom";
+import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/cn";
 
 import { usePlaylistsStore } from "@/stores/playlistsStore";
@@ -96,12 +96,7 @@ function ItemLink({ item, collapsed }: ItemLinkProps) {
       }
     >
       {item.icon && (
-        <HugeiconsIcon
-          icon={item.icon}
-          size={iconSize}
-          strokeWidth={1.75}
-          className="shrink-0"
-        />
+        <HugeiconsIcon icon={item.icon} size={iconSize} strokeWidth={1.75} className="shrink-0" />
       )}
       {!collapsed && <span className="truncate">{item.label}</span>}
     </NavLink>

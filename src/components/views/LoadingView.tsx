@@ -10,23 +10,23 @@
 // `provider_sync_library`. On `sync.done` it navigates to `/`; on
 // error it bounces back to `/setup` so the user can correct.
 
+import { SparklesIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { HugeiconsIcon } from "@hugeicons/react";
-import { SparklesIcon } from "@hugeicons/core-free-icons";
 import { toast } from "sonner";
-
-import { useServerStore, type ServerKind } from "@/stores/serverStore";
-import { useSyncProgress } from "@/hooks/useSyncProgress";
-import { useSyncBackstop } from "@/hooks/useSyncBackstop";
-import { extractError } from "@/lib/errors";
-import { makeLogger } from "@/utils/log";
 import {
+  buildChecklistSteps,
   SyncChecklist,
   SyncProgressBar,
-  buildChecklistSteps,
   stepForState,
 } from "@/components/ui/SyncChecklist";
+import { useSyncBackstop } from "@/hooks/useSyncBackstop";
+import { useSyncProgress } from "@/hooks/useSyncProgress";
+import { extractError } from "@/lib/errors";
+import { useServerStore } from "@/stores/serverStore";
+import type { ServerKind } from "@/types/domain";
+import { makeLogger } from "@/utils/log";
 
 const log = makeLogger("LoadingView");
 
@@ -39,8 +39,7 @@ export function LoadingView() {
   const login = useServerStore((s) => s.login);
   const syncLibrary = useServerStore((s) => s.syncLibrary);
   const activeServer = servers.find((s) => s.id === activeServerId);
-  const kind: ServerKind = activeServer?.kind
-    ?? (pendingConnection?.kind ?? "local");
+  const kind: ServerKind = activeServer?.kind ?? pendingConnection?.kind ?? "local";
 
   const sync = useSyncProgress();
 
@@ -143,14 +142,10 @@ export function LoadingView() {
   // ceiling is generous — a NAS scan over AFP/SMB can take that
   // long — but if the backend is silent for that long we still bail
   // out so the user is not stuck on the loading screen forever.
-  useSyncBackstop(
-    sync,
-    5 * 60 * 1000,
-    () => {
-      log.log("5m backstop — navigating to / (sync silent for 5 min)");
-      void navigate("/", { replace: true });
-    },
-  );
+  useSyncBackstop(sync, 5 * 60 * 1000, () => {
+    log.log("5m backstop — navigating to / (sync silent for 5 min)");
+    void navigate("/", { replace: true });
+  });
 
   // Log every sync state transition so the user can see in
   // DevTools exactly which event arrived (or didn't) before the

@@ -10,15 +10,10 @@
 // Refresh on mount is the only side-effect; everything else is a
 // selector or a thin callback around the Zustand store.
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-
-import {
-  lastfmConnect,
-  lastfmDisconnect,
-  lastfmStatus,
-  type LastFmStatus,
-} from "@/lib/tauri";
+import { extractError } from "@/lib/errors";
+import { type LastFmStatus, lastfmConnect, lastfmDisconnect, lastfmStatus } from "@/lib/tauri";
 import { useServerStore } from "@/stores/serverStore";
 
 export interface ServerSettings {
@@ -96,12 +91,10 @@ export function useServerSettings(): ServerSettings {
         setLastfm(status);
         setLastfmPassword("");
         toast.success(
-          status.username
-            ? `Last.fm connected as ${status.username}`
-            : "Last.fm connected",
+          status.username ? `Last.fm connected as ${status.username}` : "Last.fm connected",
         );
       } catch (err) {
-        toast.error(`Last.fm: ${(err as Error).message ?? String(err)}`);
+        toast.error(`Last.fm: ${extractError(err, "unknown error")}`);
       } finally {
         setLastfmBusy(false);
       }
@@ -116,7 +109,7 @@ export function useServerSettings(): ServerSettings {
       setLastfm(status);
       toast.success("Last.fm disconnected");
     } catch (err) {
-      toast.error(`Last.fm: ${(err as Error).message ?? String(err)}`);
+      toast.error(`Last.fm: ${extractError(err, "unknown error")}`);
     } finally {
       setLastfmBusy(false);
     }
@@ -149,9 +142,3 @@ export function useServerSettings(): ServerSettings {
     onLastfmDisconnect,
   };
 }
-
-/// Back-compat alias. `useServerForms` was the original god-hook that
-/// exposed both connection form state and server settings; the
-/// connection form now lives inside `ServerConnectionForm`. New code
-/// should depend on `useServerSettings` directly.
-export const useServerForms = useServerSettings;

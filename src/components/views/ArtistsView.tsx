@@ -2,20 +2,28 @@
 // album/track counts, a star for favorites, and a play button that
 // queues the artist's tracks. Sorts alphabetically. Reads from the
 // library cache populated by `useLibraryAutoLoad`.
+//
+// P1: real pagination via `useInfiniteScroll` sentinel at the end
+// of the list. Also: the "Play artist" branch parallelises album
+// fetches with `Promise.all` instead of sequentially awaiting each
+// one (was O(N) IPC round-trips for any artist with ≥3 albums).
 
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { PlayIcon, StarIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { StarIcon, PlayIcon } from "@hugeicons/core-free-icons";
+import { useCallback, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
 import { EmptyState } from "@/components/ui/EmptyState";
 import { FavoriteButton } from "@/components/ui/FavoriteButton";
+import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
+import { extractError } from "@/lib/errors";
+import { compareNumberDesc, compareString } from "@/lib/sort";
+import { getAlbumDetail, playAlbum } from "@/lib/tauri";
 import { useLibraryStore } from "@/stores/libraryStore";
-import { useServerStore } from "@/stores/serverStore";
 import { usePlaybackStore } from "@/stores/playbackStore";
-import { playAlbum, getAlbumDetail } from "@/lib/tauri";
-import type { Artist, Track } from "@/types/domain";
+import { useServerStore } from "@/stores/serverStore";
+import type { Artist } from "@/types/domain";
 
 type SortKey = "name" | "albumCount" | "trackCount";
 
@@ -27,16 +35,19 @@ const SORT_KEYS: readonly { key: SortKey; label: string }[] = [
 
 function compareArtists(a: Artist, b: Artist, key: SortKey): number {
   if (key === "name") {
-    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    return compareString(a.name, b.name);
   }
-  return b[key] - a[key];
+  return compareNumberDesc(a[key], b[key]);
 }
 
 export function ArtistsView() {
   const artists = useLibraryStore((s) => s.artists);
+  const artistsTotal = useLibraryStore((s) => s.artistsTotal);
   const tracks = useLibraryStore((s) => s.tracks);
   const loading = useLibraryStore((s) => s.loading);
   const loaded = useLibraryStore((s) => s.loaded);
+  const loadingMore = useLibraryStore((s) => s.loadingMoreArtists);
+  const loadMoreArtists = useLibraryStore((s) => s.loadMoreArtists);
   const activeServerId = useServerStore((s) => s.activeServerId);
   const lastSync = useServerStore((s) => s.lastSync);
   const syncLibrary = useServerStore((s) => s.syncLibrary);
@@ -51,13 +62,22 @@ export function ArtistsView() {
     [artists, sortKey],
   );
 
+  const hasMore = artists.length < artistsTotal;
+  const sentinelRef = useInfiniteScroll<HTMLDivElement>({
+    onIntersect: useCallback(() => {
+      void loadMoreArtists();
+    }, [loadMoreArtists]),
+    enabled: hasMore && !loadingMore && activeServerId !== null,
+  });
+
   const onPlayArtist = async (artist: Artist) => {
     setBusyId(artist.id);
     setBusy(true);
     try {
-      // Prefer the cached track list when every track for the artist
-      // is in the cache. Fall back to fetching the first album and
-      // walking the rest one at a time so the queue still fills.
+      // Prefer the cached track list when the artist is fully
+      // covered by the library cache. Otherwise fan out the album
+      // fetches in parallel — was an O(N) sequential await loop
+      // before P1 and could take many seconds for prolific artists.
       const local = tracks.filter((t) => t.artistId === artist.id);
       if (local.length > 0) {
         await playAlbum(local);
@@ -65,25 +85,21 @@ export function ArtistsView() {
         return;
       }
       const albums = useLibraryStore.getState().albums;
-      const first = albums.find((a) => a.artistId === artist.id);
-      if (!first) {
+      const artistAlbums = albums.filter((a) => a.artistId === artist.id);
+      if (artistAlbums.length === 0) {
         toast.error("No albums found for this artist");
         return;
       }
-      const detail = await getAlbumDetail(first.id);
-      const firstBatch: Track[] = detail?.tracks ?? [];
-      const remaining = albums.filter(
-        (a) => a.artistId === artist.id && a.id !== first.id,
-      );
-      const tail: Track[] = [];
-      for (const album of remaining) {
-        const d = await getAlbumDetail(album.id);
-        if (d?.tracks) tail.push(...d.tracks);
+      const details = await Promise.all(artistAlbums.map((a) => getAlbumDetail(a.id)));
+      const allTracks = details.flatMap((d) => d?.tracks ?? []);
+      if (allTracks.length === 0) {
+        toast.error("No tracks found for this artist");
+        return;
       }
-      await playAlbum([...firstBatch, ...tail]);
+      await playAlbum(allTracks);
       setIsPlaying(true);
     } catch (err) {
-      toast.error(`Couldn't play artist: ${(err as Error).message ?? String(err)}`);
+      toast.error(`Couldn't play artist: ${extractError(err, "unknown error")}`);
     } finally {
       setBusyId(null);
       setBusy(false);
@@ -91,11 +107,7 @@ export function ArtistsView() {
   };
 
   if (!activeServerId) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Connect a server to see your artists.
-      </p>
-    );
+    return <p className="text-sm text-muted-foreground">Connect a server to see your artists.</p>;
   }
 
   if (loading && artists.length === 0) {
@@ -124,7 +136,7 @@ export function ArtistsView() {
         <div>
           <h1 className="text-2xl font-semibold text-foreground">Artists</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {artists.length} {artists.length === 1 ? "artist" : "artists"}
+            {hasMore ? `${artists.length} of ${artistsTotal} artists` : `${artists.length} artists`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -162,11 +174,7 @@ export function ArtistsView() {
               aria-label={`Play ${artist.name}`}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-card hover:text-foreground disabled:opacity-50"
             >
-              <HugeiconsIcon
-                icon={PlayIcon}
-                size={14}
-                strokeWidth={1.75}
-              />
+              <HugeiconsIcon icon={PlayIcon} size={14} strokeWidth={1.75} />
             </button>
             <Link
               to={`/artists/${encodeURIComponent(artist.id)}`}
@@ -191,14 +199,22 @@ export function ArtistsView() {
                 </div>
               </div>
             </Link>
-            <FavoriteButton
-              kind="artist"
-              itemId={artist.id}
-              initialFavorite={artist.favorite}
-            />
+            <FavoriteButton kind="artist" itemId={artist.id} initialFavorite={artist.favorite} />
           </li>
         ))}
       </ul>
+      {hasMore && (
+        <div
+          ref={sentinelRef}
+          aria-hidden
+          className="flex h-12 items-center justify-center text-xs text-muted-foreground"
+        >
+          {loadingMore ? "Loading more…" : ""}
+        </div>
+      )}
+      <p className="text-xs text-muted-foreground">
+        Showing {artists.length} of {artistsTotal} artists
+      </p>
     </div>
   );
 }

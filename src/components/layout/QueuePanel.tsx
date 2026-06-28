@@ -2,45 +2,16 @@
 // Opened via the queue button in PlayerBar. Overlaps the content area
 // without pushing it (unlike the sidebar).
 
+import { Delete03Icon, RepeatIcon, RepeatOne01Icon, ShuffleIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { useState } from "react";
 import { toast } from "sonner";
-import {
-  Delete03Icon,
-  RepeatIcon,
-  RepeatOne01Icon,
-  ShuffleIcon,
-} from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
-
-import {
-  queueClear,
-  queueJumpTo,
-  queueRemove,
-  setRepeat,
-  setShuffle,
-} from "@/lib/tauri";
-import { useQueueStore } from "@/stores/queueStore";
-import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/cn";
-import type { RepeatMode } from "@/types/domain";
-
-const REPEAT_CYCLE: ReadonlyArray<RepeatMode> = ["off", "all", "one"];
-
-function nextRepeat(current: RepeatMode): RepeatMode {
-  const idx = REPEAT_CYCLE.indexOf(current);
-  return REPEAT_CYCLE[(idx + 1) % REPEAT_CYCLE.length] ?? "off";
-}
-
-function repeatLabel(mode: RepeatMode): string {
-  switch (mode) {
-    case "off":
-      return "Off";
-    case "all":
-      return "All";
-    case "one":
-      return "One";
-  }
-}
+import { extractError } from "@/lib/errors";
+import { formatDuration } from "@/lib/format";
+import { nextRepeat, repeatLabel } from "@/lib/repeat";
+import { queueClear, queueJumpTo, queueRemove, setRepeat, setShuffle } from "@/lib/tauri";
+import { useQueueStore } from "@/stores/queueStore";
 
 interface Props {
   onClose: () => void;
@@ -60,7 +31,7 @@ export function QueuePanel({ onClose }: Props) {
     try {
       await fn();
     } catch (err) {
-      toast.error(`${label}: ${(err as Error).message ?? String(err)}`);
+      toast.error(`${label}: ${extractError(err, "unknown error")}`);
     } finally {
       setBusy(false);
     }
@@ -73,8 +44,14 @@ export function QueuePanel({ onClose }: Props) {
       if (!removed) toast("Entry not found");
     }, "Remove");
   const onClear = () => void run(() => queueClear(), "Clear");
-  const onToggleRepeat = () => void run(async () => { await setRepeat(nextRepeat(repeat)); }, "Repeat");
-  const onToggleShuffle = () => void run(async () => { await setShuffle(!shuffle); }, "Shuffle");
+  const onToggleRepeat = () =>
+    void run(async () => {
+      await setRepeat(nextRepeat(repeat));
+    }, "Repeat");
+  const onToggleShuffle = () =>
+    void run(async () => {
+      await setShuffle(!shuffle);
+    }, "Shuffle");
 
   return (
     <div className="absolute inset-y-0 right-0 z-40 flex w-80 flex-col border-l border-border bg-card shadow-xl">
@@ -104,7 +81,7 @@ export function QueuePanel({ onClose }: Props) {
             type="button"
             onClick={onToggleRepeat}
             disabled={busy}
-            aria-label={`Repeat: ${repeatLabel(repeat)}`}
+            aria-label={`Repeat: ${repeatLabel(repeat, "short")}`}
             className={cn(
               "size-7 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
               repeat !== "off" && "bg-primary/20 text-primary",
@@ -140,12 +117,8 @@ export function QueuePanel({ onClose }: Props) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         {entries.length === 0 ? (
           <div className="flex flex-col items-center justify-center p-6 text-center">
-            <p className="text-sm text-muted-foreground">
-              Nothing in queue
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Play a track to add it here
-            </p>
+            <p className="text-sm text-muted-foreground">Nothing in queue</p>
+            <p className="mt-1 text-xs text-muted-foreground">Play a track to add it here</p>
           </div>
         ) : (
           <ol className="divide-y divide-border">
@@ -175,9 +148,7 @@ export function QueuePanel({ onClose }: Props) {
                     >
                       {entry.title}
                     </div>
-                    <div className="truncate text-xs text-muted-foreground">
-                      {entry.artist}
-                    </div>
+                    <div className="truncate text-xs text-muted-foreground">{entry.artist}</div>
                   </button>
                   <span className="shrink-0 font-mono text-xs text-muted">
                     {formatDuration(entry.durationSeconds)}

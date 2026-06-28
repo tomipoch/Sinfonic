@@ -10,18 +10,27 @@
 //
 // "song" stacks title + artist; "title" and "artist" render in
 // separate columns (used by SongsView for a denser spreadsheet feel).
+//
+// P5: row memoisation. Each row is a `React.memo`d sub-component
+// keyed on the `Track` object plus its own (track.id, hasSelection,
+// isSelected) derivations. Sort changes rebuild the sorted array
+// but only re-render the rows whose `Track` actually changed — the
+// rest of the table keeps the same row reference. The thead /
+// checkbox / sort buttons re-render on every sort as before.
 
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 
 import { AlbumCover } from "@/components/ui/AlbumCover";
-import { FavoriteButton } from "@/components/ui/FavoriteButton";
-import { TrackRowMenu } from "@/components/ui/TrackRowMenu";
 import type { DropdownMenuItem } from "@/components/ui/DropdownMenu";
+import { FavoriteButton } from "@/components/ui/FavoriteButton";
+import { PlayGlyph } from "@/components/ui/PlayGlyph";
+import { TrackRowMenu } from "@/components/ui/TrackRowMenu";
 import { useAlbumLookup } from "@/hooks/useAlbumLookup";
 import { cn } from "@/lib/cn";
 import { formatDuration } from "@/lib/format";
 import { encodeDragData, type TrackDragData } from "@/lib/queueDnD";
-import type { Track } from "@/types/domain";
+import { compareNumber, compareString } from "@/lib/sort";
+import type { ImageRef, Track } from "@/types/domain";
 
 // ─── Column descriptors ────────────────────────────────────────────
 
@@ -50,8 +59,8 @@ const SORT_LABELS: Record<TrackSortKey, string> = {
 };
 
 function compareTracks(a: Track, b: Track, key: TrackSortKey): number {
-  if (key === "durationSeconds") return a.durationSeconds - b.durationSeconds;
-  return a[key].localeCompare(b[key], undefined, { sensitivity: "base" });
+  if (key === "durationSeconds") return compareNumber(a.durationSeconds, b.durationSeconds);
+  return compareString(a[key], b[key]);
 }
 
 // ─── Props ────────────────────────────────────────────────────────
@@ -85,6 +94,89 @@ export interface TrackTableProps {
 
   className?: string;
 }
+
+// ─── Row component (memoised) ────────────────────────────────────
+
+interface TrackRowProps {
+  track: Track;
+  index: number;
+  columns: readonly TrackColumn[];
+  coverImageRef: ImageRef | null;
+  selection: TrackTableSelection | undefined;
+  isSelected: boolean;
+  isDragging: boolean;
+  draggable: boolean;
+  dragSource: TrackDragData["source"];
+  onPlayTrack: ((track: Track, index: number) => void) | undefined;
+  onRowClick: (e: React.MouseEvent, trackId: string) => void;
+  onDragStart: (trackId: string) => void;
+  onDragEnd: () => void;
+}
+
+const TrackRow = memo(function TrackRow({
+  track,
+  index,
+  columns,
+  coverImageRef,
+  selection,
+  isSelected,
+  isDragging,
+  draggable,
+  dragSource,
+  onPlayTrack,
+  onRowClick,
+  onDragStart,
+  onDragEnd,
+}: TrackRowProps) {
+  const hasSelection = selection !== undefined;
+  return (
+    <tr
+      draggable={draggable}
+      onDragStart={(e) => {
+        if (!draggable) return;
+        onDragStart(track.id);
+        e.dataTransfer.setData(
+          "application/json",
+          encodeDragData({ tracks: [track], source: dragSource }),
+        );
+        e.dataTransfer.effectAllowed = "copy";
+      }}
+      onDragEnd={onDragEnd}
+      onClick={hasSelection ? (e) => onRowClick(e, track.id) : undefined}
+      className={cn(
+        "group transition-colors",
+        hasSelection ? "cursor-pointer hover:bg-muted" : "hover:bg-muted",
+        isSelected && "bg-primary/15 hover:bg-primary/20",
+        isDragging && "opacity-30",
+      )}
+    >
+      {hasSelection && (
+        <td className="px-2 py-1.5">
+          <input
+            type="checkbox"
+            aria-label={`Select ${track.title}`}
+            checked={isSelected}
+            onChange={(e) => {
+              // Click on the checkbox itself → toggle (with optional
+              // shift-range support). Don't go through `onRowClick`
+              // because that handler also has the `closest("button,
+              // a, input")` guard which would swallow this click.
+              const shift = e.nativeEvent instanceof MouseEvent && e.nativeEvent.shiftKey;
+              if (shift && selection?.lastSelectedId) {
+                selection?.onRangeToggle(track.id);
+              } else {
+                selection?.onToggle(track.id);
+              }
+            }}
+            onClick={(e) => e.stopPropagation()}
+            className="h-4 w-4 cursor-pointer accent-primary"
+          />
+        </td>
+      )}
+      {columns.map((col, idx) => renderCell(col, idx, track, index, coverImageRef, onPlayTrack))}
+    </tr>
+  );
+});
 
 // ─── Component ────────────────────────────────────────────────────
 
@@ -120,9 +212,9 @@ export function TrackTable({
 
   const hasSelection = selection !== undefined;
   const allSelected =
-    hasSelection && sorted.length > 0 && sorted.every((t) => selection!.selectedIds.has(t.id));
+    hasSelection && sorted.length > 0 && sorted.every((t) => selection?.selectedIds.has(t.id));
   const someSelected =
-    hasSelection && sorted.some((t) => selection!.selectedIds.has(t.id)) && !allSelected;
+    hasSelection && sorted.some((t) => selection?.selectedIds.has(t.id)) && !allSelected;
 
   const toggleAll = () => {
     if (!selection) return;
@@ -132,6 +224,17 @@ export function TrackTable({
       for (const t of sorted) {
         if (!selection.selectedIds.has(t.id)) selection.onToggle(t.id);
       }
+    }
+  };
+
+  const onRowClick = (e: React.MouseEvent, trackId: string) => {
+    if (!hasSelection) return;
+    const target = e.target as HTMLElement;
+    if (target.closest("button, a, input")) return;
+    if (e.shiftKey && selection?.lastSelectedId) {
+      selection.onRangeToggle(trackId);
+    } else {
+      selection.onToggle(trackId);
     }
   };
 
@@ -154,70 +257,33 @@ export function TrackTable({
                 />
               </th>
             )}
-            {columns.map((col, idx) => renderHeader(col, idx, sortKey, setSortKey, sortableColumns))}
+            {columns.map((col, idx) =>
+              renderHeader(col, idx, sortKey, setSortKey, sortableColumns),
+            )}
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
           {sorted.map((track, index) => {
             const album = albumById.get(track.albumId);
             const coverImageRef = track.imageRef ?? album?.imageRef ?? null;
-            const isSelected = hasSelection && selection!.selectedIds.has(track.id);
-
-            const onRowClick = (e: React.MouseEvent) => {
-              if (!hasSelection) return;
-              const target = e.target as HTMLElement;
-              if (target.closest("button, a, input")) return;
-              if (e.shiftKey && selection!.lastSelectedId) {
-                selection!.onRangeToggle(track.id);
-              } else {
-                selection!.onToggle(track.id);
-              }
-            };
-
+            const isSelected = hasSelection && selection?.selectedIds.has(track.id) === true;
             return (
-              <tr
+              <TrackRow
                 key={track.id}
+                track={track}
+                index={index}
+                columns={columns}
+                coverImageRef={coverImageRef}
+                selection={selection}
+                isSelected={isSelected}
+                isDragging={draggingId === track.id}
                 draggable={draggable}
-                onDragStart={(e) => {
-                  if (!draggable) return;
-                  setDraggingId(track.id);
-                  e.dataTransfer.setData(
-                    "application/json",
-                    encodeDragData({ tracks: [track], source: dragSource }),
-                  );
-                  e.dataTransfer.effectAllowed = "copy";
-                }}
+                dragSource={dragSource}
+                onPlayTrack={onPlayTrack}
+                onRowClick={onRowClick}
+                onDragStart={setDraggingId}
                 onDragEnd={() => setDraggingId(null)}
-                onClick={hasSelection ? onRowClick : undefined}
-                className={cn(
-                  "group transition-colors",
-                  hasSelection ? "cursor-pointer hover:bg-muted" : "hover:bg-muted",
-                  isSelected && "bg-primary/15 hover:bg-primary/20",
-                  draggingId === track.id && "opacity-30",
-                )}
-              >
-                {hasSelection && (
-                  <td className="px-2 py-1.5">
-                    <input
-                      type="checkbox"
-                      aria-label={`Select ${track.title}`}
-                      checked={isSelected}
-                      onChange={(e) => {
-                        if (e.nativeEvent instanceof MouseEvent && e.nativeEvent.shiftKey) {
-                          selection!.onRangeToggle(track.id);
-                        } else {
-                          selection!.onToggle(track.id);
-                        }
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                      className="h-4 w-4 cursor-pointer accent-primary"
-                    />
-                  </td>
-                )}
-                {columns.map((col, idx) =>
-                  renderCell(col, idx, track, index, coverImageRef, onPlayTrack),
-                )}
-              </tr>
+              />
             );
           })}
         </tbody>
@@ -243,9 +309,7 @@ function renderHeader(
         </th>
       );
     case "cover":
-      return (
-        <th key={idx} scope="col" className="w-14 px-2 py-2" aria-label="Cover" />
-      );
+      return <th key={idx} scope="col" className="w-14 px-2 py-2" aria-label="Cover" />;
     case "song":
       return (
         <th key={idx} scope="col" className="px-3 py-2 text-left">
@@ -323,7 +387,9 @@ function SortHeader({
   align?: "left" | "right";
 }) {
   if (!sortable) {
-    return <span className={cn("font-medium", align === "right" && "block text-right")}>{label}</span>;
+    return (
+      <span className={cn("font-medium", align === "right" && "block text-right")}>{label}</span>
+    );
   }
   return (
     <button
@@ -362,7 +428,11 @@ function renderCell(
           <div className="group/cover relative h-9 w-9 overflow-hidden rounded shadow-sm ring-1 ring-inset ring-border/40">
             {coverImageRef ? (
               <AlbumCover
-                source={{ id: track.id, title: track.album || track.title, imageRef: coverImageRef }}
+                source={{
+                  id: track.id,
+                  title: track.album || track.title,
+                  imageRef: coverImageRef,
+                }}
                 ariaLabel={`Cover art for ${track.album}`}
                 className="h-9 w-9"
               />
@@ -419,11 +489,7 @@ function renderCell(
     case "favorite":
       return (
         <td key={idx} className="px-2 py-2">
-          <FavoriteButton
-            kind="track"
-            itemId={track.id}
-            initialFavorite={track.favorite}
-          />
+          <FavoriteButton kind="track" itemId={track.id} initialFavorite={track.favorite} />
         </td>
       );
     case "menu":
@@ -433,19 +499,4 @@ function renderCell(
         </td>
       );
   }
-}
-
-function PlayGlyph({ size = 14 }: { size?: number }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      className="inline-block"
-      width={size}
-      height={size}
-      fill="currentColor"
-      aria-hidden
-    >
-      <path d="M8 5v14l11-7z" />
-    </svg>
-  );
 }

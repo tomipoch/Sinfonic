@@ -38,7 +38,9 @@ export async function loadPreferences(): Promise<Preferences> {
       if (val !== undefined && val !== null) {
         (result as Record<string, unknown>)[key] = val;
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
   cached = result;
   return result;
@@ -54,7 +56,10 @@ export function onPreferencesChange(
   });
 }
 
-async function persist(key: keyof Preferences, value: Preferences[keyof Preferences]): Promise<void> {
+async function persist(
+  key: keyof Preferences,
+  value: Preferences[keyof Preferences],
+): Promise<void> {
   if (!cached) await loadPreferences();
   (cached as Record<string, unknown>)[key] = value;
   await store.set(key, value);

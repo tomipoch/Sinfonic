@@ -19,13 +19,9 @@
 // pre-warm is invisible to the user.
 
 import { useEffect } from "react";
-
-import {
-  providerImageBytesBulk,
-  type AlbumArtRequest,
-} from "@/lib/tauri";
-import { buildBlobUrl, getCached, setCached } from "@/lib/albumArtCache";
 import { useAlbumLookup } from "@/hooks/useAlbumLookup";
+import { buildBlobUrl, getCached, setCached } from "@/lib/albumArtCache";
+import { type AlbumArtRequest, providerImageBytesBulk } from "@/lib/tauri";
 import { useLibraryStore } from "@/stores/libraryStore";
 
 export function useAlbumArtPrewarm(): void {
@@ -79,9 +75,7 @@ export function useAlbumArtPrewarm(): void {
 
     // Skip any target that is already in the JS cache — the bulk
     // fetch is wasted work if the blob URL is sitting in memory.
-    const uncached = targets.filter(
-      (t) => getCached(t.albumId, t.tag) === null,
-    );
+    const uncached = targets.filter((t) => getCached(t.albumId, t.tag) === null);
     if (uncached.length === 0) return;
 
     let cancelled = false;

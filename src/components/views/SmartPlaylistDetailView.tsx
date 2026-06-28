@@ -4,10 +4,11 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { TrackTable, type TrackColumn } from "@/components/ui/TrackTable";
-import { getSmartPlaylists, evaluateSmartPlaylist, type SmartPlaylist } from "@/lib/tauri";
-import type { Track } from "@/types/domain";
+import { type TrackColumn, TrackTable } from "@/components/ui/TrackTable";
+import { extractError } from "@/lib/errors";
+import { evaluateSmartPlaylist, getSmartPlaylists, type SmartPlaylist } from "@/lib/tauri";
 import { useServerStore } from "@/stores/serverStore";
+import type { Track } from "@/types/domain";
 
 const COLUMNS: TrackColumn[] = [
   { kind: "index", mode: "track-number" },
@@ -30,15 +31,12 @@ export function SmartPlaylistDetailView() {
     setLoading(true);
     setError(null);
     try {
-      const [pls, trks] = await Promise.all([
-        getSmartPlaylists(),
-        evaluateSmartPlaylist(id),
-      ]);
+      const [pls, trks] = await Promise.all([getSmartPlaylists(), evaluateSmartPlaylist(id)]);
       const found = pls.find((p) => p.id === id) ?? null;
       setPlaylist(found);
       setTracks(trks);
     } catch (e) {
-      setError((e as Error).message ?? String(e));
+      setError(extractError(e, "couldn't load smart playlist"));
     } finally {
       setLoading(false);
     }
@@ -53,7 +51,11 @@ export function SmartPlaylistDetailView() {
   }
 
   if (loading) {
-    return <p className="text-muted-foreground text-sm p-6" role="status">Loading…</p>;
+    return (
+      <p className="text-muted-foreground text-sm p-6" role="status">
+        Loading…
+      </p>
+    );
   }
 
   if (error) {
@@ -61,7 +63,9 @@ export function SmartPlaylistDetailView() {
       <div className="flex flex-col items-start gap-3 rounded-md border border-red-900 bg-red-950 p-6 m-6">
         <div className="text-base font-medium text-red-400">Failed to load</div>
         <p className="text-sm text-red-300">{error}</p>
-        <button type="button" onClick={() => void load()} className="btn-ghost text-sm">Retry</button>
+        <button type="button" onClick={() => void load()} className="btn-ghost text-sm">
+          Retry
+        </button>
       </div>
     );
   }
@@ -70,7 +74,9 @@ export function SmartPlaylistDetailView() {
     return (
       <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6 m-6">
         <div className="text-base font-medium text-foreground">Smart playlist not found</div>
-        <Link to="/smart-playlists" className="text-sm text-primary hover:underline">← Back to smart playlists</Link>
+        <Link to="/smart-playlists" className="text-sm text-primary hover:underline">
+          ← Back to smart playlists
+        </Link>
       </div>
     );
   }
@@ -78,7 +84,9 @@ export function SmartPlaylistDetailView() {
   return (
     <section className="flex flex-col gap-6 p-6">
       <header className="flex flex-col gap-2">
-        <Link to="/smart-playlists" className="text-xs text-muted hover:text-foreground">← Smart Playlists</Link>
+        <Link to="/smart-playlists" className="text-xs text-muted hover:text-foreground">
+          ← Smart Playlists
+        </Link>
         <h1 className="text-2xl font-semibold">{playlist.name}</h1>
         <div className="text-sm text-muted-foreground">
           {tracks.length} matching {tracks.length === 1 ? "track" : "tracks"}
@@ -93,11 +101,7 @@ export function SmartPlaylistDetailView() {
           </p>
         </div>
       ) : (
-        <TrackTable
-          tracks={tracks}
-          columns={COLUMNS}
-          draggable={false}
-        />
+        <TrackTable tracks={tracks} columns={COLUMNS} draggable={false} />
       )}
     </section>
   );

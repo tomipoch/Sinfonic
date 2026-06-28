@@ -10,35 +10,11 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-
-import {
-  queueClear,
-  queueJumpTo,
-  queueRemove,
-  setRepeat,
-  setShuffle,
-} from "@/lib/tauri";
-import { useQueueStore } from "@/stores/queueStore";
+import { extractError } from "@/lib/errors";
 import { formatDuration } from "@/lib/format";
-import type { RepeatMode } from "@/types/domain";
-
-const REPEAT_CYCLE: ReadonlyArray<RepeatMode> = ["off", "all", "one"];
-
-function nextRepeat(current: RepeatMode): RepeatMode {
-  const idx = REPEAT_CYCLE.indexOf(current);
-  return REPEAT_CYCLE[(idx + 1) % REPEAT_CYCLE.length] ?? "off";
-}
-
-function repeatLabel(mode: RepeatMode): string {
-  switch (mode) {
-    case "off":
-      return "Repeat off";
-    case "all":
-      return "Repeat all";
-    case "one":
-      return "Repeat one";
-  }
-}
+import { nextRepeat, repeatLabel } from "@/lib/repeat";
+import { queueClear, queueJumpTo, queueRemove, setRepeat, setShuffle } from "@/lib/tauri";
+import { useQueueStore } from "@/stores/queueStore";
 
 export function QueueView() {
   const entries = useQueueStore((s) => s.entries);
@@ -54,14 +30,13 @@ export function QueueView() {
     try {
       await fn();
     } catch (err) {
-      toast.error(`${label}: ${(err as Error).message ?? String(err)}`);
+      toast.error(`${label}: ${extractError(err, "unknown error")}`);
     } finally {
       setBusy(false);
     }
   };
 
-  const onJumpTo = (entryId: string) =>
-    void run(() => queueJumpTo(entryId), "Jump to entry");
+  const onJumpTo = (entryId: string) => void run(() => queueJumpTo(entryId), "Jump to entry");
 
   const onRemove = (entryId: string) =>
     void run(async () => {
@@ -99,10 +74,7 @@ export function QueueView() {
             disabled={busy}
             aria-pressed={shuffle}
             aria-label={shuffle ? "Disable shuffle" : "Enable shuffle"}
-            className={
-              "btn-ghost text-sm " +
-              (shuffle ? "bg-primary/20 text-primary" : "")
-            }
+            className={`btn-ghost text-sm ${shuffle ? "bg-primary/20 text-primary" : ""}`}
           >
             Shuffle {shuffle ? "on" : "off"}
           </button>
@@ -111,10 +83,7 @@ export function QueueView() {
             onClick={onToggleRepeat}
             disabled={busy}
             aria-label={`Cycle repeat mode (currently ${repeatLabel(repeat)})`}
-            className={
-              "btn-ghost text-sm " +
-              (repeat !== "off" ? "bg-primary/20 text-primary" : "")
-            }
+            className={`btn-ghost text-sm ${repeat !== "off" ? "bg-primary/20 text-primary" : ""}`}
           >
             {repeatLabel(repeat)}
           </button>
@@ -155,10 +124,7 @@ export function QueueView() {
                   aria-label={`Jump to ${entry.title}`}
                 >
                   <div
-                    className={
-                      "truncate font-medium " +
-                      (isCurrent ? "text-primary" : "text-foreground")
-                    }
+                    className={`truncate font-medium ${isCurrent ? "text-primary" : "text-foreground"}`}
                   >
                     {entry.title}
                   </div>
@@ -168,9 +134,7 @@ export function QueueView() {
                     {entry.album}
                   </div>
                 </button>
-                <div className="text-xs text-fg-muted">
-                  {formatDuration(entry.durationSeconds)}
-                </div>
+                <div className="text-xs text-fg-muted">{formatDuration(entry.durationSeconds)}</div>
                 <button
                   type="button"
                   onClick={() => void onRemove(entry.id)}

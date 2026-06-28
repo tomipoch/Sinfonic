@@ -26,9 +26,7 @@ function pageSequence(page: number, total: number): (number | "…")[] {
     return Array.from({ length: total }, (_, i) => i);
   }
   const candidates = new Set<number>([0, total - 1, page - 1, page, page + 1]);
-  const sorted = [...candidates]
-    .filter((p) => p >= 0 && p < total)
-    .sort((a, b) => a - b);
+  const sorted = [...candidates].filter((p) => p >= 0 && p < total).sort((a, b) => a - b);
   const out: (number | "…")[] = [];
   for (let i = 0; i < sorted.length; i += 1) {
     const cur = sorted[i];
@@ -80,11 +78,7 @@ export function Pagination({ page, totalPages, onChange, className }: Props) {
 
       {seq.map((p, i) =>
         p === "…" ? (
-          <span
-            key={`e-${i}`}
-            className="px-1 text-xs text-muted-foreground"
-            aria-hidden
-          >
+          <span key={`e-${i}`} className="px-1 text-xs text-muted-foreground" aria-hidden>
             …
           </span>
         ) : (

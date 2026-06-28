@@ -26,9 +26,7 @@ export function ArtistCard({ artist, className }: Props) {
         <div className="truncate text-sm font-medium text-foreground group-hover:text-primary">
           {artist.name}
         </div>
-        <div className="truncate text-xs text-muted-foreground">
-          {artist.albumCount} albums
-        </div>
+        <div className="truncate text-xs text-muted-foreground">{artist.albumCount} albums</div>
       </div>
     </Link>
   );

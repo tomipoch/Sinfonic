@@ -5,18 +5,13 @@
 // the bottom lets the caller type a name and create a brand-new
 // playlist containing the supplied `trackIds` in one call.
 
+import { Add01Icon, MusicNoteSquare01Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { HugeiconsIcon } from "@hugeicons/react";
-import { Add01Icon, MusicNoteSquare01Icon } from "@hugeicons/core-free-icons";
-
-import {
-  addPlaylistTracks,
-  createPlaylist,
-  playlistsGet,
-} from "@/lib/tauri";
-import { usePlaylistsStore } from "@/stores/playlistsStore";
 import { extractError } from "@/lib/errors";
+import { addPlaylistTracks, createPlaylist, playlistsGet } from "@/lib/tauri";
+import { usePlaylistsStore } from "@/stores/playlistsStore";
 import type { Playlist } from "@/types/domain";
 
 interface AddToPlaylistDialogProps {
@@ -87,7 +82,9 @@ export function AddToPlaylistDialog({ trackIds, onClose }: AddToPlaylistDialogPr
     setBusy(true);
     try {
       await createPlaylist(name, trackIds);
-      toast.success(`Created "${name}" with ${trackIds.length} track${trackIds.length !== 1 ? "s" : ""}`);
+      toast.success(
+        `Created "${name}" with ${trackIds.length} track${trackIds.length !== 1 ? "s" : ""}`,
+      );
       void loadPlaylistsStore();
       onClose();
     } catch (err) {
@@ -135,9 +132,7 @@ export function AddToPlaylistDialog({ trackIds, onClose }: AddToPlaylistDialogPr
               Loading playlists…
             </p>
           )}
-          {error && (
-            <p className="px-3 py-6 text-center text-sm text-red-400">{error}</p>
-          )}
+          {error && <p className="px-3 py-6 text-center text-sm text-red-400">{error}</p>}
           {playlists && playlists.length === 0 && (
             <p className="px-3 py-6 text-center text-sm text-muted-foreground">
               No playlists yet — create one below.
@@ -157,9 +152,7 @@ export function AddToPlaylistDialog({ trackIds, onClose }: AddToPlaylistDialogPr
                       <HugeiconsIcon icon={MusicNoteSquare01Icon} size={14} strokeWidth={1.75} />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium text-foreground">
-                        {pl.name}
-                      </span>
+                      <span className="block truncate font-medium text-foreground">{pl.name}</span>
                       <span className="block text-xs text-muted-foreground">
                         {pl.trackCount} track{pl.trackCount !== 1 ? "s" : ""}
                       </span>

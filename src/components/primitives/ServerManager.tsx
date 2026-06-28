@@ -8,28 +8,20 @@
 //   3. Local files   — rescan action when local is active.
 //   4. Last.fm       — scrobbling status + credentials form.
 
-import {
-  Add01Icon,
-  Delete03Icon,
-  Tick02Icon,
-} from "@hugeicons/core-free-icons";
+import { Add01Icon, Delete03Icon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useState } from "react";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
-
-import {
-  ServerConnectionForm,
-  type ConnectionValues,
-} from "@/components/dialogs/ServerConnectionForm";
 import { LoginDialog } from "@/components/dialogs/LoginDialog";
-import { useServerSettings } from "@/hooks/useServerSettings";
-import { useServerStore } from "@/stores/serverStore";
-import { extractError } from "@/lib/errors";
 import {
-  SettingsCard,
-  SettingsSection,
-} from "@/components/settings/primitives";
+  type ConnectionValues,
+  ServerConnectionForm,
+} from "@/components/dialogs/ServerConnectionForm";
+import { SettingsCard, SettingsSection } from "@/components/primitives/primitives";
+import { useServerSettings } from "@/hooks/useServerSettings";
+import { pickLocalFolder } from "@/lib/dialogs";
+import { cleanError, extractError } from "@/lib/errors";
+import { useServerStore } from "@/stores/serverStore";
 
 export function ServerManager() {
   const {
@@ -77,13 +69,8 @@ export function ServerManager() {
       toast.success(`Connected to ${connected.name}`);
       setAddDialogOpen(false);
     } catch (err) {
-      const message = extractError(err, "login failed");
-      const clean = message
-        .replace(/^local scan:\s*/i, "")
-        .replace(/^login failed:\s*/i, "");
-      toast.error(
-        `${values.kind === "local" ? "Local scan" : "Login"}: ${clean}`,
-      );
+      const clean = cleanError(extractError(err, "login failed")) ?? "login failed";
+      toast.error(`${values.kind === "local" ? "Local scan" : "Login"}: ${clean}`);
     } finally {
       setAdding(false);
     }
@@ -94,8 +81,7 @@ export function ServerManager() {
       const connected = await login(values);
       toast.success(`Connected to ${connected.name}`);
     } catch (err) {
-      const message = extractError(err, "login failed");
-      const clean = message.replace(/^local scan:\s*/i, "").replace(/^login failed:\s*/i, "");
+      const clean = cleanError(extractError(err, "login failed")) ?? "login failed";
       toast.error(`${values.kind === "local" ? "Local scan" : "Login"}: ${clean}`);
       throw err;
     }
@@ -103,16 +89,9 @@ export function ServerManager() {
 
   const handlePickLocalPath = async () => {
     try {
-      const picked = await openDialog({
-        directory: true,
-        multiple: false,
-        title: "Select your music folder",
-      });
-      return picked ?? undefined;
+      return await pickLocalFolder();
     } catch (err) {
-      toast.error(
-        `Couldn't open folder picker: ${(err as Error).message ?? String(err)}`,
-      );
+      toast.error(`Couldn't open folder picker: ${extractError(err, "unknown error")}`);
       return undefined;
     }
   };
@@ -191,22 +170,15 @@ export function ServerManager() {
       <SettingsSection label="Saved Servers">
         {servers.length === 0 ? (
           <SettingsCard>
-            <div className="px-4 py-4 text-sm text-muted-foreground">
-              No saved servers yet.
-            </div>
+            <div className="px-4 py-4 text-sm text-muted-foreground">No saved servers yet.</div>
           </SettingsCard>
         ) : (
           <SettingsCard>
             <ul className="divide-y divide-border">
               {servers.map((s) => (
-                <li
-                  key={s.id}
-                  className="flex items-center justify-between px-4 py-2.5"
-                >
+                <li key={s.id} className="flex items-center justify-between px-4 py-2.5">
                   <div className="flex min-w-0 flex-col">
-                    <div className="truncate text-sm font-medium text-foreground">
-                      {s.name}
-                    </div>
+                    <div className="truncate text-sm font-medium text-foreground">{s.name}</div>
                     <div className="truncate text-xs text-muted-foreground">
                       {s.kind}
                       {s.baseUrl ? ` · ${s.baseUrl}` : ""}
@@ -241,12 +213,9 @@ export function ServerManager() {
         <SettingsCard>
           <div className="flex items-start justify-between gap-4 px-4 py-4">
             <div className="flex min-w-0 flex-col gap-0.5">
-              <div className="text-sm font-medium text-foreground">
-                Scrobbling
-              </div>
+              <div className="text-sm font-medium text-foreground">Scrobbling</div>
               <div className="text-xs text-muted-foreground">
-                Send a scrobble to Last.fm when a track crosses 50% of its
-                duration.
+                Send a scrobble to Last.fm when a track crosses 50% of its duration.
               </div>
             </div>
             <span
@@ -371,7 +340,7 @@ function LocalRescanButton() {
           (stats.errors > 0 ? ` (${stats.errors} file(s) skipped)` : ""),
       );
     } catch (err) {
-      toast.error(`Local rescan: ${(err as Error).message ?? String(err)}`);
+      toast.error(`Local rescan: ${extractError(err, "unknown error")}`);
     } finally {
       setBusy(false);
     }

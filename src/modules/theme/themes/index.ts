@@ -1,5 +1,7 @@
 import { DEFAULT_THEME_ID, type Theme } from "@/modules/theme/types";
+
 export { DEFAULT_THEME_ID };
+
 import { caffeine } from "@/modules/theme/themes/caffeine";
 import { catppuccin } from "@/modules/theme/themes/catppuccin";
 import { claude } from "@/modules/theme/themes/claude";

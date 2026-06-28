@@ -14,8 +14,6 @@
 // Once a server is connected the route guard in `App.tsx` swaps the
 // user out of `/setup` and into `/`.
 
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import {
   ArrowRight01Icon,
   Delete03Icon,
@@ -25,20 +23,18 @@ import {
   Wifi01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import {
-  ServerConnectionForm,
   type ConnectionValues,
+  ServerConnectionForm,
 } from "@/components/dialogs/ServerConnectionForm";
+import { SettingsCard, SettingsSection } from "@/components/primitives/primitives";
+import { pickLocalFolder } from "@/lib/dialogs";
 import { extractError } from "@/lib/errors";
-import { makeLogger } from "@/utils/log";
 import { useServerStore } from "@/stores/serverStore";
-import {
-  SettingsCard,
-  SettingsSection,
-} from "@/components/settings/primitives";
+import { makeLogger } from "@/utils/log";
 
 const log = makeLogger("SetupView");
 
@@ -93,16 +89,9 @@ export function SetupView() {
 
   const handlePickLocalPath = async () => {
     try {
-      const picked = await openDialog({
-        directory: true,
-        multiple: false,
-        title: "Select your music folder",
-      });
-      return picked ?? undefined;
+      return await pickLocalFolder();
     } catch (err) {
-      setConnectError(
-        `Couldn't open folder picker: ${(err as Error).message ?? String(err)}`,
-      );
+      setConnectError(`Couldn't open folder picker: ${extractError(err, "unknown error")}`);
       return undefined;
     }
   };
@@ -113,37 +102,29 @@ export function SetupView() {
         <header className="flex flex-col gap-3">
           <div className="flex items-center gap-3">
             <div className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <HugeiconsIcon
-                icon={Tick02Icon}
-                size={20}
-                strokeWidth={2.5}
-              />
+              <HugeiconsIcon icon={Tick02Icon} size={20} strokeWidth={2.5} />
             </div>
             <h1 className="text-3xl font-semibold tracking-tight text-foreground">
               Welcome to Sinfonic
             </h1>
           </div>
           <p className="max-w-prose text-sm text-muted-foreground">
-            Pick a music source to get started. You can add more servers later
-            from the source selector at the bottom of the sidebar.
+            Pick a music source to get started. You can add more servers later from the source
+            selector at the bottom of the sidebar.
           </p>
         </header>
 
         {servers.length > 0 ? (
           <SettingsSection label="Quick connect">
             <p className="text-xs text-muted-foreground">
-              Re-attach an existing source. Local folders load straight
-              from the on-disk cache.
+              Re-attach an existing source. Local folders load straight from the on-disk cache.
             </p>
             <SettingsCard>
               <ul className="divide-y divide-border">
                 {servers.map((s) => {
                   const busy = connectingId === s.id;
                   return (
-                    <li
-                      key={s.id}
-                      className="flex items-center justify-between gap-3 px-4 py-3"
-                    >
+                    <li key={s.id} className="flex items-center justify-between gap-3 px-4 py-3">
                       <div className="flex min-w-0 items-center gap-3">
                         <span
                           className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border bg-background text-foreground/80"
@@ -172,11 +153,7 @@ export function SetupView() {
                           ) : (
                             <>
                               Connect
-                              <HugeiconsIcon
-                                icon={ArrowRight01Icon}
-                                size={14}
-                                strokeWidth={2}
-                              />
+                              <HugeiconsIcon icon={ArrowRight01Icon} size={14} strokeWidth={2} />
                             </>
                           )}
                         </button>
@@ -187,11 +164,7 @@ export function SetupView() {
                           className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
                           title="Delete server"
                         >
-                          <HugeiconsIcon
-                            icon={Delete03Icon}
-                            size={16}
-                            strokeWidth={1.75}
-                          />
+                          <HugeiconsIcon icon={Delete03Icon} size={16} strokeWidth={1.75} />
                         </button>
                       </div>
                     </li>

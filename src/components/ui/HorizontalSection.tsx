@@ -4,9 +4,9 @@
 //   [←] Title                [→]
 //   [card][card][card][card] →
 
-import { useRef, type ReactNode } from "react";
 import { ArrowLeft01Icon, ArrowRight01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { type ReactNode, useRef } from "react";
 import { cn } from "@/lib/cn";
 
 type Props = {

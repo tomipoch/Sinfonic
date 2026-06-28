@@ -21,7 +21,7 @@ export function GenreDetailView() {
   const albums = useLibraryStore((s) => s.albums);
 
   const genre = useMemo(
-    () => (id ? genres.find((g) => g.id === id) ?? null : null),
+    () => (id ? (genres.find((g) => g.id === id) ?? null) : null),
     [genres, id],
   );
 
@@ -61,9 +61,7 @@ export function GenreDetailView() {
       </header>
 
       {genreAlbums.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          No albums cached for this genre yet.
-        </p>
+        <p className="text-sm text-muted-foreground">No albums cached for this genre yet.</p>
       ) : (
         <ul
           className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"

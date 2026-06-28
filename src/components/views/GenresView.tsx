@@ -29,11 +29,7 @@ export function GenresView() {
   }, [activeServerId, loadGenres]);
 
   if (!activeServerId) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Connect a server to see your genres.
-      </p>
-    );
+    return <p className="text-sm text-muted-foreground">Connect a server to see your genres.</p>;
   }
 
   if (loading && genres.length === 0) {
@@ -61,8 +57,7 @@ export function GenresView() {
       <header>
         <h1 className="text-2xl font-semibold text-foreground">Genres</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          {genres.length} {genres.length === 1 ? "genre" : "genres"} across the
-          active library
+          {genres.length} {genres.length === 1 ? "genre" : "genres"} across the active library
         </p>
       </header>
 
@@ -78,9 +73,7 @@ export function GenresView() {
               aria-label={`${genre.name} — ${genre.albumCount} albums, ${genre.trackCount} tracks`}
             >
               <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-foreground">
-                  {genre.name}
-                </div>
+                <div className="truncate text-sm font-medium text-foreground">{genre.name}</div>
                 <div className="truncate text-xs text-muted-foreground">
                   {genre.albumCount} {genre.albumCount === 1 ? "album" : "albums"}
                   {" · "}

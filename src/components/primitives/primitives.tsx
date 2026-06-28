@@ -13,30 +13,16 @@
 
 import type { ReactNode } from "react";
 
-export function SettingsTitle({
-  title,
-  subtitle,
-}: {
-  title: string;
-  subtitle?: string;
-}) {
+export function SettingsTitle({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
     <header className="flex flex-col gap-1 pb-1">
       <h1 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
-      {subtitle ? (
-        <p className="text-sm text-muted-foreground">{subtitle}</p>
-      ) : null}
+      {subtitle ? <p className="text-sm text-muted-foreground">{subtitle}</p> : null}
     </header>
   );
 }
 
-export function SettingsSection({
-  label,
-  children,
-}: {
-  label: string;
-  children: ReactNode;
-}) {
+export function SettingsSection({ label, children }: { label: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-2.5">
       <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -55,11 +41,7 @@ export function SettingsCard({
   className?: string;
 }) {
   return (
-    <div
-      className={
-        "rounded-xl border border-border bg-card/40 backdrop-blur-sm " + className
-      }
-    >
+    <div className={`rounded-xl border border-border bg-card/40 backdrop-blur-sm ${className}`}>
       {children}
     </div>
   );
@@ -116,9 +98,7 @@ export function ToggleCard({
       <div className="flex items-start justify-between gap-6 px-4 py-4">
         <div className="flex min-w-0 flex-col gap-0.5">
           <div className="text-sm font-medium text-foreground">{title}</div>
-          {description ? (
-            <div className="text-xs text-muted-foreground">{description}</div>
-          ) : null}
+          {description ? <div className="text-xs text-muted-foreground">{description}</div> : null}
         </div>
         <button
           type="button"
@@ -129,9 +109,7 @@ export function ToggleCard({
           onClick={() => onChange(!checked)}
           className={
             "relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full border transition-colors " +
-            (checked
-              ? "border-foreground/30 bg-foreground"
-              : "border-border bg-muted")
+            (checked ? "border-foreground/30 bg-foreground" : "border-border bg-muted")
           }
         >
           <span

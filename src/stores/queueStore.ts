@@ -21,6 +21,5 @@ export const useQueueStore = create<QueueStore>((set) => ({
   shuffleSeed: 0,
 
   setSnapshot: (snapshot) => set(snapshot),
-  clear: () =>
-    set({ entries: [], currentIndex: null, serverId: null }),
+  clear: () => set({ entries: [], currentIndex: null, serverId: null }),
 }));

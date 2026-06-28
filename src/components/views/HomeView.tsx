@@ -12,18 +12,25 @@
 // (connecting → scanning → indexing → caching → ready).
 
 import { useNavigate } from "react-router-dom";
-
-import { HorizontalSection } from "@/components/ui/HorizontalSection";
-import { GenreChip } from "@/components/ui/GenreChip";
 import { AlbumCard } from "@/components/ui/AlbumCard";
 import { ArtistCard } from "@/components/ui/ArtistCard";
+import { GenreChip } from "@/components/ui/GenreChip";
+import { HorizontalSection } from "@/components/ui/HorizontalSection";
 import { SyncOverlay } from "@/components/ui/SyncOverlay";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useServerStore } from "@/stores/serverStore";
 
 const PLACEHOLDER_GENRES = [
-  "Rock", "Pop", "Jazz", "Classical", "Electronic",
-  "Hip-Hop", "Country", "R&B", "Metal", "Folk",
+  "Rock",
+  "Pop",
+  "Jazz",
+  "Classical",
+  "Electronic",
+  "Hip-Hop",
+  "Country",
+  "R&B",
+  "Metal",
+  "Folk",
 ];
 
 export function HomeView() {
@@ -49,9 +56,7 @@ export function HomeView() {
     <div className="flex flex-col gap-8 p-6">
       {/* Welcome */}
       <section>
-        <h1 className="text-2xl font-semibold text-foreground">
-          Welcome back
-        </h1>
+        <h1 className="text-2xl font-semibold text-foreground">Welcome back</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           {activeServer
             ? `Browsing ${activeServer.name}.`
@@ -64,9 +69,7 @@ export function HomeView() {
       {isEmpty && activeServerId ? (
         <section className="flex flex-col items-center gap-4 rounded-lg border border-dashed border-border bg-card/40 px-6 py-10 text-center">
           <div className="flex flex-col gap-1">
-            <h2 className="text-base font-medium text-foreground">
-              Your library is empty
-            </h2>
+            <h2 className="text-base font-medium text-foreground">Your library is empty</h2>
             <p className="text-sm text-muted-foreground">
               Sync to pull albums, artists, and tracks from your server.
             </p>

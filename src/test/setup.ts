@@ -8,8 +8,11 @@ import "@testing-library/jest-dom/vitest";
 
 import { vi } from "vitest";
 
-const invokeMock = vi.fn(async () => undefined);
-const listenMock = vi.fn(async () => () => undefined);
+// Loose return type on purpose — tests mock different shapes
+// (Album, PlaylistDetail, PagedResponse, ConnectedServer, etc.)
+// per case. The real `invoke<T>` overloads narrow at call sites.
+const invokeMock: ReturnType<typeof vi.fn> = vi.fn(async () => undefined);
+const listenMock: ReturnType<typeof vi.fn> = vi.fn(async () => () => undefined);
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: invokeMock,

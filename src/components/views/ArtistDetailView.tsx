@@ -18,7 +18,7 @@ export function ArtistDetailView() {
   const albums = useLibraryStore((s) => s.albums);
 
   const artist = useMemo(
-    () => (id ? artists.find((a) => a.id === id) ?? null : null),
+    () => (id ? (artists.find((a) => a.id === id) ?? null) : null),
     [artists, id],
   );
 
@@ -63,9 +63,7 @@ export function ArtistDetailView() {
       </header>
 
       {artistAlbums.length === 0 ? (
-        <p className="text-muted-foreground text-sm">
-          No albums cached for this artist yet.
-        </p>
+        <p className="text-muted-foreground text-sm">No albums cached for this artist yet.</p>
       ) : (
         <ul
           className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"

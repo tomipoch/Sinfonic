@@ -7,18 +7,23 @@
 //   │  SettingsSection(s) → Cards                             │
 //   └────────────────────────────────────────────────────────┘
 
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { SettingsTab } from "@/modules/settings/openSettingsWindow";
-import { usePreferencesStore } from "@/modules/settings/preferences";
 import { InformationCircleIcon, PaintBoardIcon, Settings01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type JSX, useEffect, useState } from "react";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { SettingsTab } from "@/modules/preferences/openSettingsWindow";
+import { usePreferencesStore } from "@/modules/preferences/preferences";
 import { AboutSection } from "./sections/AboutSection";
 import { GeneralSection } from "./sections/GeneralSection";
 import { ThemesSection } from "./sections/ThemesSection";
 
-const TABS: { id: SettingsTab; label: string; icon: typeof Settings01Icon; component: () => JSX.Element }[] = [
+const TABS: {
+  id: SettingsTab;
+  label: string;
+  icon: typeof Settings01Icon;
+  component: () => JSX.Element;
+}[] = [
   { id: "general", label: "General", icon: Settings01Icon, component: GeneralSection },
   { id: "themes", label: "Themes", icon: PaintBoardIcon, component: ThemesSection },
   { id: "about", label: "About", icon: InformationCircleIcon, component: AboutSection },
@@ -49,9 +54,8 @@ export function SettingsApp() {
         setActive(detail as SettingsTab);
       }
     };
-    const unlistenPromise = getCurrentWindow().listen<string>(
-      "sinfonic:settings-tab",
-      (e) => apply(e.payload),
+    const unlistenPromise = getCurrentWindow().listen<string>("sinfonic:settings-tab", (e) =>
+      apply(e.payload),
     );
     return () => {
       void unlistenPromise.then((un) => un());
@@ -69,9 +73,7 @@ export function SettingsApp() {
           onValueChange={(v: string) => setActive(v as SettingsTab)}
           orientation="horizontal"
         >
-          <TabsList
-            className="h-7 gap-0.5 bg-muted/40 px-1"
-          >
+          <TabsList className="h-7 gap-0.5 bg-muted/40 px-1">
             {TABS.map((t) => (
               <TabsTrigger
                 key={t.id}
@@ -90,9 +92,7 @@ export function SettingsApp() {
         data-tauri-drag-region
         className="min-h-0 flex-1 overflow-y-auto px-10 pt-8 pb-10 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        <div className="mx-auto w-full max-w-2xl">
-          {ActiveSection && <ActiveSection />}
-        </div>
+        <div className="mx-auto w-full max-w-2xl">{ActiveSection && <ActiveSection />}</div>
       </main>
     </div>
   );

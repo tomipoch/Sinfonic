@@ -5,9 +5,6 @@
 // from playlist) pass them via `extraItems` — they're appended after
 // a separator so the menu stays predictable.
 
-import { useState } from "react";
-import { HugeiconsIcon } from "@hugeicons/react";
-import { toast } from "sonner";
 import {
   AlbumIcon,
   MoreVerticalIcon,
@@ -15,13 +12,14 @@ import {
   QueueIcon,
   UserCircleIcon,
 } from "@hugeicons/core-free-icons";
-
-import { DropdownMenu, type DropdownMenuItem } from "@/components/ui/DropdownMenu";
-import { queueAddMany } from "@/lib/tauri";
-import { extractError } from "@/lib/errors";
-import type { Track } from "@/types/domain";
-
+import { HugeiconsIcon } from "@hugeicons/react";
+import { useState } from "react";
+import { toast } from "sonner";
 import { AddToPlaylistDialog } from "@/components/dialogs/AddToPlaylistDialog";
+import { DropdownMenu, type DropdownMenuItem } from "@/components/ui/DropdownMenu";
+import { extractError } from "@/lib/errors";
+import { queueAddMany } from "@/lib/tauri";
+import type { Track } from "@/types/domain";
 
 interface TrackRowMenuProps {
   track: Track;
@@ -55,7 +53,7 @@ export function TrackRowMenu({ track, extraItems }: TrackRowMenuProps) {
       onClick: () => setPlaylistDialogOpen(true),
     },
     ...(extraItems && extraItems.length > 0
-      ? ([{ label: "__separator__", separator: true } as DropdownMenuItem, ...extraItems])
+      ? [{ label: "__separator__", separator: true } as DropdownMenuItem, ...extraItems]
       : []),
     { label: "__separator__", separator: true },
     {
@@ -76,16 +74,11 @@ export function TrackRowMenu({ track, extraItems }: TrackRowMenuProps) {
     <>
       <DropdownMenu
         ariaLabel={`Actions for ${track.title}`}
-        trigger={
-          <HugeiconsIcon icon={MoreVerticalIcon} size={16} strokeWidth={1.75} aria-hidden />
-        }
+        trigger={<HugeiconsIcon icon={MoreVerticalIcon} size={16} strokeWidth={1.75} aria-hidden />}
         items={baseItems}
       />
       {playlistDialogOpen && (
-        <AddToPlaylistDialog
-          trackIds={[track.id]}
-          onClose={() => setPlaylistDialogOpen(false)}
-        />
+        <AddToPlaylistDialog trackIds={[track.id]} onClose={() => setPlaylistDialogOpen(false)} />
       )}
     </>
   );

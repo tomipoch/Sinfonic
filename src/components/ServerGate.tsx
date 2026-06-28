@@ -22,7 +22,7 @@
 // cleared (or never trips), a user with a connected server is never
 // bounced back to /setup.
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { bootstrapState } from "@/lib/tauri";

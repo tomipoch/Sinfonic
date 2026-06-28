@@ -53,7 +53,7 @@ export function useDropTarget({ onDrop }: UseDropTargetOptions) {
 
       const insertIndex = droppableRef.current
         ? (() => {
-            const rect = droppableRef.current!.getBoundingClientRect();
+            const rect = droppableRef.current?.getBoundingClientRect();
             const y = e.clientY - rect.top;
             const height = rect.height;
             const itemHeight = height / Math.max(1, data.tracks.length);

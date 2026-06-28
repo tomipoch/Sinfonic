@@ -25,7 +25,12 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
-    }
+    },
+
+    /* Test runner globals (describe, it, expect, vi) — matches the
+     * `globals: true` setting in vitest.config.ts so test files don't
+     * need to import them explicitly. */
+    "types": ["vitest/globals"]
   },
   "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]

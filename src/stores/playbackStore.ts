@@ -6,10 +6,7 @@
 
 import { create } from "zustand";
 
-import type {
-  PlaybackStatePayload,
-  TrackChangedPayload,
-} from "@/types/domain";
+import type { PlaybackStatePayload, TrackChangedPayload } from "@/types/domain";
 
 export interface PlaybackStore {
   isPlaying: boolean;

@@ -9,11 +9,11 @@
 // Renders nothing unless a sync is in progress so it's safe to mount
 // unconditionally.
 
-import { useSyncProgress } from "@/hooks/useSyncProgress";
-import { HugeiconsIcon } from "@hugeicons/react";
 import { Loading03Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { type SyncState, useSyncProgress } from "@/hooks/useSyncProgress";
 
-function labelFor(state: string): string {
+function labelFor(state: SyncState): string {
   switch (state) {
     case "preparing":
       return "Connecting…";
@@ -28,8 +28,6 @@ function labelFor(state: string): string {
       return "Syncing tracks…";
     case "complete":
       return "Library ready";
-    default:
-      return "Syncing…";
   }
 }
 
@@ -71,9 +69,7 @@ export function SyncBanner() {
             style={{ width: `${percent}%` }}
           />
         </div>
-        <span className="shrink-0 font-mono tabular-nums text-[11px]">
-          {percent}%
-        </span>
+        <span className="shrink-0 font-mono tabular-nums text-[11px]">{percent}%</span>
       </div>
     </div>
   );

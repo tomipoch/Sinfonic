@@ -18,10 +18,12 @@ import { toast } from "sonner";
 
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Pagination } from "@/components/ui/Pagination";
-import { TrackTable, type TrackColumn } from "@/components/ui/TrackTable";
-import { useServerStore } from "@/stores/serverStore";
-import { usePlaybackStore } from "@/stores/playbackStore";
+import { PlayGlyph } from "@/components/ui/PlayGlyph";
+import { type TrackColumn, TrackTable } from "@/components/ui/TrackTable";
+import { extractError } from "@/lib/errors";
 import { getTracks, playAlbum, playTrack } from "@/lib/tauri";
+import { usePlaybackStore } from "@/stores/playbackStore";
+import { useServerStore } from "@/stores/serverStore";
 import type { Track } from "@/types/domain";
 
 const COLUMNS: TrackColumn[] = [
@@ -81,9 +83,7 @@ export function SongsView() {
       })
       .catch((err) => {
         if (cancelled) return;
-        toast.error(
-          `Couldn't load songs: ${(err as Error).message ?? String(err)}`,
-        );
+        toast.error(`Couldn't load songs: ${extractError(err, "unknown error")}`);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -101,7 +101,7 @@ export function SongsView() {
       await playTrack(track);
       setIsPlaying(true);
     } catch (err) {
-      toast.error(`Couldn't play track: ${(err as Error).message ?? String(err)}`);
+      toast.error(`Couldn't play track: ${extractError(err, "unknown error")}`);
     } finally {
       setBusy(false);
     }
@@ -114,18 +114,14 @@ export function SongsView() {
       await playAlbum(items);
       setIsPlaying(true);
     } catch (err) {
-      toast.error(`Couldn't play all: ${(err as Error).message ?? String(err)}`);
+      toast.error(`Couldn't play all: ${extractError(err, "unknown error")}`);
     } finally {
       setBusy(false);
     }
   };
 
   if (!activeServerId) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Connect a server to see your songs.
-      </p>
-    );
+    return <p className="text-sm text-muted-foreground">Connect a server to see your songs.</p>;
   }
 
   if (loading && items.length === 0 && total === 0) {
@@ -184,13 +180,5 @@ export function SongsView() {
 
       <Pagination page={page} totalPages={totalPages} onChange={setPage} />
     </div>
-  );
-}
-
-function PlayGlyph() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor" aria-hidden>
-      <path d="M8 5v14l11-7z" />
-    </svg>
   );
 }

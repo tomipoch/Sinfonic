@@ -10,15 +10,10 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-
-import {
-  getEqBands,
-  resetEq,
-  setEqBand,
-  type EqBandPayload,
-} from "@/lib/tauri";
-import { useEqStore } from "@/stores/eqStore";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { extractError } from "@/lib/errors";
+import { type EqBandPayload, getEqBands, resetEq, setEqBand } from "@/lib/tauri";
+import { useEqStore } from "@/stores/eqStore";
 
 const MIN_DB = -12;
 const MAX_DB = 12;
@@ -92,9 +87,9 @@ export function EqPanel() {
   }, [setBands]);
 
   useTauriEvent<EqBandPayload>("eq-changed", (payload) => {
-    const next = useEqStore.getState().bands.map((b) =>
-      b.hz === payload.hz ? { hz: payload.hz, gainDb: payload.gainDb } : b,
-    );
+    const next = useEqStore
+      .getState()
+      .bands.map((b) => (b.hz === payload.hz ? { hz: payload.hz, gainDb: payload.gainDb } : b));
     setBands(next);
   });
 
@@ -108,7 +103,7 @@ export function EqPanel() {
     try {
       await fn();
     } catch (err) {
-      toast.error(`${label}: ${(err as Error).message ?? String(err)}`);
+      toast.error(`${label}: ${extractError(err, "unknown error")}`);
     } finally {
       setBusy(false);
     }
@@ -142,11 +137,7 @@ export function EqPanel() {
       </div>
       <div className="flex items-end gap-3 overflow-x-auto py-1">
         {bands.map((band) => (
-          <EqBandSlider
-            key={band.hz}
-            band={band}
-            onCommit={onBandCommit}
-          />
+          <EqBandSlider key={band.hz} band={band} onCommit={onBandCommit} />
         ))}
       </div>
     </div>

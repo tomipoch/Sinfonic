@@ -6,11 +6,11 @@ import { toast } from "sonner";
 
 import { AlbumCover } from "@/components/ui/AlbumCover";
 import { FavoriteButton } from "@/components/ui/FavoriteButton";
-import { TrackTable, type TrackColumn } from "@/components/ui/TrackTable";
+import { type TrackColumn, TrackTable } from "@/components/ui/TrackTable";
+import { extractError } from "@/lib/errors";
+import { formatDuration } from "@/lib/format";
 import { getFavorites, playTrack } from "@/lib/tauri";
 import { useServerStore } from "@/stores/serverStore";
-import { formatDuration } from "@/lib/format";
-import { extractError } from "@/lib/errors";
 import type { Album, Artist, Track } from "@/types/domain";
 
 const COLUMNS: TrackColumn[] = [
@@ -43,7 +43,7 @@ export function FavoritesView() {
       const result = await getFavorites();
       setData(result);
     } catch (e) {
-      setError((e as Error).message ?? String(e));
+      setError(extractError(e, "couldn't load favorites"));
     } finally {
       setLoading(false);
     }
@@ -57,13 +57,19 @@ export function FavoritesView() {
     return (
       <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
         <div className="text-base font-medium text-foreground">No server connected</div>
-        <p className="text-sm text-muted-foreground">Connect a server in Settings to see favorites.</p>
+        <p className="text-sm text-muted-foreground">
+          Connect a server in Settings to see favorites.
+        </p>
       </div>
     );
   }
 
   if (loading) {
-    return <p className="text-muted-foreground text-sm" role="status">Loading favorites…</p>;
+    return (
+      <p className="text-muted-foreground text-sm" role="status">
+        Loading favorites…
+      </p>
+    );
   }
 
   if (error) {
@@ -71,7 +77,9 @@ export function FavoritesView() {
       <div className="flex flex-col items-start gap-3 rounded-md border border-red-900 bg-red-950 p-6">
         <div className="text-base font-medium text-red-400">Failed to load favorites</div>
         <p className="text-sm text-red-300">{error}</p>
-        <button type="button" onClick={() => void load()} className="btn-ghost text-sm">Retry</button>
+        <button type="button" onClick={() => void load()} className="btn-ghost text-sm">
+          Retry
+        </button>
       </div>
     );
   }
@@ -103,7 +111,9 @@ export function FavoritesView() {
               type="button"
               onClick={() => setTab(t.key)}
               className={`rounded px-3 py-1 text-sm transition-colors ${
-                tab === t.key ? "bg-card text-foreground" : "text-muted-foreground hover:text-foreground"
+                tab === t.key
+                  ? "bg-card text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
               }`}
             >
               {t.label} <span className="ml-1 text-muted-foreground">({t.count})</span>
@@ -112,8 +122,8 @@ export function FavoritesView() {
         </div>
       </header>
 
-      {tab === "tracks" && (
-        data.tracks.length === 0 ? (
+      {tab === "tracks" &&
+        (data.tracks.length === 0 ? (
           <EmptyState message="No favorited tracks yet." />
         ) : (
           <TrackTable
@@ -122,11 +132,10 @@ export function FavoritesView() {
             onPlayTrack={onPlayTrack}
             dragSource="favorites"
           />
-        )
-      )}
+        ))}
 
-      {tab === "albums" && (
-        data.albums.length === 0 ? (
+      {tab === "albums" &&
+        (data.albums.length === 0 ? (
           <EmptyState message="No favorited albums yet." />
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-4">
@@ -142,19 +151,18 @@ export function FavoritesView() {
                   <div className="truncate text-xs text-muted-foreground">{album.artist}</div>
                 </div>
                 <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">
-                      {album.trackCount} tracks · {formatDuration(album.durationSeconds)}
-                    </span>
+                  <span className="text-xs text-muted-foreground">
+                    {album.trackCount} tracks · {formatDuration(album.durationSeconds)}
+                  </span>
                   <FavoriteButton kind="album" itemId={album.id} initialFavorite={album.favorite} />
                 </div>
               </Link>
             ))}
           </div>
-        )
-      )}
+        ))}
 
-      {tab === "artists" && (
-        data.artists.length === 0 ? (
+      {tab === "artists" &&
+        (data.artists.length === 0 ? (
           <EmptyState message="No favorited artists yet." />
         ) : (
           <div className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-4">
@@ -171,12 +179,15 @@ export function FavoritesView() {
                 <div className="text-xs text-muted-foreground">
                   {artist.albumCount} albums · {artist.trackCount} tracks
                 </div>
-                <FavoriteButton kind="artist" itemId={artist.id} initialFavorite={artist.favorite} />
+                <FavoriteButton
+                  kind="artist"
+                  itemId={artist.id}
+                  initialFavorite={artist.favorite}
+                />
               </Link>
             ))}
           </div>
-        )
-      )}
+        ))}
     </section>
   );
 }

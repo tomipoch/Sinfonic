@@ -1,15 +1,15 @@
 // Playlist store — playlists list + active playlist detail.
 
 import { create } from "zustand";
-
+import { extractError } from "@/lib/errors";
 import {
-  playlistsGet,
-  playlistDetail,
   createPlaylist,
-  renamePlaylist,
   deletePlaylist,
-  removePlaylistEntries,
   playAlbum,
+  playlistDetail,
+  playlistsGet,
+  removePlaylistEntries,
+  renamePlaylist,
 } from "@/lib/tauri";
 import type { Playlist, Track } from "@/types/domain";
 
@@ -50,7 +50,7 @@ export const usePlaylistsStore = create<PlaylistsStore>((set, get) => ({
       const playlists = await playlistsGet();
       set({ playlists, loading: false, error: null });
     } catch (e) {
-      set({ loading: false, error: (e as Error).message ?? String(e) });
+      set({ loading: false, error: extractError(e, "couldn't load playlists") });
     }
   },
 
@@ -60,7 +60,7 @@ export const usePlaylistsStore = create<PlaylistsStore>((set, get) => ({
       const detail = await playlistDetail(playlistId);
       set({ detail, detailLoading: false });
     } catch (e) {
-      set({ detailLoading: false, detailError: (e as Error).message ?? String(e) });
+      set({ detailLoading: false, detailError: extractError(e, "couldn't load playlist") });
     }
   },
 
@@ -102,6 +102,13 @@ export const usePlaylistsStore = create<PlaylistsStore>((set, get) => ({
   },
 
   reset: () => {
-    set({ playlists: [], loading: false, error: null, detail: null, detailLoading: false, detailError: null });
+    set({
+      playlists: [],
+      loading: false,
+      error: null,
+      detail: null,
+      detailLoading: false,
+      detailError: null,
+    });
   },
 }));

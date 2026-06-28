@@ -2,14 +2,14 @@
 
 import { useState } from "react";
 import { Outlet } from "react-router-dom";
-import { PlayerBar } from "./PlayerBar";
-import { QueuePanel } from "./QueuePanel";
-import { Sidebar } from "./Sidebar";
-import { TitleBar } from "./TitleBar";
-import { SyncBanner } from "./SyncBanner";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useLibraryAutoLoad } from "@/hooks/useLibraryAutoLoad";
 import { cn } from "@/lib/cn";
+import { PlayerBar } from "./PlayerBar";
+import { QueuePanel } from "./QueuePanel";
+import { Sidebar } from "./Sidebar";
+import { SyncBanner } from "./SyncBanner";
+import { TitleBar } from "./TitleBar";
 
 export function Layout() {
   useKeyboardShortcuts();
@@ -35,14 +35,9 @@ export function Layout() {
           <div className="flex-1 overflow-auto [overscroll-behavior:contain]">
             <Outlet />
           </div>
-          <PlayerBar
-            queueOpen={queueOpen}
-            onToggleQueue={() => setQueueOpen((v) => !v)}
-          />
+          <PlayerBar queueOpen={queueOpen} onToggleQueue={() => setQueueOpen((v) => !v)} />
         </main>
-        {queueOpen && (
-          <QueuePanel onClose={() => setQueueOpen(false)} />
-        )}
+        {queueOpen && <QueuePanel onClose={() => setQueueOpen(false)} />}
       </div>
     </div>
   );

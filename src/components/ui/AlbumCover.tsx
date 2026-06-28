@@ -14,11 +14,10 @@
 // tracks (which carry their own `imageRef` in the cache) can be
 // rendered the same way as albums.
 
-import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-
-import { providerImageBytes } from "@/lib/tauri";
+import { useEffect, useState } from "react";
 import { buildBlobUrl, getCached, setCached } from "@/lib/albumArtCache";
+import { providerImageBytes } from "@/lib/tauri";
 import type { ImageRef } from "@/types/domain";
 
 const PALETTE: ReadonlyArray<readonly [number, number]> = [
@@ -56,12 +55,7 @@ interface AlbumCoverProps {
   initial?: string;
 }
 
-export function AlbumCover({
-  source,
-  className,
-  ariaLabel,
-  initial,
-}: AlbumCoverProps) {
+export function AlbumCover({ source, className, ariaLabel, initial }: AlbumCoverProps) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -112,15 +106,11 @@ export function AlbumCover({
   const gradientStyle: CSSProperties = {
     background: `linear-gradient(135deg, hsl(${baseHue} ${sat}% 22%) 0%, hsl(${accentHue} ${sat}% 35%) 100%)`,
   };
-  const fallbackInitial =
-    initial ?? (source.title?.trim().charAt(0) || "?").toUpperCase();
+  const fallbackInitial = initial ?? (source.title?.trim().charAt(0) || "?").toUpperCase();
 
   return (
     <div
-      className={
-        "relative aspect-square w-full overflow-hidden rounded-md shadow-sm " +
-        (className ?? "")
-      }
+      className={`relative aspect-square w-full overflow-hidden rounded-md shadow-sm ${className ?? ""}`}
       aria-label={ariaLabel ?? `Cover art for ${source.title}`}
     >
       <div

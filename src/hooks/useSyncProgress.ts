@@ -17,47 +17,22 @@
 // otherwise the very first event could race the listener registration
 // and be lost.
 
-import { useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useEffect, useState } from "react";
+import { safelyUnlisten } from "@/lib/tauriListen";
+import type { SyncState } from "@/types/domain";
 import { makeLogger } from "@/utils/log";
 
-/**
- * Call a Tauri `UnlistenFn` and swallow both sync throws AND async
- * Promise rejections. The Tauri v2 implementation is `async
- * () => _unlisten(...)` (despite the `() => void` type), and the
- * underlying `__TAURI_EVENT_PLUGIN_INTERNALS__.unregisterListener`
- * can throw `listeners[eventId].handlerId is undefined` when the
- * effect was torn down before the `listen()` promise resolved (the
- * classic React 19 StrictMode dev double-invoke race). Both outcomes
- * mean "the listener is already gone" — silent best-effort cleanup.
- */
-function safelyUnlisten(fn: UnlistenFn | null): void {
-  if (!fn) return;
-  try {
-    const result = fn() as unknown;
-    if (
-      result !== null &&
-      typeof result === "object" &&
-      typeof (result as { catch?: unknown }).catch === "function"
-    ) {
-      (result as Promise<unknown>).catch(() => {
-        // StrictMode-cleanup race — see comment above.
-      });
-    }
-  } catch {
-    // Sync throw — also "listener already gone" territory.
-  }
-}
+export type { SyncState };
 
 const log = makeLogger("useSyncProgress");
 
-export type SyncState =
-  | "preparing"
-  | "started"
-  | "scanning"
-  | "indexing"
-  | "complete"
-  | string;
+/**
+ * Re-exported from `@/types/domain` so existing callers that import
+ * `SyncState` from this hook keep working — `useSyncProgress` was
+ * the original source until `LibrarySyncStatus` adopted the same
+ * closed union.
+ */
 
 export interface SyncPayload {
   serverId?: string | null;
@@ -147,7 +122,7 @@ export function useSyncProgress({ resetKey }: Options = {}): SyncProgress {
           log.log("ready: listen() resolved");
           // Flip ready even if no event has fired yet, so callers
           // can kick off work without waiting for the first tick.
-          setProgress((current) => current.ready ? current : { ...current, ready: true });
+          setProgress((current) => (current.ready ? current : { ...current, ready: true }));
         }
       })
       .catch((err) => {

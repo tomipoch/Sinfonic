@@ -40,12 +40,7 @@ interface DropdownMenuProps {
   ariaLabel?: string;
 }
 
-export function DropdownMenu({
-  trigger,
-  items,
-  align = "right",
-  ariaLabel,
-}: DropdownMenuProps) {
+export function DropdownMenu({ trigger, items, align = "right", ariaLabel }: DropdownMenuProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -105,13 +100,7 @@ export function DropdownMenu({
   );
 }
 
-function DropdownRow({
-  item,
-  onActivate,
-}: {
-  item: DropdownMenuItem;
-  onActivate: () => void;
-}) {
+function DropdownRow({ item, onActivate }: { item: DropdownMenuItem; onActivate: () => void }) {
   const baseClass = cn(
     "flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-sm transition-colors",
     item.disabled

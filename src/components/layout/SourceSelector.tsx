@@ -2,8 +2,6 @@
 // server switching. Opens LoginDialog when no server is connected or
 // when "Add new server..." is selected.
 
-import { useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import {
   Add01Icon,
   HardDriveIcon,
@@ -12,10 +10,12 @@ import {
   Wifi01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { LoginDialog } from "@/components/dialogs/LoginDialog";
-import { useServerStore } from "@/stores/serverStore";
 import { extractError } from "@/lib/errors";
+import { useServerStore } from "@/stores/serverStore";
 import { makeLogger } from "@/utils/log";
 
 const log = makeLogger("SourceSelector");
@@ -103,12 +103,9 @@ export function SourceSelector() {
 
         {open && (
           <>
-            <div
-              className="fixed inset-0 z-40"
-              onClick={() => setOpen(false)}
-            />
+            <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
             <div className="absolute bottom-full left-0 right-0 z-50 mb-1 overflow-hidden rounded-md border border-border bg-card shadow-lg">
-              <ul role="listbox" className="py-1">
+              <ul className="py-1">
                 {servers.map((server) => {
                   const isActive = server.id === activeServerId;
                   const isSwitching = switching === server.id;
@@ -135,9 +132,7 @@ export function SourceSelector() {
                           {server.name}
                         </span>
                         {isSwitching && (
-                          <span className="text-[11px] text-muted-foreground">
-                            switching…
-                          </span>
+                          <span className="text-[11px] text-muted-foreground">switching…</span>
                         )}
                         {isActive && !isSwitching && (
                           <HugeiconsIcon
@@ -164,9 +159,7 @@ export function SourceSelector() {
                       strokeWidth={1.75}
                       className="text-muted-foreground"
                     />
-                    <span className="text-muted-foreground">
-                      Add new server…
-                    </span>
+                    <span className="text-muted-foreground">Add new server…</span>
                   </button>
                 </li>
               </ul>

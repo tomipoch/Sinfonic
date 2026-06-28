@@ -11,9 +11,6 @@
 //   * If a previously-seen key arrives, the user popped (via back/forward
 //     button, swipe, or `navigate(-1/+1)`). The current key is pushed
 //     onto the opposite stack.
-//
-// `popstate` events are also observed so the OS-level shortcuts and
-// react-router's back/forward stay in sync with our internal state.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
@@ -86,19 +83,6 @@ export function useHistoryNav(): HistoryNav {
   const goForward = useCallback(() => {
     if (forwardRef.current.length === 0) return;
     window.history.forward();
-  }, []);
-
-  // Keep our state in sync with browser-level back/forward shortcuts
-  // (alt+left, two-finger swipe, etc). The `popstate` handler reads the
-  // new location and the location effect above will reconcile the stack.
-  useEffect(() => {
-    const onPopState = () => {
-      // The location effect handles stack reconciliation; nothing to do
-      // here beyond letting the effect re-run. The trigger is the
-      // location change itself.
-    };
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
   }, []);
 
   return { goBack, goForward, canGoBack, canGoForward };

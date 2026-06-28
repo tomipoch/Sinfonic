@@ -24,16 +24,13 @@
 //     during the submit — the IPC round-trip happens entirely inside
 //     the parent's `onSubmit` callback.
 
+import { HardDriveIcon, Link04Icon, Wifi01Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { useState } from "react";
 import { useFormStatus } from "react-dom";
-import {
-  HardDriveIcon,
-  Link04Icon,
-  Wifi01Icon,
-} from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
 
-import { ChoiceCard, SettingsCard, SettingsSection } from "@/components/settings/primitives";
+import { ChoiceCard, SettingsCard, SettingsSection } from "@/components/primitives/primitives";
+import { cleanError } from "@/lib/errors";
 import type { DiscoveredServer } from "@/types/domain";
 
 export type ConnectionSource = "jellyfin" | "subsonic" | "local";
@@ -51,7 +48,7 @@ export interface ServerConnectionFormProps {
   error?: string | null | undefined;
   onSubmit: (values: ConnectionValues) => Promise<void> | void;
   onDiscover?: () => Promise<void> | void;
-  onPickLocalPath?: () => Promise<string | void> | void;
+  onPickLocalPath?: () => Promise<string | undefined> | undefined;
 }
 
 const SOURCES: {
@@ -87,20 +84,6 @@ function normaliseBaseUrl(raw: string): string {
   if (!raw) return raw;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return raw;
   return `http://${raw}`;
-}
-
-/// Strip the redundant `local scan:`, `login failed:`, `save token:`,
-/// etc. prefixes the Tauri commands wrap on. The base error is more
-/// useful to show in the UI.
-function cleanError(message: string | null | undefined): string | null {
-  if (!message) return null;
-  return message
-    .replace(/^local scan:\s*/i, "")
-    .replace(/^login failed:\s*/i, "")
-    .replace(/^save token:\s*/i, "Token storage: ")
-    .replace(/^build provider:\s*/i, "Provider: ")
-    .replace(/^upsert server:\s*/i, "Server record: ")
-    .replace(/^provider_set_active:\s*/i, "");
 }
 
 export function ServerConnectionForm({
@@ -203,14 +186,13 @@ export function ServerConnectionForm({
             </div>
           ) : variant === "page" ? (
             <div className="text-xs text-muted-foreground">
-              Sinfonic will walk the directory recursively and read
-              metadata from the file tags (ID3, Vorbis, MP4, …).
+              Sinfonic will walk the directory recursively and read metadata from the file tags
+              (ID3, Vorbis, MP4, …).
             </div>
           ) : (
             <div className="text-xs text-muted-foreground">
-              Point Sinfonic at a directory of audio files (MP3, FLAC, OGG,
-              Opus, MP4/M4A, WAV). The directory is walked recursively;
-              metadata comes from the file tags.
+              Point Sinfonic at a directory of audio files (MP3, FLAC, OGG, Opus, MP4/M4A, WAV). The
+              directory is walked recursively; metadata comes from the file tags.
             </div>
           )}
           <label className="flex flex-col gap-1 text-sm">
@@ -278,9 +260,7 @@ export function ServerConnectionForm({
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.currentTarget.value)}
               placeholder={
-                source === "jellyfin"
-                  ? "http://192.168.1.10:8096"
-                  : "http://192.168.1.10:4533"
+                source === "jellyfin" ? "http://192.168.1.10:8096" : "http://192.168.1.10:4533"
               }
               required
               className="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none"
@@ -335,17 +315,10 @@ export function ServerConnectionForm({
         <SettingsCard>
           <ul className="divide-y divide-border">
             {discovered.map((d) => (
-              <li
-                key={d.serverId}
-                className="flex items-center justify-between gap-3 px-4 py-2.5"
-              >
+              <li key={d.serverId} className="flex items-center justify-between gap-3 px-4 py-2.5">
                 <div className="flex min-w-0 flex-col">
-                  <div className="truncate text-sm font-medium text-foreground">
-                    {d.name}
-                  </div>
-                  <div className="truncate text-xs text-muted-foreground">
-                    {d.baseUrl}
-                  </div>
+                  <div className="truncate text-sm font-medium text-foreground">{d.name}</div>
+                  <div className="truncate text-xs text-muted-foreground">{d.baseUrl}</div>
                 </div>
                 <button
                   type="button"
@@ -391,9 +364,9 @@ function SubmitButton({
       type="submit"
       disabled={disabled}
       className={
-        (variant === "primary"
+        variant === "primary"
           ? "rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
-          : "")
+          : ""
       }
     >
       {label}

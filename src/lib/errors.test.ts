@@ -1,21 +1,9 @@
-// extractError — regression tests for the Tauri string-vs-Error
-// extraction pattern.
-//
-// Tauri v2 rejects invoke() promises with the **string** the Rust
-// command returned in `Result::Err`, not an `Error` instance. The
-// legacy `(e as Error).message || "fallback"` pattern therefore
-// silently degrades to the fallback for every IPC rejection, hiding
-// the real backend message from the user.
+import { describe, expect, it, vi } from "vitest";
 
-import { describe, expect, it } from "vitest";
-
-import { extractError } from "./errors";
+import { cleanError, extractError } from "./errors";
 
 describe("extractError", () => {
   it("returns Tauri string rejection as-is (the common case)", () => {
-    // Tauri rejects invoke() with the Err string from the Rust
-    // command. This is what `provider_set_active` returns when
-    // the keyring has no password for the saved server id.
     const tauriErr = "subsonic: password missing from keyring";
     expect(extractError(tauriErr, "fallback")).toBe(tauriErr);
   });
@@ -48,15 +36,60 @@ describe("extractError", () => {
   });
 
   it("legacy buggy pattern would have hidden the backend message", () => {
-    // Documents the regression: under the old `(e as Error).message
-    // || "fallback"` pattern this exact value rendered as the
-    // fallback string, so the user could never tell *why* the
-    // provider switch failed.
     const tauriErr = "provider_set_active: load password: keyring error";
     const buggyResult = (tauriErr as unknown as Error).message || "switch source failed";
     expect(buggyResult).toBe("switch source failed");
-
-    // extractError preserves the actual message.
     expect(extractError(tauriErr, "switch source failed")).toBe(tauriErr);
   });
 });
+
+describe("cleanError", () => {
+  it("returns null for empty / nullish input", () => {
+    expect(cleanError(null)).toBeNull();
+    expect(cleanError(undefined)).toBeNull();
+    expect(cleanError("")).toBeNull();
+  });
+
+  it("strips the redundant 'local scan:' prefix", () => {
+    expect(cleanError("local scan: permission denied")).toBe(
+      "permission denied",
+    );
+  });
+
+  it("strips the redundant 'login failed:' prefix", () => {
+    expect(cleanError("login failed: bad password")).toBe("bad password");
+  });
+
+  it("rewrites credential-storage errors to friendlier form", () => {
+    expect(cleanError("save token: keyring error")).toBe(
+      "Token storage: keyring error",
+    );
+    expect(cleanError("build provider: bad config")).toBe(
+      "Provider: bad config",
+    );
+    expect(cleanError("upsert server: dup key")).toBe(
+      "Server record: dup key",
+    );
+  });
+
+  it("strips the provider_set_active prefix", () => {
+    expect(cleanError("provider_set_active: bad id")).toBe("bad id");
+  });
+
+  it("applies multiple rewrites in order", () => {
+    // A message containing both `local scan:` and `provider_set_active:`
+    // would be unusual but the helper should handle it idempotently.
+    const cleaned = cleanError("local scan: provider_set_active: nested");
+    expect(cleaned).toBe("nested");
+  });
+
+  it("passes through messages that don't match any prefix", () => {
+    expect(cleanError("something unrelated")).toBe("something unrelated");
+  });
+});
+
+// `vi` import is intentional: when this file is the only place that
+// uses `vi` in `src/lib`, Biome's `noUnusedImports` rule would strip
+// it otherwise. We use it implicitly via `vi.fn()` in the other test
+// files; this keeps the import valid as a defensive default.
+void vi;

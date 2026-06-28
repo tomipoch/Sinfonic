@@ -12,38 +12,21 @@
 // view that was already mounted (Songs page, sidebar playlists)
 // updates without needing a route change or server switch.
 
-import { useEffect, useRef } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-
-import { makeLogger } from "@/utils/log";
+import { useEffect, useRef } from "react";
+import { safelyUnlisten } from "@/lib/tauriListen";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { usePlaylistsStore } from "@/stores/playlistsStore";
 import { useServerStore } from "@/stores/serverStore";
+import type { SyncState } from "@/types/domain";
+import { makeLogger } from "@/utils/log";
 
 const log = makeLogger("useLibraryAutoLoad");
 
 interface SyncPayload {
   serverId?: string | null;
-  state: string;
+  state: SyncState;
   progress: number;
-}
-
-function safelyUnlisten(fn: UnlistenFn | null): void {
-  if (!fn) return;
-  try {
-    const result = fn() as unknown;
-    if (
-      result !== null &&
-      typeof result === "object" &&
-      typeof (result as { catch?: unknown }).catch === "function"
-    ) {
-      (result as Promise<unknown>).catch(() => {
-        // StrictMode cleanup race — listener is already gone.
-      });
-    }
-  } catch {
-    // Sync throw — also "listener already gone" territory.
-  }
 }
 
 export function useLibraryAutoLoad(): void {
@@ -53,7 +36,7 @@ export function useLibraryAutoLoad(): void {
 
   // Track the previous sync state so we only refetch on the
   // transition INTO "complete" (not on every event during the run).
-  const previousSyncState = useRef<string | null>(null);
+  const previousSyncState = useRef<SyncState | null>(null);
 
   useEffect(() => {
     if (activeServerId) {

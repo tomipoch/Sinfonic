@@ -12,13 +12,18 @@
 // hunts is worth more than the tiny bundle-size delta. If a future
 // refactor wants to gate it, plumb a level through `import.meta.env`
 // and respect it here.
+//
+// The `console` calls below are intentionally not linted; the
+// `noConsole` rule in `biome.json` allows `warn` and `error`. We
+// route all log levels through `console[level]` to keep the line
+// shape consistent.
 
 type Level = "log" | "warn" | "error";
 
 export function makeLogger(scope: string) {
   const prefix = `[${scope}]`;
   function emit(level: Level, ...args: unknown[]) {
-    // eslint-disable-next-line no-console
+    // biome-ignore lint/suspicious/noConsole: this whole module is the console wrapper
     console[level](prefix, ...args);
   }
   return {

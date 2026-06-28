@@ -24,3 +24,30 @@ export function extractError(e: unknown, fallback: string): string {
   const s = String(e);
   return s === "[object Object]" || s.length === 0 ? fallback : s;
 }
+
+// cleanError — strip the redundant `local scan:`, `login failed:`,
+// `save token:` prefixes the Rust commands wrap their inner error
+// with. Most are dropped; the credential-storage ones are rewritten
+// to a friendlier "Token storage: ..." form so the user understands
+// it's a keychain / keyring issue rather than a server problem.
+//
+// Centralised so `ServerConnectionForm` (which renders errors inline)
+// and `ServerManager` (toasts them) share the exact same rewrites.
+
+const CLEAN_RULES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/^local scan:\s*/i, ""],
+  [/^login failed:\s*/i, ""],
+  [/^save token:\s*/i, "Token storage: "],
+  [/^build provider:\s*/i, "Provider: "],
+  [/^upsert server:\s*/i, "Server record: "],
+  [/^provider_set_active:\s*/i, ""],
+];
+
+export function cleanError(message: string | null | undefined): string | null {
+  if (!message) return null;
+  let cleaned = message;
+  for (const [pattern, replacement] of CLEAN_RULES) {
+    cleaned = cleaned.replace(pattern, replacement);
+  }
+  return cleaned;
+}

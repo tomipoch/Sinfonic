@@ -6,14 +6,15 @@
 // nothing while a sync isn't running, so it's safe to mount
 // unconditionally.
 
-import { useSyncProgress } from "@/hooks/useSyncProgress";
 import {
+  buildChecklistSteps,
   SyncChecklist,
   SyncProgressBar,
-  buildChecklistSteps,
   stepForState,
 } from "@/components/ui/SyncChecklist";
-import { useServerStore, type ServerKind } from "@/stores/serverStore";
+import { useSyncProgress } from "@/hooks/useSyncProgress";
+import { useServerStore } from "@/stores/serverStore";
+import type { ServerKind } from "@/types/domain";
 
 interface Props {
   /**
@@ -29,12 +30,7 @@ interface Props {
   className?: string;
 }
 
-export function SyncOverlay({
-  kind,
-  showProgressBar = true,
-  showSteps = true,
-  className,
-}: Props) {
+export function SyncOverlay({ kind, showProgressBar = true, showSteps = true, className }: Props) {
   const activeKind = useServerStore(
     (s) => s.servers.find((sv) => sv.id === s.activeServerId)?.kind,
   );
@@ -74,9 +70,7 @@ export function SyncOverlay({
           </div>
         </div>
       </div>
-      {showProgressBar && (
-        <SyncProgressBar progress={sync.progress} done={sync.done} />
-      )}
+      {showProgressBar && <SyncProgressBar progress={sync.progress} done={sync.done} />}
       {showSteps && <SyncChecklist steps={steps} />}
       {sync.error && (
         <div

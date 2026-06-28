@@ -1,15 +1,24 @@
 import {
   createContext,
+  type ReactNode,
   useCallback,
   useContext,
   useEffect,
   useMemo,
   useState,
-  type ReactNode,
 } from "react";
-import { DEFAULT_THEME_ID, listBuiltinThemes, getBuiltinTheme, getDefaultTheme } from "@/modules/theme/themes";
+import {
+  onPreferencesChange,
+  setTheme as persistTheme,
+  setThemeId as persistThemeId,
+} from "@/modules/preferences/store";
 import { applyTheme, clearTheme } from "@/modules/theme/applyTheme";
-import { setTheme as persistTheme, setThemeId as persistThemeId, onPreferencesChange } from "@/modules/settings/store";
+import {
+  DEFAULT_THEME_ID,
+  getBuiltinTheme,
+  getDefaultTheme,
+  listBuiltinThemes,
+} from "@/modules/theme/themes";
 import type { Theme } from "@/modules/theme/types";
 
 export type { Theme };
@@ -43,7 +52,11 @@ function readFastMode(fallback: ThemeModePref): ThemeModePref {
 }
 
 function writeFastMode(t: ThemeModePref): void {
-  try { window.localStorage.setItem(FAST_PATH_KEY, t); } catch { /* ignore */ }
+  try {
+    window.localStorage.setItem(FAST_PATH_KEY, t);
+  } catch {
+    /* ignore */
+  }
 }
 
 function readFastThemeId(): string {
@@ -52,7 +65,11 @@ function readFastThemeId(): string {
 }
 
 function writeFastThemeId(id: string): void {
-  try { window.localStorage.setItem(FAST_PATH_THEME_ID, id); } catch { /* ignore */ }
+  try {
+    window.localStorage.setItem(FAST_PATH_THEME_ID, id);
+  } catch {
+    /* ignore */
+  }
 }
 
 function resolveTheme(id: string, custom: Theme[]): Theme {
@@ -77,8 +94,7 @@ export function ThemeProvider({ children, defaultMode = "system" }: ThemeProvide
     return () => mq.removeEventListener("change", onChange);
   }, []);
 
-  const resolvedMode: "dark" | "light" =
-    mode === "system" ? (systemDark ? "dark" : "light") : mode;
+  const resolvedMode: "dark" | "light" = mode === "system" ? (systemDark ? "dark" : "light") : mode;
 
   useEffect(() => {
     const root = document.documentElement;
@@ -117,10 +133,16 @@ export function ThemeProvider({ children, defaultMode = "system" }: ThemeProvide
       const un2 = await onPreferencesChange("themeId", (_k, v) => {
         if (active) setThemeIdState(v as string);
       });
-      return () => { un1(); un2(); };
+      return () => {
+        un1();
+        un2();
+      };
     };
     const cleanup = setup();
-    return () => { active = false; void cleanup.then((fn) => fn()); };
+    return () => {
+      active = false;
+      void cleanup.then((fn) => fn());
+    };
   }, []);
 
   const previewThemeId = useCallback((id: string | null) => {
@@ -141,11 +163,7 @@ export function ThemeProvider({ children, defaultMode = "system" }: ThemeProvide
     [mode, resolvedMode, themeId, customThemes, setMode, setThemeId, previewThemeId],
   );
 
-  return (
-    <ThemeProviderContext.Provider value={value}>
-      {children}
-    </ThemeProviderContext.Provider>
-  );
+  return <ThemeProviderContext.Provider value={value}>{children}</ThemeProviderContext.Provider>;
 }
 
 export function useTheme(): ThemeProviderState {

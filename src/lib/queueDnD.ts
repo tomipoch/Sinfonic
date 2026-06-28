@@ -22,10 +22,7 @@ export function encodeDragData(data: TrackDragData): string {
 export function decodeDragData(raw: string): TrackDragData | null {
   try {
     const parsed = JSON.parse(raw);
-    if (
-      Array.isArray(parsed.tracks) &&
-      typeof parsed.source === "string"
-    ) {
+    if (Array.isArray(parsed.tracks) && typeof parsed.source === "string") {
       return parsed as TrackDragData;
     }
     return null;

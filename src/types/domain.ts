@@ -137,9 +137,19 @@ export interface DiscoveredServer {
   serverId: string;
 }
 
+/**
+ * Closed union mirroring the Rust `ProviderKind` enum used by every
+ * saved / active server. The Rust side emits one of these three
+ * strings as `kind`; we narrow it here so the TS side rejects an
+ * unexpected value at compile time instead of silently passing
+ * "plex" / "" / whatever through the `KIND_ICONS` map and falling
+ * back to a placeholder.
+ */
+export type ServerKind = "jellyfin" | "subsonic" | "local";
+
 export interface ConnectedServer {
   serverId: string;
-  kind: string;
+  kind: ServerKind;
   name: string;
   baseUrl: string;
 }
@@ -160,10 +170,25 @@ export interface LocalLoginRequest {
   path: string;
 }
 
-export type LibrarySyncState = "started" | "complete" | "failed";
+/**
+ * Closed union mirroring the `state` field of the
+ * `library-sync-status` event emitted by the Rust backend during
+ * login and explicit `provider_sync_library` calls. Frontend
+ * consumers branch on this exhaustive set instead of falling
+ * back to a `| string` escape hatch (which silently defeats the
+ * point of a discriminated union).
+ */
+export type SyncState =
+  | "preparing"
+  | "started"
+  | "scanning"
+  | "indexing"
+  | "caching"
+  | "syncing"
+  | "complete";
 
 export interface LibrarySyncStatus {
   serverId: string | null;
-  state: LibrarySyncState | string;
+  state: SyncState;
   progress: number;
 }

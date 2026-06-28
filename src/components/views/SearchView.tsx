@@ -1,6 +1,6 @@
 // Phase 0 placeholder. Real implementation in Phase 8 (FTS5 search).
 
-import { useState, type FormEvent } from "react";
+import { type FormEvent, useState } from "react";
 import { search } from "@/lib/tauri";
 import type { SearchResults } from "@/types/domain";
 

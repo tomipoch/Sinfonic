@@ -3,8 +3,8 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
 import App from "@/App";
-import { ThemeProvider } from "@/modules/theme/ThemeProvider";
 import { Toaster } from "@/components/ui/Toaster";
+import { ThemeProvider } from "@/modules/theme/ThemeProvider";
 
 import "@/index.css";
 

@@ -22,12 +22,11 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
-
 import {
-  ServerConnectionForm,
   type ConnectionValues,
+  ServerConnectionForm,
 } from "@/components/dialogs/ServerConnectionForm";
+import { pickLocalFolder } from "@/lib/dialogs";
 import { useServerStore } from "@/stores/serverStore";
 
 interface Props {
@@ -80,12 +79,7 @@ export function LoginDialog({ open, onClose, onSubmit }: Props) {
 
   const handlePickLocalPath = async () => {
     try {
-      const picked = await openDialog({
-        directory: true,
-        multiple: false,
-        title: "Select your music folder",
-      });
-      return picked ?? undefined;
+      return await pickLocalFolder();
     } catch (err) {
       useServerStore.getState().clearError();
       throw err;
@@ -106,9 +100,7 @@ export function LoginDialog({ open, onClose, onSubmit }: Props) {
     >
       <div className="w-full max-w-lg rounded-xl border border-border bg-card shadow-2xl">
         <div className="flex items-center justify-between border-b border-border px-6 py-4">
-          <h2 className="text-base font-semibold text-foreground">
-            Add a new source
-          </h2>
+          <h2 className="text-base font-semibold text-foreground">Add a new source</h2>
           <button
             type="button"
             onClick={handleClose}

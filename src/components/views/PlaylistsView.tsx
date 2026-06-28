@@ -6,10 +6,10 @@ import { toast } from "sonner";
 import { useShallow } from "zustand/react/shallow";
 
 import { AlbumCover } from "@/components/ui/AlbumCover";
-import { usePlaylistsStore } from "@/stores/playlistsStore";
-import { useServerStore } from "@/stores/serverStore";
 import { extractError } from "@/lib/errors";
 import { formatDuration } from "@/lib/format";
+import { usePlaylistsStore } from "@/stores/playlistsStore";
+import { useServerStore } from "@/stores/serverStore";
 
 export function PlaylistsView() {
   const navigate = useNavigate();
@@ -53,13 +53,19 @@ export function PlaylistsView() {
     return (
       <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
         <div className="text-base font-medium text-foreground">No server connected</div>
-        <p className="text-sm text-muted-foreground">Connect a server in Settings to see playlists.</p>
+        <p className="text-sm text-muted-foreground">
+          Connect a server in Settings to see playlists.
+        </p>
       </div>
     );
   }
 
   if (loading && playlists.length === 0) {
-    return <p className="text-muted-foreground text-sm" role="status">Loading playlists…</p>;
+    return (
+      <p className="text-muted-foreground text-sm" role="status">
+        Loading playlists…
+      </p>
+    );
   }
 
   if (error) {
@@ -92,16 +98,25 @@ export function PlaylistsView() {
                 onChange={(e) => setNewName(e.currentTarget.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") void onCreate();
-                  if (e.key === "Escape") { setCreating(false); setNewName(""); }
+                  if (e.key === "Escape") {
+                    setCreating(false);
+                    setNewName("");
+                  }
                 }}
                 placeholder="Playlist name"
-                autoFocus
                 className="rounded-md border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted focus:border-primary focus:outline-none"
               />
               <button type="button" onClick={() => void onCreate()} className="btn-primary text-sm">
                 Create
               </button>
-              <button type="button" onClick={() => { setCreating(false); setNewName(""); }} className="btn-ghost text-sm">
+              <button
+                type="button"
+                onClick={() => {
+                  setCreating(false);
+                  setNewName("");
+                }}
+                className="btn-ghost text-sm"
+              >
                 Cancel
               </button>
             </div>
@@ -143,7 +158,8 @@ export function PlaylistsView() {
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium text-foreground">{pl.name}</div>
                 <div className="truncate text-xs text-muted-foreground">
-                  {pl.trackCount} {pl.trackCount === 1 ? "track" : "tracks"} · {formatDuration(pl.durationSeconds)}
+                  {pl.trackCount} {pl.trackCount === 1 ? "track" : "tracks"} ·{" "}
+                  {formatDuration(pl.durationSeconds)}
                 </div>
               </div>
             </Link>

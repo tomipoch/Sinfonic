@@ -4,9 +4,14 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-
-import { getSmartPlaylists, createSmartPlaylist, deleteSmartPlaylist, type SmartPlaylist, type CreateSmartPlaylistArgs } from "@/lib/tauri";
 import { extractError } from "@/lib/errors";
+import {
+  type CreateSmartPlaylistArgs,
+  createSmartPlaylist,
+  deleteSmartPlaylist,
+  getSmartPlaylists,
+  type SmartPlaylist,
+} from "@/lib/tauri";
 import { useServerStore } from "@/stores/serverStore";
 
 const FIELDS = [
@@ -75,7 +80,7 @@ export function SmartPlaylistsView() {
       const result = await getSmartPlaylists();
       setPlaylists(result);
     } catch (e) {
-      setError((e as Error).message ?? String(e));
+      setError(extractError(e, "couldn't load smart playlists"));
     } finally {
       setLoading(false);
     }
@@ -98,7 +103,15 @@ export function SmartPlaylistsView() {
     try {
       await createSmartPlaylist(form);
       toast.success("Smart playlist created");
-      setForm({ name: "", field: "title", operator: "contains", value: "", sortField: "title", sortDir: "asc", limitN: 50 });
+      setForm({
+        name: "",
+        field: "title",
+        operator: "contains",
+        value: "",
+        sortField: "title",
+        sortDir: "asc",
+        limitN: 50,
+      });
       void load();
     } catch (e) {
       toast.error(`Couldn't create: ${extractError(e, "unknown error")}`);
@@ -123,7 +136,9 @@ export function SmartPlaylistsView() {
     return (
       <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
         <div className="text-base font-medium text-foreground">No server connected</div>
-        <p className="text-sm text-muted-foreground">Connect a server in Settings to manage smart playlists.</p>
+        <p className="text-sm text-muted-foreground">
+          Connect a server in Settings to manage smart playlists.
+        </p>
       </div>
     );
   }
@@ -140,7 +155,9 @@ export function SmartPlaylistsView() {
         <h2 className="text-sm font-medium text-foreground">Create new smart playlist</h2>
         <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-2 items-end">
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground" htmlFor="sp-name">Name</label>
+            <label className="text-xs text-muted-foreground" htmlFor="sp-name">
+              Name
+            </label>
             <input
               id="sp-name"
               type="text"
@@ -151,29 +168,45 @@ export function SmartPlaylistsView() {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground" htmlFor="sp-field">Field</label>
+            <label className="text-xs text-muted-foreground" htmlFor="sp-field">
+              Field
+            </label>
             <select
               id="sp-field"
               value={form.field}
               onChange={(e) => setForm((f) => ({ ...f, field: e.target.value as typeof f.field }))}
               className="input w-full"
             >
-              {FIELDS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+              {FIELDS.map((f) => (
+                <option key={f.value} value={f.value}>
+                  {f.label}
+                </option>
+              ))}
             </select>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground" htmlFor="sp-op">Operator</label>
+            <label className="text-xs text-muted-foreground" htmlFor="sp-op">
+              Operator
+            </label>
             <select
               id="sp-op"
               value={form.operator}
-              onChange={(e) => setForm((f) => ({ ...f, operator: e.target.value as typeof f.operator }))}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, operator: e.target.value as typeof f.operator }))
+              }
               className="input w-full"
             >
-              {OPERATORS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              {OPERATORS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
             </select>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground" htmlFor="sp-value">Value</label>
+            <label className="text-xs text-muted-foreground" htmlFor="sp-value">
+              Value
+            </label>
             <input
               id="sp-value"
               type="text"
@@ -196,17 +229,29 @@ export function SmartPlaylistsView() {
           <span>Sort by:</span>
           <select
             value={form.sortField}
-            onChange={(e) => setForm((f) => ({ ...f, sortField: e.target.value as typeof f.sortField }))}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, sortField: e.target.value as typeof f.sortField }))
+            }
             className="input py-1 text-xs"
           >
-            {SORT_FIELDS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
+            {SORT_FIELDS.map((f) => (
+              <option key={f.value} value={f.value}>
+                {f.label}
+              </option>
+            ))}
           </select>
           <select
             value={form.sortDir}
-            onChange={(e) => setForm((f) => ({ ...f, sortDir: e.target.value as typeof f.sortDir }))}
+            onChange={(e) =>
+              setForm((f) => ({ ...f, sortDir: e.target.value as typeof f.sortDir }))
+            }
             className="input py-1 text-xs"
           >
-            {SORT_DIRS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+            {SORT_DIRS.map((d) => (
+              <option key={d.value} value={d.value}>
+                {d.label}
+              </option>
+            ))}
           </select>
           <span className="ml-2">Limit:</span>
           <select
@@ -214,7 +259,11 @@ export function SmartPlaylistsView() {
             onChange={(e) => setForm((f) => ({ ...f, limitN: Number(e.target.value) }))}
             className="input py-1 text-xs"
           >
-            {LIMIT_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
+            {LIMIT_OPTIONS.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
           </select>
           <span>tracks</span>
         </div>
@@ -222,17 +271,23 @@ export function SmartPlaylistsView() {
 
       {/* List */}
       {loading ? (
-        <p className="text-muted-foreground text-sm" role="status">Loading smart playlists…</p>
+        <p className="text-muted-foreground text-sm" role="status">
+          Loading smart playlists…
+        </p>
       ) : error ? (
         <div className="flex flex-col items-start gap-3 rounded-md border border-red-900 bg-red-950 p-6">
           <div className="text-base font-medium text-red-400">Failed to load</div>
           <p className="text-sm text-red-300">{error}</p>
-          <button type="button" onClick={() => void load()} className="btn-ghost text-sm">Retry</button>
+          <button type="button" onClick={() => void load()} className="btn-ghost text-sm">
+            Retry
+          </button>
         </div>
       ) : playlists.length === 0 ? (
         <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
           <div className="text-base font-medium text-foreground">No smart playlists yet</div>
-          <p className="text-sm text-muted-foreground">Fill in the form above to create your first one.</p>
+          <p className="text-sm text-muted-foreground">
+            Fill in the form above to create your first one.
+          </p>
         </div>
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(20rem,1fr))] gap-4">

@@ -2,18 +2,27 @@
 // cover, title, artist, year, and a per-card Play button. Sorts
 // alphabetically (case-insensitive). Reads from the library cache
 // populated by `useLibraryAutoLoad`.
+//
+// P1: real pagination. An IntersectionObserver sentinel at the end
+// of the grid triggers `loadMoreAlbums` until `albums.length`
+// reaches `albumsTotal`. The `useInfiniteScroll` hook handles the
+// observer; `loadingMoreAlbums` in the store guards re-entry.
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
 import { AlbumCover } from "@/components/ui/AlbumCover";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { useLibraryStore } from "@/stores/libraryStore";
-import { useServerStore } from "@/stores/serverStore";
-import { usePlaybackStore } from "@/stores/playbackStore";
-import { playAlbum } from "@/lib/tauri";
+import { PlayGlyph } from "@/components/ui/PlayGlyph";
+import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
+import { extractError } from "@/lib/errors";
 import { formatDuration } from "@/lib/format";
+import { compareNumberDesc, compareString } from "@/lib/sort";
+import { playAlbum } from "@/lib/tauri";
+import { useLibraryStore } from "@/stores/libraryStore";
+import { usePlaybackStore } from "@/stores/playbackStore";
+import { useServerStore } from "@/stores/serverStore";
 import type { Album } from "@/types/domain";
 
 type SortKey = "title" | "artist" | "year";
@@ -26,18 +35,19 @@ const SORT_KEYS: readonly { key: SortKey; label: string }[] = [
 
 function compareAlbums(a: Album, b: Album, key: SortKey): number {
   if (key === "year") {
-    const ya = a.year ?? 0;
-    const yb = b.year ?? 0;
-    return yb - ya;
+    return compareNumberDesc(a.year, b.year);
   }
-  return a[key].localeCompare(b[key], undefined, { sensitivity: "base" });
+  return compareString(a[key], b[key]);
 }
 
 export function AlbumsView() {
   const albums = useLibraryStore((s) => s.albums);
   const tracks = useLibraryStore((s) => s.tracks);
+  const albumsTotal = useLibraryStore((s) => s.albumsTotal);
   const loading = useLibraryStore((s) => s.loading);
   const loaded = useLibraryStore((s) => s.loaded);
+  const loadingMore = useLibraryStore((s) => s.loadingMoreAlbums);
+  const loadMoreAlbums = useLibraryStore((s) => s.loadMoreAlbums);
   const activeServerId = useServerStore((s) => s.activeServerId);
   const lastSync = useServerStore((s) => s.lastSync);
   const syncLibrary = useServerStore((s) => s.syncLibrary);
@@ -45,6 +55,14 @@ export function AlbumsView() {
 
   const [sortKey, setSortKey] = useState<SortKey>("title");
   const [busy, setBusy] = useState(false);
+
+  const hasMore = albums.length < albumsTotal;
+  const sentinelRef = useInfiniteScroll<HTMLDivElement>({
+    onIntersect: useCallback(() => {
+      void loadMoreAlbums();
+    }, [loadMoreAlbums]),
+    enabled: hasMore && !loadingMore && activeServerId !== null,
+  });
 
   const sorted = useMemo(
     () => [...albums].sort((a, b) => compareAlbums(a, b, sortKey)),
@@ -68,18 +86,14 @@ export function AlbumsView() {
       await playAlbum(queue);
       setIsPlaying(true);
     } catch (err) {
-      toast.error(`Couldn't play all: ${(err as Error).message ?? String(err)}`);
+      toast.error(`Couldn't play all: ${extractError(err, "unknown error")}`);
     } finally {
       setBusy(false);
     }
   };
 
   if (!activeServerId) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Connect a server to see your albums.
-      </p>
-    );
+    return <p className="text-sm text-muted-foreground">Connect a server to see your albums.</p>;
   }
 
   if (loading && albums.length === 0) {
@@ -166,14 +180,18 @@ export function AlbumsView() {
           </li>
         ))}
       </ul>
+      {hasMore && (
+        <div
+          ref={sentinelRef}
+          aria-hidden
+          className="flex h-12 items-center justify-center text-xs text-muted-foreground"
+        >
+          {loadingMore ? "Loading more…" : ""}
+        </div>
+      )}
+      <p className="text-xs text-muted-foreground">
+        Showing {albums.length} of {albumsTotal} albums
+      </p>
     </div>
-  );
-}
-
-function PlayGlyph() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor" aria-hidden>
-      <path d="M8 5v14l11-7z" />
-    </svg>
   );
 }

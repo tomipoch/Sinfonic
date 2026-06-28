@@ -1,18 +1,19 @@
 // PlaylistDetailView — header + track table for one playlist.
 // Actions: play all, rename, delete, remove individual tracks.
 
-import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
-import { toast } from "sonner";
-import { HugeiconsIcon } from "@hugeicons/react";
 import { Delete02Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { toast } from "sonner";
+import { useShallow } from "zustand/react/shallow";
 
 import { AlbumCover } from "@/components/ui/AlbumCover";
-import { TrackTable, type TrackColumn } from "@/components/ui/TrackTable";
-import { usePlaylistsStore } from "@/stores/playlistsStore";
-import { formatDuration } from "@/lib/format";
+import { type TrackColumn, TrackTable } from "@/components/ui/TrackTable";
 import { extractError } from "@/lib/errors";
+import { formatDuration } from "@/lib/format";
 import { playTrack } from "@/lib/tauri";
+import { usePlaylistsStore } from "@/stores/playlistsStore";
 import type { Track } from "@/types/domain";
 
 const COLUMNS: TrackColumn[] = [
@@ -27,9 +28,7 @@ const COLUMNS: TrackColumn[] = [
         label: "Remove from playlist",
         icon: <HugeiconsIcon icon={Delete02Icon} size={14} strokeWidth={1.75} />,
         onClick: () => {
-          window.dispatchEvent(
-            new CustomEvent("playlist:remove-track", { detail: { index } }),
-          );
+          window.dispatchEvent(new CustomEvent("playlist:remove-track", { detail: { index } }));
         },
         destructive: true,
         separator: true,
@@ -41,8 +40,33 @@ const COLUMNS: TrackColumn[] = [
 export function PlaylistDetailView() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { detail, detailLoading, detailError, loadPlaylistDetail, renamePlaylist, deletePlaylist, removePlaylistEntries, playPlaylist } =
-    usePlaylistsStore();
+
+  // `useShallow` keeps the selector's identity stable across store
+  // updates that don't actually change the picked fields. Without
+  // it, the view re-renders on every mutation anywhere in the
+  // playlists store (e.g. sidebar refreshes, other playlists
+  // loading) even when the active playlist is unchanged.
+  const {
+    detail,
+    detailLoading,
+    detailError,
+    loadPlaylistDetail,
+    renamePlaylist,
+    deletePlaylist,
+    removePlaylistEntries,
+    playPlaylist,
+  } = usePlaylistsStore(
+    useShallow((s) => ({
+      detail: s.detail,
+      detailLoading: s.detailLoading,
+      detailError: s.detailError,
+      loadPlaylistDetail: s.loadPlaylistDetail,
+      renamePlaylist: s.renamePlaylist,
+      deletePlaylist: s.deletePlaylist,
+      removePlaylistEntries: s.removePlaylistEntries,
+      playPlaylist: s.playPlaylist,
+    })),
+  );
 
   const [renaming, setRenaming] = useState(false);
   const [newName, setNewName] = useState("");
@@ -53,24 +77,30 @@ export function PlaylistDetailView() {
   }, [id, loadPlaylistDetail]);
 
   useEffect(() => {
-    // Listen for the menu's "Remove from playlist" action so the
-    // menu item (inside the TrackTable cell) can stay pure (no
-    // domain knowledge of the store).
+    // Listen for the menu's "Remove from playlist" action. The
+    // handler reads the current playlist id and entries from the
+    // store via `getState()` so it never captures a stale closure
+    // when the playlist is renamed or refetched mid-flight.
     const onRemove = (e: Event) => {
       const ce = e as CustomEvent<{ index: number }>;
-      void onRemoveTrack(ce.detail.index);
+      const current = usePlaylistsStore.getState().detail;
+      if (!current) return;
+      void removePlaylistEntries(current.playlist.id, [String(ce.detail.index)]);
     };
     window.addEventListener("playlist:remove-track", onRemove as EventListener);
     return () => window.removeEventListener("playlist:remove-track", onRemove as EventListener);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [removePlaylistEntries]);
 
   if (!id) {
     return <p className="text-muted-foreground text-sm">Missing playlist id.</p>;
   }
 
   if (detailLoading) {
-    return <p className="text-muted-foreground text-sm" role="status">Loading playlist…</p>;
+    return (
+      <p className="text-muted-foreground text-sm" role="status">
+        Loading playlist…
+      </p>
+    );
   }
 
   if (detailError || !detail) {
@@ -78,7 +108,11 @@ export function PlaylistDetailView() {
       <div className="flex flex-col items-start gap-3 rounded-md border border-red-900 bg-red-950 p-6">
         <div className="text-base font-medium text-red-400">Failed to load playlist</div>
         <p className="text-sm text-red-300">{detailError ?? "Playlist not found"}</p>
-        <button type="button" onClick={() => void loadPlaylistDetail(decodeURIComponent(id))} className="btn-ghost text-sm">
+        <button
+          type="button"
+          onClick={() => void loadPlaylistDetail(decodeURIComponent(id))}
+          className="btn-ghost text-sm"
+        >
           Retry
         </button>
       </div>
@@ -107,14 +141,6 @@ export function PlaylistDetailView() {
       toast.error(`Couldn't play track: ${extractError(e, "unknown error")}`);
     } finally {
       setBusy(false);
-    }
-  };
-
-  const onRemoveTrack = async (trackIndex: number) => {
-    try {
-      await removePlaylistEntries(playlist.id, [String(trackIndex)]);
-    } catch (e) {
-      toast.error(`Couldn't remove track: ${extractError(e, "unknown error")}`);
     }
   };
 
@@ -172,7 +198,6 @@ export function PlaylistDetailView() {
                   if (e.key === "Escape") setRenaming(false);
                 }}
                 onBlur={() => void onRename()}
-                autoFocus
                 className="rounded-md border border-border bg-muted px-2 py-1 text-2xl font-semibold text-foreground focus:border-primary focus:outline-none"
               />
             </div>
@@ -180,15 +205,24 @@ export function PlaylistDetailView() {
             <h1 className="truncate text-3xl font-semibold">{playlist.name}</h1>
           )}
           <div className="text-base text-muted-foreground">
-            {tracks.length} {tracks.length === 1 ? "track" : "tracks"} · {formatDuration(playlist.durationSeconds)}
+            {tracks.length} {tracks.length === 1 ? "track" : "tracks"} ·{" "}
+            {formatDuration(playlist.durationSeconds)}
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
-            <button type="button" onClick={onPlayAll} disabled={busy || tracks.length === 0} className="btn-primary">
+            <button
+              type="button"
+              onClick={onPlayAll}
+              disabled={busy || tracks.length === 0}
+              className="btn-primary"
+            >
               Play all
             </button>
             <button
               type="button"
-              onClick={() => { setRenaming(true); setNewName(playlist.name); }}
+              onClick={() => {
+                setRenaming(true);
+                setNewName(playlist.name);
+              }}
               className="btn-ghost text-sm"
             >
               Rename
@@ -203,7 +237,9 @@ export function PlaylistDetailView() {
       {tracks.length === 0 ? (
         <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
           <div className="text-base font-medium text-foreground">Playlist is empty</div>
-          <p className="text-sm text-muted-foreground">Drag tracks here or use the queue to add them.</p>
+          <p className="text-sm text-muted-foreground">
+            Drag tracks here or use the queue to add them.
+          </p>
         </div>
       ) : (
         <TrackTable

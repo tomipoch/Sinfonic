@@ -7,11 +7,10 @@
 // backend already started a sink reflects the real state instead
 // of the empty defaults.
 
-import { useEffect } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useEffect } from "react";
 
 import { getPlaybackState, getQueue } from "@/lib/tauri";
-import { makeLogger } from "@/utils/log";
 import { usePlaybackStore } from "@/stores/playbackStore";
 import { useQueueStore } from "@/stores/queueStore";
 import type {
@@ -19,6 +18,7 @@ import type {
   QueueSnapshotPayload,
   TrackChangedPayload,
 } from "@/types/domain";
+import { makeLogger } from "@/utils/log";
 
 const log = makeLogger("usePlaybackEvents");
 

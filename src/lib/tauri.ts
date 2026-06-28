@@ -1,10 +1,20 @@
-// Typed wrappers around `invoke` — the only place the frontend should
-// call into Rust.
+// Typed wrappers around `@tauri-apps/api/core`'s `invoke`.
 //
-// DRY: every IPC call goes through this file. The command names are
-// duplicated from `src-tauri/src/commands.rs`; that duplication is
-// caught by `cargo check` and `pnpm build` respectively, so it costs
-// nothing at runtime.
+// This is the **single place** the frontend calls into Rust. Two
+// reasons for centralising:
+//
+// 1. **DRY**: stores / hooks / components never call `invoke` directly
+//    — they import one of these typed wrappers. The wrapper owns the
+//    return type and the wire-format keys.
+// 2. **Documentation surface**: each wrapper is one line, but the
+//    behaviour around it (when does it throw? what does the
+//    `cached` flag on art responses mean?) lives in JSDoc next to
+//    the import. New contributors grep `lib/tauri.ts`, not every
+//    call site.
+//
+// The Rust command names (e.g. `"get_albums"`) are duplicated from
+// `src-tauri/src/commands.rs`. `cargo check` and `pnpm tsc` both
+// run on CI so the duplication is caught immediately.
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -25,6 +35,11 @@ import type {
 
 export type { ConnectedServer };
 
+/**
+ * Album with its full track list. Returned by `getAlbumDetail`.
+ * `null` is returned for a missing id so callers can render a
+ * not-found state without catching.
+ */
 interface AlbumDetail {
   album: Album;
   tracks: Track[];
@@ -32,35 +47,41 @@ interface AlbumDetail {
 
 // ─── Library ────────────────────────────────────────────────────
 
+/** Fetch a paginated slice of albums, sorted by Rust-side default. */
 export const getAlbums = (offset = 0, limit = 50) =>
   invoke<PagedResponse<Album>>("get_albums", { offset, limit });
 
+/** Fetch a paginated slice of artists. */
 export const getArtists = (offset = 0, limit = 50) =>
   invoke<PagedResponse<Artist>>("get_artists", { offset, limit });
 
+/** Fetch every genre (rarely paginated — usually < 200 entries). */
 export const getGenres = () => invoke<Genre[]>("get_genres");
 
+/** Fetch a paginated slice of tracks. */
 export const getTracks = (offset = 0, limit = 50) =>
   invoke<PagedResponse<Track>>("get_tracks", { offset, limit });
 
-export const getAlbum = (albumId: string) =>
-  invoke<Album | null>("get_album", { albumId });
+/** Single album by id; `null` if missing. */
+export const getAlbum = (albumId: string) => invoke<Album | null>("get_album", { albumId });
 
+/** Album + its tracks in a single round-trip. `null` if missing. */
 export const getAlbumDetail = (albumId: string) =>
   invoke<AlbumDetail | null>("get_album_detail", { albumId });
 
 // ─── Playback ───────────────────────────────────────────────────
 
-export const getPlaybackState = () =>
-  invoke<PlaybackStatePayload>("get_playback_state");
+/** Current transport state (playing, position, volume, etc.). */
+export const getPlaybackState = () => invoke<PlaybackStatePayload>("get_playback_state");
 
+/** Snapshot of the queue (entries + current index + repeat / shuffle). */
 export const getQueue = () => invoke<QueueSnapshot>("get_queue");
 
-export const playTrack = (track: Track) =>
-  invoke<string>("play_track", { track });
+/** Replace the queue with `[track]` and start playing it. Returns the new entry id. */
+export const playTrack = (track: Track) => invoke<string>("play_track", { track });
 
-export const playAlbum = (tracks: Track[]) =>
-  invoke<void>("play_album", { tracks });
+/** Replace the queue with the supplied tracks. */
+export const playAlbum = (tracks: Track[]) => invoke<void>("play_album", { tracks });
 
 export const pause = () => invoke<void>("pause");
 export const resume = () => invoke<void>("resume");
@@ -68,33 +89,37 @@ export const stop = () => invoke<void>("stop");
 export const next = () => invoke<void>("next");
 export const previous = () => invoke<void>("previous");
 
-export const seek = (positionSeconds: number) =>
-  invoke<void>("seek", { positionSeconds });
+/** Seek to `positionSeconds` in the current track. */
+export const seek = (positionSeconds: number) => invoke<void>("seek", { positionSeconds });
 
 // ─── Queue mutations ───────────────────────────────────────────
 
-export const queueRemove = (entryId: string) =>
-  invoke<boolean>("queue_remove", { entryId });
+/** Remove one entry by id. `false` if the id was already gone. */
+export const queueRemove = (entryId: string) => invoke<boolean>("queue_remove", { entryId });
 
-export const queueJumpTo = (entryId: string) =>
-  invoke<boolean>("queue_jump_to", { entryId });
+/** Skip playback to the given entry. `false` if the id was already gone. */
+export const queueJumpTo = (entryId: string) => invoke<boolean>("queue_jump_to", { entryId });
 
+/** Reorder one entry to a new index in the queue. */
 export const queueMove = (entryId: string, targetIndex: number) =>
   invoke<void>("queue_move", { entryId, targetIndex });
 
+/** Drop every entry from the queue. */
 export const queueClear = () => invoke<void>("queue_clear");
 
-// ─── Queue bulk + Playlist CRUD (Phase 9) ───────────────────────
+// ─── Queue bulk + Playlist CRUD ────────────────────────────────
 
-export const queueAddMany = (tracks: Track[]) =>
-  invoke<string[]>("queue_add_many", { tracks });
+/** Append every supplied track to the end of the queue. Returns the new entry ids. */
+export const queueAddMany = (tracks: Track[]) => invoke<string[]>("queue_add_many", { tracks });
 
+/** Insert every supplied track just after the currently-playing entry. */
 export const queuePlayNextMany = (tracks: Track[]) =>
   invoke<string[]>("queue_play_next_many", { tracks });
 
-export const playlistsGet = () =>
-  invoke<Playlist[]>("playlists_get");
+/** Every saved user playlist (metadata only). */
+export const playlistsGet = () => invoke<Playlist[]>("playlists_get");
 
+/** Playlist with its tracks. */
 export interface PlaylistDetail {
   playlist: Playlist;
   tracks: Track[];
@@ -103,6 +128,7 @@ export interface PlaylistDetail {
 export const playlistDetail = (playlistId: string) =>
   invoke<PlaylistDetail>("playlist_detail", { playlistId });
 
+/** Create a new playlist with the given name and tracks. Returns the new playlist id. */
 export const createPlaylist = (name: string, trackIds: string[]) =>
   invoke<string>("create_playlist", { name, trackIds });
 
@@ -121,7 +147,7 @@ export const removePlaylistEntries = (playlistId: string, entryIds: string[]) =>
 export const movePlaylistEntry = (playlistId: string, entryId: string, newIndex: number) =>
   invoke<void>("move_playlist_entry", { playlistId, entryId, newIndex });
 
-// ─── Favorites (Phase 9) ───────────────────────────────────────
+// ─── Favorites ─────────────────────────────────────────────────
 
 export interface FavoritesPayload {
   tracks: Track[];
@@ -138,20 +164,43 @@ export const setAlbumFavorite = (albumId: string, favorite: boolean) =>
 export const setArtistFavorite = (artistId: string, favorite: boolean) =>
   invoke<void>("set_artist_favorite", { artistId, favorite });
 
+/** Get every favorited track / album / artist in one call. */
 export const getFavorites = () => invoke<FavoritesPayload>("get_favorites");
 
-// ─── Smart Playlists (Phase 9) ────────────────────────────────
+// ─── Smart Playlists ──────────────────────────────────────────
 
+/** Field a smart-playlist rule can match against. */
 export type SmartPlaylistRuleField =
-  | "title" | "artist" | "album" | "genre"
-  | "duration_seconds" | "track_number" | "year" | "favorite" | "play_count";
+  | "title"
+  | "artist"
+  | "album"
+  | "genre"
+  | "duration_seconds"
+  | "track_number"
+  | "year"
+  | "favorite"
+  | "play_count";
 
+/** Comparison operator. Numeric operators auto-coerce both sides. */
 export type SmartPlaylistRuleOperator =
-  | "contains" | "starts_with" | "ends_with" | "equals"
-  | "less_than" | "greater_than" | "not_contains" | "not_equals";
+  | "contains"
+  | "starts_with"
+  | "ends_with"
+  | "equals"
+  | "less_than"
+  | "greater_than"
+  | "not_contains"
+  | "not_equals";
 
+/** Field the playlist results are sorted by. */
 export type SmartPlaylistSortField =
-  | "title" | "artist" | "album" | "duration_seconds" | "year" | "random" | "date_added";
+  | "title"
+  | "artist"
+  | "album"
+  | "duration_seconds"
+  | "year"
+  | "random"
+  | "date_added";
 
 export type SmartPlaylistSortDirection = "asc" | "desc";
 
@@ -188,29 +237,35 @@ export const createSmartPlaylist = (args: CreateSmartPlaylistArgs) =>
 export const deleteSmartPlaylist = (spId: string) =>
   invoke<void>("delete_smart_playlist", { spId });
 
+/** Evaluate the rule against the current library cache. */
 export const evaluateSmartPlaylist = (spId: string) =>
   invoke<Track[]>("evaluate_smart_playlist", { spId });
 
 // ─── Repeat / shuffle ───────────────────────────────────────────
 
-export const setRepeat = (repeat: "off" | "one" | "all") =>
-  invoke<void>("set_repeat", { repeat });
+/**
+ * Set the repeat mode.
+ *
+ * @param repeat `"off"` | `"all"` | `"one"`. `lib/repeat` owns the
+ *   cycle order (`off → all → one → off`).
+ */
+export const setRepeat = (repeat: "off" | "one" | "all") => invoke<void>("set_repeat", { repeat });
 
-export const setShuffle = (enabled: boolean) =>
-  invoke<void>("set_shuffle", { enabled });
+export const setShuffle = (enabled: boolean) => invoke<void>("set_shuffle", { enabled });
 
-// ─── Volume ─────────────────────────────────────────────────────
+// ─── Volume / EQ ───────────────────────────────────────────────
 
-export const setVolume = (volume: number) =>
-  invoke<void>("set_volume", { volume });
+/** Set the output volume. Backend clamps to [0, 1]. */
+export const setVolume = (volume: number) => invoke<void>("set_volume", { volume });
 
-export const setMuted = (muted: boolean) =>
-  invoke<void>("set_muted", { muted });
+export const setMuted = (muted: boolean) => invoke<void>("set_muted", { muted });
 
 export type { EqBandPayload } from "@/types/domain";
 
+/** Fetch the current 10-band EQ state. */
 export const getEqBands = () => invoke<EqBandPayload[]>("get_eq_bands");
 
+/** Set one band's gain. `hz` is the band's centre frequency in Hz; `gainDb` is in dB. */
 export const setEqBand = (hz: number, gainDb: number) =>
   invoke<void>("set_eq_band", { band: { hz, gainDb } });
 
@@ -218,38 +273,28 @@ export const resetEq = () => invoke<void>("reset_eq");
 
 // ─── Search ─────────────────────────────────────────────────────
 
+/** Full-text search across the cached library. `limit` defaults to 20 per category. */
 export const search = (query: string, limit = 20) =>
   invoke<SearchResults>("search", { query, limit });
 
 // ─── Provider (Jellyfin + Subsonic) ─────────────────────────────
 
-export const jellyfinDiscover = () =>
-  invoke<DiscoveredServer[]>("jellyfin_discover");
+/** Jellyfin SSDP / mDNS discovery — returns the servers on the LAN. */
+export const jellyfinDiscover = () => invoke<DiscoveredServer[]>("jellyfin_discover");
 
-export const jellyfinLogin = (params: {
-  baseUrl: string;
-  username: string;
-  password: string;
-}) =>
+export const jellyfinLogin = (params: { baseUrl: string; username: string; password: string }) =>
   invoke<ConnectedServer>("jellyfin_login", { request: params });
 
-export const subsonicLogin = (params: {
-  baseUrl: string;
-  username: string;
-  password: string;
-}) =>
+export const subsonicLogin = (params: { baseUrl: string; username: string; password: string }) =>
   invoke<ConnectedServer>("subsonic_login", { request: params });
 
 export const providerLogout = () => invoke<void>("provider_logout");
 
-export const providerDelete = (serverId: string) =>
-  invoke<void>("provider_delete", { serverId });
+export const providerDelete = (serverId: string) => invoke<void>("provider_delete", { serverId });
 
-export const providerServers = () =>
-  invoke<ConnectedServer[]>("provider_servers");
+export const providerServers = () => invoke<ConnectedServer[]>("provider_servers");
 
-export const providerActiveServer = () =>
-  invoke<string | null>("provider_active_server");
+export const providerActiveServer = () => invoke<string | null>("provider_active_server");
 
 export interface BootstrapState {
   ready: boolean;
@@ -257,16 +302,18 @@ export interface BootstrapState {
   savedServers: ConnectedServer[];
 }
 
+/** One-shot snapshot of every server-side field the boot flow needs. */
 export const bootstrapState = () => invoke<BootstrapState>("bootstrap_state");
 
 export const providerSetActive = (serverId: string) =>
   invoke<ConnectedServer>("provider_set_active", { serverId });
 
-export const providerSyncLibrary = () =>
-  invoke<void>("provider_sync_library");
+/** Kick off a full library rescan. Listen for `library-sync-status` events for progress. */
+export const providerSyncLibrary = () => invoke<void>("provider_sync_library");
 
-// ─── Local files (Phase 8) ─────────────────────────────────────
+// ─── Local files ─────────────────────────────────────────────
 
+/** Result of a local folder scan. Counts are the totals the backend found. */
 export interface LocalScanResult {
   serverId: string;
   serverName: string;
@@ -277,13 +324,14 @@ export interface LocalScanResult {
   errors: number;
 }
 
-export const localLogin = (path: string) =>
-  invoke<LocalScanResult>("local_login", { path });
+export const localLogin = (path: string) => invoke<LocalScanResult>("local_login", { path });
 
+/** Re-scan the active local folder. */
 export const localRescan = () => invoke<LocalScanResult>("local_rescan");
 
-// ─── Album art (Phase 7) ────────────────────────────────────────
+// ─── Album art ─────────────────────────────────────────────────
 
+/** Raw image bytes plus the Rust-side `cached` flag for diagnostics. */
 export interface AlbumArtResponse {
   bytes: number[];
   contentType: string;
@@ -311,10 +359,11 @@ export interface AlbumArtBulkResponse {
   notFound: string[];
 }
 
+/** Batch image fetch — prefer over many single `providerImageBytes` calls. */
 export const providerImageBytesBulk = (requests: AlbumArtRequest[]) =>
   invoke<AlbumArtBulkResponse>("provider_image_bytes_bulk", { requests });
 
-// ─── Last.fm (Phase 7) ─────────────────────────────────────────
+// ─── Last.fm ──────────────────────────────────────────────────
 
 export interface LastFmStatus {
   configured: boolean;
@@ -322,6 +371,7 @@ export interface LastFmStatus {
   username: string | null;
 }
 
+/** Connect a Last.fm account. The password is md5-hashed server-side before use. */
 export const lastfmConnect = (params: {
   apiKey: string;
   apiSecret: string;
@@ -335,7 +385,6 @@ export const lastfmConnect = (params: {
     password: params.password,
   });
 
-export const lastfmDisconnect = () =>
-  invoke<LastFmStatus>("lastfm_disconnect");
+export const lastfmDisconnect = () => invoke<LastFmStatus>("lastfm_disconnect");
 
 export const lastfmStatus = () => invoke<LastFmStatus>("lastfm_status");

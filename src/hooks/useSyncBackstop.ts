@@ -32,13 +32,5 @@ export function useSyncBackstop(
     if (sync.done || sync.error) return;
     const timer = window.setTimeout(onStale, timeoutMs);
     return () => window.clearTimeout(timer);
-  }, [
-    onStale,
-    timeoutMs,
-    sync.state,
-    sync.progress,
-    sync.done,
-    sync.active,
-    sync.error,
-  ]);
+  }, [onStale, timeoutMs, sync.state, sync.progress, sync.done, sync.active, sync.error]);
 }

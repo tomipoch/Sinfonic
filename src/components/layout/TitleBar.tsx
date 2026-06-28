@@ -12,8 +12,6 @@
 // tauri.windows.conf.json / tauri.linux.conf.json) and paint our own
 // minimize/maximize/close buttons on the right.
 
-import { IS_LINUX, IS_MAC, IS_WINDOWS } from "@/lib/platform";
-import { cn } from "@/lib/cn";
 import {
   ArrowLeft01Icon,
   ArrowRight01Icon,
@@ -28,6 +26,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { ReactNode } from "react";
 import { useHistoryNav } from "@/hooks/useHistoryNav";
+import { cn } from "@/lib/cn";
+import { IS_LINUX, IS_MAC, IS_WINDOWS } from "@/lib/platform";
 
 type Props = {
   sidebarCollapsed: boolean;
@@ -54,19 +54,11 @@ export function TitleBar({ sidebarCollapsed, onToggleSidebar }: Props) {
           <HugeiconsIcon icon={SidebarLeftIcon} size={18} strokeWidth={1.75} />
         </TitleBarButton>
 
-        <TitleBarButton
-          ariaLabel="Go back"
-          onClick={goBack}
-          disabled={!canGoBack}
-        >
+        <TitleBarButton ariaLabel="Go back" onClick={goBack} disabled={!canGoBack}>
           <HugeiconsIcon icon={ArrowLeft01Icon} size={15} strokeWidth={1.75} />
         </TitleBarButton>
 
-        <TitleBarButton
-          ariaLabel="Go forward"
-          onClick={goForward}
-          disabled={!canGoForward}
-        >
+        <TitleBarButton ariaLabel="Go forward" onClick={goForward} disabled={!canGoForward}>
           <HugeiconsIcon icon={ArrowRight01Icon} size={15} strokeWidth={1.75} />
         </TitleBarButton>
       </div>
@@ -83,10 +75,7 @@ export function TitleBar({ sidebarCollapsed, onToggleSidebar }: Props) {
           <HugeiconsIcon icon={Search01Icon} size={15} strokeWidth={1.75} />
         </TitleBarButton>
 
-        <TitleBarButton
-          ariaLabel="Settings"
-          onClick={() => void invoke("open_settings_window")}
-        >
+        <TitleBarButton ariaLabel="Settings" onClick={() => void invoke("open_settings_window")}>
           <HugeiconsIcon icon={Settings01Icon} size={15} strokeWidth={1.75} />
         </TitleBarButton>
 
@@ -101,18 +90,12 @@ function WindowsControls() {
 
   return (
     <div className="ml-2 flex shrink-0 items-center">
-      <TitleBarButton
-        ariaLabel="Minimize"
-        onClick={() => void appWindow.minimize()}
-      >
+      <TitleBarButton ariaLabel="Minimize" onClick={() => void appWindow.minimize()}>
         <svg viewBox="0 0 12 12" className="h-2.5 w-2.5" fill="currentColor" aria-hidden>
           <rect y="5" width="12" height="1.5" />
         </svg>
       </TitleBarButton>
-      <TitleBarButton
-        ariaLabel="Maximize"
-        onClick={() => void appWindow.toggleMaximize()}
-      >
+      <TitleBarButton ariaLabel="Maximize" onClick={() => void appWindow.toggleMaximize()}>
         <HugeiconsIcon icon={SquareIcon} size={12} strokeWidth={1.75} />
       </TitleBarButton>
       <TitleBarButton
