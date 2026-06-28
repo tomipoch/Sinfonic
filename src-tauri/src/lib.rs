@@ -115,35 +115,46 @@ pub fn run() {
             // TrackEnded advances the queue according to the repeat mode
             // — repeat-one re-plays the current track, repeat-all wraps,
             // repeat-off either advances or stops at the end of the queue.
+            //
+            // Both branches hop into the tokio runtime because the
+            // callback itself is sync (it runs on the poller thread,
+            // not in an async executor). `StateChanged` needs to
+            // synchronise the AppState's `PlaybackState` mirror with
+            // the AudioPlayer atomics before emitting, and that lock
+            // may briefly contend with IPC commands.
             player.set_event_callback(move |event| {
                 match event {
-                    sinfonic_playback::PlayerEvent::StateChanged {
-                        track_id,
-                        position_seconds,
-                        is_playing,
-                        volume,
-                        muted,
-                        duration_seconds,
-                    } => {
-                        let payload = PlaybackStatePayload {
-                            is_playing,
-                            position_seconds,
-                            duration_seconds,
-                            volume,
-                            muted,
-                            ..Default::default()
-                        };
-                            let _ = app_handle.emit(
+                    sinfonic_playback::PlayerEvent::StateChanged { .. } => {
+                        let handle = callback_handle.clone();
+                        let app = app_handle.clone();
+                        tauri::async_runtime::spawn(async move {
+                            // Sync the AudioPlayer atomics into the
+                            // AppState's PlaybackState mirror so the
+                            // payload reflects the live rodio
+                            // position (and not whatever
+                            // `playback.start(...)` last wrote).
+                            // Reading `repeat` / `shuffle` from the
+                            // queue here also keeps the 4 Hz stream
+                            // consistent with the user's toggle
+                            // state — earlier we used
+                            // `..Default::default()` for those
+                            // fields, which silently reset them to
+                            // `off` / false every poll.
+                            let payload = {
+                                let mut state_ref = handle.lock().await;
+                                let player = state_ref.player.clone();
+                                player.sync_to_playback(&mut state_ref.playback);
+                                PlaybackStatePayload::from_state(
+                                    &state_ref.playback,
+                                    &state_ref.queue,
+                                )
+                            };
+                            let _ = app.emit(
                                 EventName::PlaybackStateChanged.as_str(),
                                 &payload,
                             );
-                            // `track-position` was a no-listener zombie:
-                            // the frontend reads position from the
-                            // `playback-state-changed` payload above,
-                            // so emitting a separate event four times a
-                            // second was pure overhead.
-                            let _ = track_id;
-                        }
+                        });
+                    }
                     sinfonic_playback::PlayerEvent::TrackEnded { track_id: _ } => {
                         // Hop into the tokio runtime for the queue
                         // mutation + provider stream resolution.

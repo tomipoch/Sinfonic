@@ -230,13 +230,16 @@ const TransportControls = memo(function TransportControls({ queueLength }: Trans
 
   const onTogglePlay = () => {
     if (actionBusy !== null) return;
-    setActionBusy("toggle");
     const nextPlaying = !isPlaying;
+    // Optimistic update — the backend takes a few hundred ms to
+    // resolve the IPC + flip the rodio sink. Reflecting the click
+    // immediately feels responsive even when the backend is slow.
+    usePlaybackStore.getState().setIsPlaying(nextPlaying);
+    setActionBusy("toggle");
     (isPlaying ? pause() : resume())
-      .then(() => {
-        usePlaybackStore.getState().setIsPlaying(nextPlaying);
-      })
       .catch((err) => {
+        // Roll back the optimistic flip if the command failed.
+        usePlaybackStore.getState().setIsPlaying(isPlaying);
         toast.error(`Playback: ${extractError(err, "unknown error")}`);
       })
       .finally(() => setActionBusy(null));
@@ -244,6 +247,10 @@ const TransportControls = memo(function TransportControls({ queueLength }: Trans
 
   const onPrev = () => {
     if (actionBusy !== null) return;
+    // Optimistic flip to paused — the backend will keep us honest via
+    // the next `playback-state-changed` event after the rodio sink
+    // actually swaps onto the previous track.
+    usePlaybackStore.getState().setIsPlaying(false);
     setActionBusy("prev");
     previous()
       .catch((err) => toast.error(`Previous: ${extractError(err, "unknown error")}`))
@@ -252,6 +259,7 @@ const TransportControls = memo(function TransportControls({ queueLength }: Trans
 
   const onNext = () => {
     if (actionBusy !== null) return;
+    usePlaybackStore.getState().setIsPlaying(false);
     setActionBusy("next");
     next()
       .catch((err) => toast.error(`Next: ${extractError(err, "unknown error")}`))

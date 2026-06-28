@@ -200,11 +200,20 @@ pub async fn play_album(
     }
     let first = tracks[0].clone();
 
+    // 1) Queue + emit early so the UI updates immediately. Streaming
+    //    can take several seconds on Subsonic, and the user shouldn't
+    //    stare at a stale UI while we wait for the network.
     {
         let mut guard = state.lock().await;
         guard.queue.play_now(&tracks);
     }
+    emit_queue_changed(&app, state.inner()).await;
+    emit_track_changed(&app, state.inner(), &first).await;
 
+    // 2) Resolve and start playback on the rodio sink for the first
+    //    track. Subsequent tracks in the album stay in the queue;
+    //    pressing next/previous will route through
+    //    `play_entry_via_provider` so the sink swaps too.
     let stream_uri = resolve_stream_uri(&state, &first).await;
     let fallback_duration = first.duration_seconds;
     let actual_duration = match stream_uri.as_deref() {
@@ -225,9 +234,6 @@ pub async fn play_album(
         let mut guard = state.lock().await;
         guard.playback.start(actual_duration);
     }
-
-    emit_queue_changed(&app, state.inner()).await;
-    emit_track_changed(&app, state.inner(), &first).await;
     emit_playback_state(&app, state.inner()).await;
     Ok(())
 }
@@ -268,6 +274,11 @@ pub async fn play_track(
     app: tauri::AppHandle,
     state: SharedState<'_>,
 ) -> Result<QueueEntryId, String> {
+    // 1) Register the track in the queue *and* emit `queue-changed` +
+    //    `track-changed` immediately. Resolving the stream URI can
+    //    take a while on slow Subsonic servers (up to the HTTP
+    //    timeout), so the UI should reflect the user's click before
+    //    we go off and block on the network.
     let id = {
         let mut guard = state.lock().await;
         let ids = guard.queue.play_now(std::slice::from_ref(&track));
@@ -275,12 +286,13 @@ pub async fn play_track(
             .next()
             .ok_or_else(|| "play_track: empty track list".to_string())?
     };
+    emit_queue_changed(&app, state.inner()).await;
+    emit_track_changed(&app, state.inner(), &track).await;
 
-    // Resolve the stream URI from the active Jellyfin provider and
-    // hand it to the rodio-backed AudioPlayer. If no provider is
-    // connected we still register the track in the queue (so the UI
-    // shows it as "next") but skip the actual audio — useful for
-    // offline browsing and tests.
+    // 2) Resolve the stream URI from the active provider. If no
+    //    provider is connected we still register the track in the
+    //    queue (so the UI shows it as "next") but skip the actual
+    //    audio — useful for offline browsing and tests.
     let stream_uri = resolve_stream_uri(&state, &track).await;
     let track_id = track.id.clone();
     let duration_seconds = match stream_uri.as_deref() {
@@ -294,18 +306,16 @@ pub async fn play_track(
                 }
             }
         }
-        None => 0,
+        None => track.duration_seconds,
     };
 
-    // Sync the in-memory PlaybackState mirror so commands that read
-    // it (without going through the player) stay consistent.
+    // 3) Update the in-memory playback mirror and emit the latest
+    //    state so the UI's seekbar catches up once the rodio sink
+    //    finally starts producing samples.
     {
         let mut guard = state.lock().await;
         guard.playback.start(duration_seconds);
     }
-
-    emit_queue_changed(&app, state.inner()).await;
-    emit_track_changed(&app, state.inner(), &track).await;
     emit_playback_state(&app, state.inner()).await;
     Ok(id)
 }
@@ -521,25 +531,22 @@ pub async fn next(
         let mut guard = state.lock().await;
         guard.queue.next_track().cloned()
     };
-    if let Some(entry) = next_entry {
-        let duration = entry.duration_seconds;
-        {
-            let mut guard = state.lock().await;
-            guard.playback.start(duration);
+    match next_entry {
+        Some(entry) => {
+            play_entry_via_provider(&app, &state, entry).await;
+            Ok(())
         }
-        emit_track_changed_from_entry(&app, &entry);
-        emit_queue_changed(&app, state.inner()).await;
-        emit_playback_state(&app, state.inner()).await;
-    } else {
-        // Queue ended — stop the playhead and the rodio sink.
-        {
-            let mut guard = state.lock().await;
-            guard.player.stop();
-            guard.playback.stop();
+        None => {
+            // Queue ended — stop the playhead and the rodio sink.
+            {
+                let mut guard = state.lock().await;
+                guard.player.stop();
+                guard.playback.stop();
+            }
+            emit_playback_state(&app, state.inner()).await;
+            Ok(())
         }
-        emit_playback_state(&app, state.inner()).await;
     }
-    Ok(())
 }
 
 #[tauri::command]
@@ -551,17 +558,13 @@ pub async fn previous(
         let mut guard = state.lock().await;
         guard.queue.previous_track().cloned()
     };
-    if let Some(entry) = prev_entry {
-        let duration = entry.duration_seconds;
-        {
-            let mut guard = state.lock().await;
-            guard.playback.start(duration);
+    match prev_entry {
+        Some(entry) => {
+            play_entry_via_provider(&app, &state, entry).await;
+            Ok(())
         }
-        emit_track_changed_from_entry(&app, &entry);
-        emit_queue_changed(&app, state.inner()).await;
-        emit_playback_state(&app, state.inner()).await;
+        None => Ok(()),
     }
-    Ok(())
 }
 
 #[tauri::command]
@@ -2596,45 +2599,7 @@ pub async fn advance_queue_on_end(state: &Arc<Mutex<AppState>>, app: &tauri::App
     };
 
     match action {
-        AdvanceAction::Play(entry) => {
-            let stream_uri = {
-                let guard = state.lock().await;
-                let provider_guard = guard.provider.lock().await;
-                let provider = provider_guard.as_ref();
-                match provider {
-                    Some(provider) => provider
-                        .stream(&entry.track_id)
-                        .await
-                        .ok()
-                        .map(|d| d.uri().to_string()),
-                    None => None,
-                }
-            };
-            let duration_seconds = match stream_uri.as_deref() {
-                Some(uri) => {
-                    let guard = state.lock().await;
-                    match guard.player.play(entry.track_id.clone(), uri).await {
-                        Ok(d) => d,
-                        Err(e) => {
-                            tracing::warn!(
-                                target: "sinfonic::playback",
-                                error = %e,
-                                "auto-advance player.play failed"
-                            );
-                            entry.duration_seconds
-                        }
-                    }
-                }
-                None => entry.duration_seconds,
-            };
-            {
-                let mut guard = state.lock().await;
-                guard.playback.start(duration_seconds);
-            }
-            emit_queue_changed(app, state).await;
-            emit_track_changed_from_entry(app, &entry);
-            emit_playback_state(app, state).await;
-        }
+        AdvanceAction::Play(entry) => play_entry_via_provider(app, state, entry).await,
         AdvanceAction::Stop => {
             {
                 let mut guard = state.lock().await;
@@ -2645,6 +2610,63 @@ pub async fn advance_queue_on_end(state: &Arc<Mutex<AppState>>, app: &tauri::App
             emit_playback_state(app, state).await;
         }
     }
+}
+
+/// Switch the rodio sink to a new track without touching the queue
+/// (the caller is expected to have already mutated `queue.next_track`/
+/// or `queue.previous_track` / `queue.play_now`).
+///
+/// Pipeline: resolve the stream URI through the active provider →
+/// hand it to the rodio-backed AudioPlayer → update the playback
+/// mirror → emit `queue-changed`, `track-changed`, and
+/// `playback-state-changed` so every listener sees the same snapshot.
+///
+/// Failures degrade gracefully: if the provider can't resolve a
+/// stream URI (or `player.play` errors out) we still emit the events
+/// with the cached `duration_seconds` so the seekbar reflects the
+/// right length and the UI doesn't hang.
+async fn play_entry_via_provider(
+    app: &tauri::AppHandle,
+    state: &Arc<Mutex<AppState>>,
+    entry: sinfonic_domain::QueueEntry,
+) {
+    let stream_uri = {
+        let guard = state.lock().await;
+        let provider_guard = guard.provider.lock().await;
+        let provider = provider_guard.as_ref();
+        match provider {
+            Some(provider) => provider
+                .stream(&entry.track_id)
+                .await
+                .ok()
+                .map(|d| d.uri().to_string()),
+            None => None,
+        }
+    };
+    let duration_seconds = match stream_uri.as_deref() {
+        Some(uri) => {
+            let guard = state.lock().await;
+            match guard.player.play(entry.track_id.clone(), uri).await {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "sinfonic::playback",
+                        error = %e,
+                        "play_entry_via_provider: player.play failed"
+                    );
+                    entry.duration_seconds
+                }
+            }
+        }
+        None => entry.duration_seconds,
+    };
+    {
+        let mut guard = state.lock().await;
+        guard.playback.start(duration_seconds);
+    }
+    emit_queue_changed(app, state).await;
+    emit_track_changed_from_entry(app, &entry);
+    emit_playback_state(app, state).await;
 }
 
 async fn emit_playback_state(app: &tauri::AppHandle, state: &Arc<Mutex<AppState>>) {

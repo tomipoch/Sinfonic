@@ -30,6 +30,8 @@ pub mod mapping;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use tokio::sync::Mutex as AsyncMutex;
+
 use async_trait::async_trait;
 use futures::stream::{StreamExt, TryStreamExt};
 use sinfonic_domain::{
@@ -96,6 +98,13 @@ pub struct SubsonicProvider {
     /// the UI can show a progress bar. When `None` (tests, library
     /// users) sync still works but no events fire.
     app_handle: Option<tauri::AppHandle>,
+    /// Cache of `(album_id, song_count)` pairs pulled from
+    /// `getAlbumList2` during the first `tracks()` call. Subsequent
+    /// page requests reuse the cached hints instead of refetching the
+    /// whole album list — `getAlbumList2` paginates up to the server
+    /// cap (500 by default), so 5000 albums = 10+ HTTP round-trips we
+    /// otherwise repeat on every page request.
+    album_hints_cache: Arc<AsyncMutex<Option<Vec<AlbumHint>>>>,
 }
 
 impl SubsonicProvider {
@@ -120,6 +129,7 @@ impl SubsonicProvider {
             identity,
             capabilities,
             app_handle: None,
+            album_hints_cache: Arc::new(AsyncMutex::new(None)),
         })
     }
 
@@ -385,12 +395,23 @@ impl MusicProvider for SubsonicProvider {
         //    Emit `sync-progress` after each album completes.
         // 3. Concatenate and slice exactly to the requested window.
         //
-        // Step 1 is repeated for every page request — there is no
-        // per-`SubsonicProvider` cache because the trait can't expose
-        // one. The cost is acceptable: a 5000-track library fetches
-        // ~10 album-list pages of 500 albums each, ~50 KB total, in a
-        // fraction of a second.
-        let album_hints = self.collect_all_album_hints().await?;
+        // Step 1 is cached at the provider level — the trait can't
+        // expose a cache but `SubsonicProvider` is shared by reference
+        // (it's wrapped in `Arc<dyn MusicProvider>`), so subsequent
+        // page requests hit the in-memory hints instead of repeating
+        // 10 HTTP round-trips per call. The cache lives for the
+        // lifetime of the provider; it is cleared when the user
+        // logs out and a new instance is built.
+        let album_hints: Vec<AlbumHint> = {
+            let mut cache = self.album_hints_cache.lock().await;
+            if let Some(hints) = cache.as_ref() {
+                hints.clone()
+            } else {
+                let fresh = self.collect_all_album_hints().await?;
+                *cache = Some(fresh.clone());
+                fresh
+            }
+        };
         let total_tracks: usize = album_hints.iter().map(|a| a.song_count as usize).sum();
 
         if album_hints.is_empty() || request.offset >= total_tracks {

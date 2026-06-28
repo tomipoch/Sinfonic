@@ -30,8 +30,8 @@ use sinfonic_source::ProviderError;
 use super::auth::AuthParams;
 use super::dto::SubsonicEnvelope;
 
-pub(super) const SUBSONIC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-pub(super) const SUBSONIC_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+pub(super) const SUBSONIC_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+pub(super) const SUBSONIC_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 pub(super) const SUBSONIC_JSON_MAX_BYTES: usize = 16 * 1024 * 1024;
 pub(super) const SUBSONIC_IMAGE_MAX_BYTES: usize = 32 * 1024 * 1024;
 pub(super) const SUBSONIC_API_VERSION: &str = "1.16.1";
@@ -54,6 +54,8 @@ impl SubsonicClient {
             .connect_timeout(SUBSONIC_CONNECT_TIMEOUT)
             .timeout(SUBSONIC_REQUEST_TIMEOUT)
             .user_agent(format!("{SUBSONIC_CLIENT_NAME}/0.1.0"))
+            .pool_max_idle_per_host(16)
+            .tcp_nodelay(true)
             .build()
             .map_err(|e| ProviderError::Network(format!("reqwest build failed: {e}")))?;
         Ok(Self { http, base_url })
