@@ -394,6 +394,7 @@ where
             .spawn(move || inner.run_poller())
             .expect("spawn playback poller");
         *self.inner.poller.lock() = Some(handle);
+        tracing::debug!(target: "sinfonic::playback::poller", "start_poller: thread spawned");
     }
 
     fn stop_poller(&self) {
@@ -402,7 +403,10 @@ where
             // Detach rather than join: the poller checks the stop flag
             // every `POLL_INTERVAL`, so a few hundred ms after stop
             // signal it will exit on its own.
+            tracing::debug!(target: "sinfonic::playback::poller", "stop_poller: dropping handle");
             drop(handle);
+        } else {
+            tracing::debug!(target: "sinfonic::playback::poller", "stop_poller: no handle");
         }
     }
 }
@@ -423,8 +427,11 @@ impl Drop for AudioPlayer {
 
 impl Inner {
     fn run_poller(self: Arc<Self>) {
+        tracing::debug!(target: "sinfonic::playback::poller", "run_poller: thread started");
+        let mut tick_count: u64 = 0;
         while !self.poller_stop.load(Ordering::Relaxed) {
             std::thread::sleep(POLL_INTERVAL);
+            tick_count += 1;
 
             let snapshot = {
                 let sink_slot = self.sink.lock();
@@ -438,8 +445,21 @@ impl Inner {
             };
 
             let Some((pos, empty, paused)) = snapshot else {
+                if tick_count % 10 == 1 {
+                    tracing::debug!(target: "sinfonic::playback::poller", tick = tick_count, "run_poller: no sink");
+                }
                 continue;
             };
+            if tick_count % 10 == 1 {
+                tracing::debug!(
+                    target: "sinfonic::playback::poller",
+                    tick = tick_count,
+                    pos = pos.as_secs(),
+                    paused,
+                    empty,
+                    "run_poller: snapshot"
+                );
+            }
 
             let position_seconds = pos.as_secs() as u32;
             self.position_seconds.store(position_seconds, Ordering::Relaxed);
@@ -472,6 +492,7 @@ impl Inner {
                 });
             }
         }
+        tracing::debug!(target: "sinfonic::playback::poller", "run_poller: thread exiting");
     }
 }
 

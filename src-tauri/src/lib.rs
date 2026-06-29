@@ -148,10 +148,14 @@ pub fn run() {
                                 state_ref.queue.repeat(),
                                 state_ref.queue.shuffle_enabled(),
                             ),
-                            Err(_) => (
-                                RepeatMode::Off,
-                                false,
-                            ),
+                            Err(e) => {
+                                tracing::debug!(
+                                    target: "sinfonic::playback::poller",
+                                    error = %e,
+                                    "playback-state-changed: try_lock failed, using defaults"
+                                );
+                                (RepeatMode::Off, false)
+                            }
                         };
                         let payload = PlaybackStatePayload {
                             is_playing,
@@ -162,10 +166,29 @@ pub fn run() {
                             repeat,
                             shuffle,
                         };
-                        let _ = app_handle.emit(
+                        // Sample every 4th tick to avoid log spam — at
+                        // 4 Hz that's once per second, enough to confirm
+                        // the emitter is live without flooding stderr.
+                        if position_seconds % 4 == 0 {
+                            tracing::debug!(
+                                target: "sinfonic::playback::poller",
+                                pos = position_seconds,
+                                dur = duration_seconds,
+                                "playback-state-changed: about to emit"
+                            );
+                        }
+                        match app_handle.emit(
                             EventName::PlaybackStateChanged.as_str(),
                             &payload,
-                        );
+                        ) {
+                            Ok(()) => {}
+                            Err(e) => tracing::warn!(
+                                target: "sinfonic::playback::poller",
+                                error = %e,
+                                pos = position_seconds,
+                                "playback-state-changed: emit failed"
+                            ),
+                        }
                     }
                     sinfonic_playback::PlayerEvent::TrackEnded { track_id: _ } => {
                         let handle = callback_handle.clone();
