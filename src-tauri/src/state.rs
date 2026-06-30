@@ -8,7 +8,7 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use sinfonic_domain::{PlaybackState, QueueEngine, ServerId};
+use sinfonic_domain::{QueueEngine, ServerId};
 use sinfonic_lastfm::LastFmClient;
 use sinfonic_library::{AlbumArtCache, Store};
 use sinfonic_playback::AudioPlayer;
@@ -19,26 +19,23 @@ use tokio::sync::Mutex;
 /// The single bag of state shared across all Tauri commands.
 ///
 /// `QueueEngine` owns *what plays next* (entries, order, repeat,
-/// shuffle). `PlaybackState` owns *what's playing right now* (is it
-/// playing, where the playhead is, volume). `AudioPlayer` owns the
-/// rodio audio engine — its cached state shadows `PlaybackState` but
-/// it's the source of truth for `position_seconds`. `Store` owns the
-/// on-disk SQLite cache of the library. `provider` holds the
-/// optional active music provider (Jellyfin, Subsonic, …) — set by
-/// the corresponding login command, cleared by `provider_logout`.
-/// Keeping them separate follows the layering: queue is a content
-/// concern, playback is a runtime concern, library is a persistence
-/// concern, provider is an external-service concern.
+/// shuffle). `AudioPlayer` owns the rodio audio engine and is the
+/// single source of truth for runtime playback state (position,
+/// volume, mute, is-playing). `Store` owns the on-disk SQLite cache
+/// of the library. `provider` holds the optional active music
+/// provider (Jellyfin, Subsonic, …) — set by the corresponding login
+/// command, cleared by `provider_logout`. Keeping them separate
+/// follows the layering: queue is a content concern, playback is a
+/// runtime concern, library is a persistence concern, provider is an
+/// external-service concern.
 #[derive(Clone)]
 pub struct AppState {
     /// The current playback queue.
     pub queue: QueueEngine,
-    /// The current playback state (playhead, volume, mute). Mirrors
-    /// the AudioPlayer's cached state — kept here so the domain type
-    /// stays self-contained for tests and queue logic.
-    pub playback: PlaybackState,
     /// Rodio-backed audio engine. Owns the actual sink that produces
-    /// sound. Cheap to clone (just an Arc bump).
+    /// sound and is the single source of truth for runtime playback
+    /// state (`cached_state()` reflects the rodio sink). Cheap to
+    /// clone (just an Arc bump).
     pub player: Arc<AudioPlayer>,
     /// The SQLite library cache. Shared by clone, so cloning the
     /// handle is cheap (just a pool clone).
@@ -79,7 +76,6 @@ impl Default for AppState {
         let secrets = KeyringStore::new("sinfonic");
         Self {
             queue: QueueEngine::default(),
-            playback: PlaybackState::default(),
             player: Arc::new(AudioPlayer::new()),
             library: Store::open_memory().expect("open_memory never fails"),
             provider: Arc::new(Mutex::new(None)),
@@ -103,7 +99,6 @@ impl AppState {
         let library = Store::open(path).map_err(|e| e.to_string())?;
         Ok(Self {
             queue: QueueEngine::default(),
-            playback: PlaybackState::default(),
             player: Arc::new(AudioPlayer::new()),
             library,
             provider: Arc::new(Mutex::new(None)),
@@ -127,7 +122,6 @@ impl AppState {
             AlbumArtCache::open(album_art_dir.as_ref()).map_err(|e| e.to_string())?;
         Ok(Self {
             queue: QueueEngine::default(),
-            playback: PlaybackState::default(),
             player: Arc::new(AudioPlayer::new()),
             library,
             provider: Arc::new(Mutex::new(None)),

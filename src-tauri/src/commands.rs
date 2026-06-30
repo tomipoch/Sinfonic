@@ -231,8 +231,7 @@ pub async fn play_album(
     };
 
     {
-        let mut guard = state.lock().await;
-        guard.playback.start(actual_duration);
+        let _ = actual_duration;
     }
     emit_playback_state(&app, state.inner()).await;
     Ok(())
@@ -311,10 +310,10 @@ pub async fn play_track(
 
     // 3) Update the in-memory playback mirror and emit the latest
     //    state so the UI's seekbar catches up once the rodio sink
-    //    finally starts producing samples.
+    //    finally starts producing samples. The AudioPlayer is the source
+    //    of truth; no mirror needed.
     {
-        let mut guard = state.lock().await;
-        guard.playback.start(duration_seconds);
+        let _ = duration_seconds;
     }
     emit_playback_state(&app, state.inner()).await;
     Ok(id)
@@ -450,7 +449,6 @@ pub async fn queue_clear(app: tauri::AppHandle, state: SharedState<'_>) -> Resul
         let mut guard = state.lock().await;
         guard.queue.clear();
         guard.player.stop();
-        guard.playback.stop();
     }
     emit_queue_changed(&app, state.inner()).await;
     emit_playback_state(&app, state.inner()).await;
@@ -489,9 +487,8 @@ pub async fn set_shuffle(
 #[tauri::command]
 pub async fn pause(app: tauri::AppHandle, state: SharedState<'_>) -> Result<(), String> {
     {
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         guard.player.pause();
-        guard.playback.pause();
     }
     emit_playback_state(&app, state.inner()).await;
     Ok(())
@@ -500,9 +497,8 @@ pub async fn pause(app: tauri::AppHandle, state: SharedState<'_>) -> Result<(), 
 #[tauri::command]
 pub async fn resume(app: tauri::AppHandle, state: SharedState<'_>) -> Result<(), String> {
     {
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         guard.player.resume();
-        guard.playback.resume();
     }
     emit_playback_state(&app, state.inner()).await;
     Ok(())
@@ -514,9 +510,8 @@ pub async fn stop(
     state: SharedState<'_>,
 ) -> Result<(), String> {
     {
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         guard.player.stop();
-        guard.playback.stop();
     }
     emit_playback_state(&app, state.inner()).await;
     Ok(())
@@ -537,11 +532,10 @@ pub async fn next(
             Ok(())
         }
         None => {
-            // Queue ended — stop the playhead and the rodio sink.
+            // Queue ended — stop the rodio sink.
             {
-                let mut guard = state.lock().await;
+                let guard = state.lock().await;
                 guard.player.stop();
-                guard.playback.stop();
             }
             emit_playback_state(&app, state.inner()).await;
             Ok(())
@@ -574,9 +568,8 @@ pub async fn seek(
     state: SharedState<'_>,
 ) -> Result<(), String> {
     {
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         guard.player.seek(position_seconds);
-        guard.playback.seek(position_seconds);
     }
     emit_playback_state(&app, state.inner()).await;
     Ok(())
@@ -589,9 +582,8 @@ pub async fn set_volume(
     state: SharedState<'_>,
 ) -> Result<(), String> {
     {
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         guard.player.set_volume(volume);
-        guard.playback.set_volume(volume);
     }
     emit_playback_state(&app, state.inner()).await;
     Ok(())
@@ -604,9 +596,8 @@ pub async fn set_muted(
     state: SharedState<'_>,
 ) -> Result<(), String> {
     {
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         guard.player.set_muted(muted);
-        guard.playback.set_muted(muted);
     }
     emit_playback_state(&app, state.inner()).await;
     Ok(())
@@ -1203,9 +1194,8 @@ pub async fn local_login(
     // Stop any currently-playing audio — the stream URI of the old
     // provider will stop resolving after we swap providers.
     {
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         guard.player.stop();
-        guard.playback.stop();
     }
 
     // Phase 2: walk the directory tree and read metadata tags. This
@@ -1387,7 +1377,6 @@ pub async fn provider_logout(
             .map(|p| p.identity().server_id.clone());
         *guard.provider.lock().await = None;
         guard.player.stop();
-        guard.playback.stop();
         // The queue tracks from the previous provider would never
         // resolve against the next one — clear it so the UI doesn't
         // show ghost entries from a session that just ended.
@@ -1568,7 +1557,6 @@ pub async fn provider_set_active(
         tracing::debug!(target: "sinfonic::commands", "stopping playback and swapping provider");
         let mut guard = state.lock().await;
         guard.player.stop();
-        guard.playback.stop();
         guard.queue.clear();
         *guard.provider.lock().await = Some(provider.clone());
         tracing::debug!(target: "sinfonic::commands", "provider swapped; persisting last_active_server_id");
@@ -1854,7 +1842,6 @@ pub async fn provider_delete(
         let mut guard = state.lock().await;
         *guard.provider.lock().await = None;
         guard.player.stop();
-        guard.playback.stop();
         // Drop the queue too — same rationale as `provider_set_active`:
         // ghost entries from a session that's gone shouldn't linger.
         guard.queue.clear();
@@ -2602,9 +2589,8 @@ pub async fn advance_queue_on_end(state: &Arc<Mutex<AppState>>, app: &tauri::App
         AdvanceAction::Play(entry) => play_entry_via_provider(app, state, entry).await,
         AdvanceAction::Stop => {
             {
-                let mut guard = state.lock().await;
+                let guard = state.lock().await;
                 guard.player.stop();
-                guard.playback.stop();
             }
             emit_queue_changed(app, state).await;
             emit_playback_state(app, state).await;
@@ -2643,7 +2629,7 @@ async fn play_entry_via_provider(
             None => None,
         }
     };
-    let duration_seconds = match stream_uri.as_deref() {
+    let _ = match stream_uri.as_deref() {
         Some(uri) => {
             let guard = state.lock().await;
             match guard.player.play(entry.track_id.clone(), uri).await {
@@ -2660,10 +2646,6 @@ async fn play_entry_via_provider(
         }
         None => entry.duration_seconds,
     };
-    {
-        let mut guard = state.lock().await;
-        guard.playback.start(duration_seconds);
-    }
     emit_queue_changed(app, state).await;
     emit_track_changed_from_entry(app, &entry);
     emit_playback_state(app, state).await;
@@ -2672,7 +2654,7 @@ async fn play_entry_via_provider(
 async fn emit_playback_state(app: &tauri::AppHandle, state: &Arc<Mutex<AppState>>) {
     let payload = {
         let guard = state.lock().await;
-        PlaybackStatePayload::from_state(&guard.playback, &guard.queue)
+        PlaybackStatePayload::from_state(&guard.player.cached_state(), &guard.queue)
     };
     let _ = app.emit(EventName::PlaybackStateChanged.as_str(), payload);
 }

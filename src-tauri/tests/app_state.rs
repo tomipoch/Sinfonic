@@ -1,10 +1,12 @@
-//! Integration tests for `AppState` + `QueueEngine` + `PlaybackState`.
+//! Integration tests for `AppState` + `QueueEngine`.
 //!
 //! Lives in the app crate (not in `sinfonic-domain`) because it
-//! exercises the wiring of the three layers without going through
-//! Tauri's IPC plumbing.
+//! exercises the wiring of the layers without going through
+//! Tauri's IPC plumbing. Playback runtime state lives on the
+//! `AudioPlayer` (see `sinfonic-playback`), not on `AppState`, so
+//! these tests focus on queue + library concerns.
 
-use sinfonic_domain::{Album, AlbumId, ArtistId, PlaybackState, RepeatMode, ServerId, Track, TrackId};
+use sinfonic_domain::{Album, AlbumId, ArtistId, RepeatMode, ServerId, Track, TrackId};
 use sinfonic_lib::AppState;
 
 fn track(id: &str, title: &str, dur: u32) -> Track {
@@ -28,7 +30,9 @@ fn app_state_default_is_empty_and_paused() {
     let s = AppState::new();
     assert!(s.queue.is_empty());
     assert!(s.queue.current().is_none());
-    assert_eq!(s.playback, PlaybackState::default());
+    // Runtime playback state lives on the AudioPlayer; with no sink
+    // attached, cached_state reports is_playing=false.
+    assert!(!s.player.cached_state().is_playing);
 }
 
 #[test]
@@ -38,30 +42,25 @@ fn app_state_with_server_starts_with_that_server() {
 }
 
 #[test]
-fn play_now_populates_queue_and_starts_playback() {
+fn play_now_populates_queue_without_starting_audio() {
     let mut s = AppState::new();
     let tracks = vec![track("a", "A", 180), track("b", "B", 200)];
     s.queue.play_now(&tracks);
 
     assert_eq!(s.queue.len(), 2);
     assert_eq!(s.queue.current().unwrap().title, "A");
-    assert!(!s.playback.is_playing, "playback is not auto-started by play_now");
-
-    s.playback.start(s.queue.current().unwrap().duration_seconds);
-    assert!(s.playback.is_playing);
-    assert_eq!(s.playback.duration_seconds, 180);
+    // play_now mutates the queue but does not start the rodio sink;
+    // the audio engine stays paused until a `player.play` call lands.
+    assert!(!s.player.cached_state().is_playing);
 }
 
 #[test]
-fn repeat_and_shuffle_are_queue_concerns_not_playback() {
+fn repeat_and_shuffle_are_queue_concerns() {
     let mut s = AppState::new();
     s.queue.set_repeat(RepeatMode::All);
     s.queue.set_shuffle(true);
     assert_eq!(s.queue.repeat(), RepeatMode::All);
     assert!(s.queue.shuffle_enabled());
-    // Playback state holds the runtime fields only; mode state lives on the engine.
-    assert!(!s.playback.is_playing);
-    assert_eq!(s.playback, PlaybackState::default());
 }
 
 #[test]
