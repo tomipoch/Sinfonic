@@ -19,8 +19,8 @@
 //!   `playback-state-changed` every 250ms and `track-changed` on end.
 
 use std::sync::Arc;
-use tauri::{Emitter, EventTarget, Manager};
-use tokio::sync::{mpsc, Mutex};
+use tauri::Manager;
+use tokio::sync::Mutex;
 
 mod commands;
 mod events;
@@ -34,23 +34,6 @@ pub use events::{
 };
 pub use state::AppState;
 pub use sinfonic_domain::RepeatMode;
-
-/// Thin envelope around the AudioPlayer events. The poller thread
-/// can't `await` the AppState mutex or call `app.emit` synchronously
-/// without risking a stall (we measured: `app.emit` blocks the poller
-/// on the first event, stopping the 4 Hz stream). Instead the poller
-/// `try_send`s the envelope through an mpsc channel; a dedicated
-/// tokio task drains it and does the actual emit on the runtime.
-enum PlayerEventEnvelope {
-    StateChanged {
-        position_seconds: u32,
-        is_playing: bool,
-        volume: f32,
-        muted: bool,
-        duration_seconds: u32,
-    },
-    TrackEnded,
-}
 
 /// Re-exported so integration tests can drive the sync pipeline
 /// without going through Tauri.
@@ -106,10 +89,10 @@ pub fn run() {
             };
 
             // Wrap the state in Arc<Mutex<>> first so the player's
-            // event callback can reach the queue + provider for
-            // auto-advance. The callback is Fn + Send + Sync + 'static
-            // so it must own its handles outright — we clone Arc handles
-            // and the AppHandle before handing the closure off.
+            // event callback can reach the queue for auto-advance.
+            // The callback is Fn + Send + Sync + 'static so it must
+            // own its handles outright — we clone Arc handles and the
+            // AppHandle before handing the closure off.
             //
             // The Tauri setup closure is `Fn` (not async) so we cannot
             // `await` the outer Mutex here. The AudioPlayer reference
@@ -126,149 +109,27 @@ pub fn run() {
             // can co-exist.
             let setup_app_handle = app_handle.clone();
 
-            // Wire the AudioPlayer's events to Tauri. The player emits
-            // PlayerEvent::StateChanged on every position poll (forwarded
-            // to the webview as `playback-state-changed`) and
-            // PlayerEvent::TrackEnded when the rodio sink runs dry.
-            // TrackEnded advances the queue according to the repeat mode
-            // — repeat-one re-plays the current track, repeat-all wraps,
-            // repeat-off either advances or stops at the end of the queue.
+            // Wire the AudioPlayer's events to Tauri. The player
+            // only fires `PlayerEvent::TrackEnded` from the poller
+            // thread now — every other state change (play / pause /
+            // resume / stop / seek / set_volume / set_muted) emits
+            // `playback-state-changed` synchronously from the
+            // command that triggered it via `emit_playback_state`.
             //
-            // The callback runs on the poller thread (NOT an async
-            // executor) so we cannot `.await` directly. Two ways to
-            // get the event onto the wire:
-            //   1. `app.emit` synchronously from the poller thread —
-            //      works, but if the WebView is slow to drain its
-            //      event queue, `emit` blocks and stalls the poller
-            //      (the 4 Hz snapshot thread stops emitting).
-            //   2. Hand the event off to a dedicated tokio task via an
-            //      mpsc channel — `try_send` is non-blocking so the
-            //      poller keeps running even if the WebView backs up.
-            //      The receiver task does the actual `app.emit` and
-            //      IPC mutations without competing for the poller.
-            //
-            // We use (2) because (1) is what we just measured: the
-            // poller emits exactly one event then blocks on
-            // `app.emit`, never reaching tick=2.
-            let (event_tx, mut event_rx) = mpsc::channel::<PlayerEventEnvelope>(64);
-            let emit_handle = callback_handle.clone();
-            let emit_app = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                while let Some(env) = event_rx.recv().await {
-                    match env {
-                        PlayerEventEnvelope::StateChanged {
-                            position_seconds,
-                            is_playing,
-                            volume,
-                            muted,
-                            duration_seconds,
-                        } => {
-                            // Read the queue's repeat/shuffle under a
-                            // non-blocking try_lock. Falls back to
-                            // defaults if the lock is held; IPC
-                            // handlers emit a follow-up event on the
-                            // main thread once the lock is free, so
-                            // the UI catches up within one poll.
-                            let (repeat, shuffle) = match emit_handle.try_lock() {
-                                Ok(state_ref) => (
-                                    state_ref.queue.repeat(),
-                                    state_ref.queue.shuffle_enabled(),
-                                ),
-                                Err(e) => {
-                                    tracing::debug!(
-                                        target: "sinfonic::playback::poller",
-                                        error = %e,
-                                        "playback-state-changed: try_lock failed, using defaults"
-                                    );
-                                    (RepeatMode::Off, false)
-                                }
-                            };
-                            let payload = PlaybackStatePayload {
-                                is_playing,
-                                position_seconds,
-                                duration_seconds,
-                                volume,
-                                muted,
-                                repeat,
-                                shuffle,
-                            };
-                            // Hop the emit onto its own task so the
-                            // mpsc receiver never blocks on
-                            // `app.emit`. We measured the WebView
-                            // hook (which Tauri uses on macOS)
-                            // wedging after one or two events —
-                            // when the receiver task is inlined
-                            // here, the channel fills, the poller
-                            // starts dropping envelopes at 64,
-                            // and the position bar stops updating.
-                            // Spinning out a task per envelope is
-                            // cheap (Tauri's runtime is
-                            // multi-threaded) and keeps the
-                            // receiver loop unblocked.
-                            //
-                            // We also route via `emit_to(app)`
-                            // rather than `emit` (Any). `emit`
-                            // serialises the event for every
-                            // registered target even when there
-                            // is only one window; `emit_to(app)`
-                            // walks the app-level listeners once
-                            // and skips the per-target fan-out.
-                            let app = emit_app.clone();
-                            let event = EventName::PlaybackStateChanged.as_str().to_string();
-                            tauri::async_runtime::spawn(async move {
-                                if let Err(e) =
-                                    app.emit_to(EventTarget::app(), event.as_str(), &payload)
-                                {
-                                    tracing::warn!(
-                                        target: "sinfonic::playback::poller",
-                                        error = %e,
-                                        pos = position_seconds,
-                                        "playback-state-changed: emit failed"
-                                    );
-                                }
-                            });
-                        }
-                        PlayerEventEnvelope::TrackEnded => {
-                            let handle = emit_handle.clone();
-                            let app = emit_app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                commands::advance_queue_on_end(&handle, &app).await;
-                            });
-                        }
-                    }
-                }
-                tracing::debug!(
-                    target: "sinfonic::playback::poller",
-                    "playback event emitter: channel closed, exiting"
-                );
-            });
-            let tx = event_tx.clone();
+            // The hot path is therefore free of `app.emit` and
+            // unaffected by WKWebView's event-channel quirks on
+            // macOS, which were the root cause of the position bar
+            // freezing after the first snapshot. The frontend polls
+            // `get_playback_state` every 250 ms to redraw the seek
+            // bar; that's an IPC round-trip, not an event push.
+            let advance_handle = callback_handle.clone();
             player.set_event_callback(move |event| {
-                let envelope = match event {
-                    sinfonic_playback::PlayerEvent::StateChanged {
-                        position_seconds,
-                        is_playing,
-                        volume,
-                        muted,
-                        duration_seconds,
-                        ..
-                    } => PlayerEventEnvelope::StateChanged {
-                        position_seconds,
-                        is_playing,
-                        volume,
-                        muted,
-                        duration_seconds,
-                    },
-                    sinfonic_playback::PlayerEvent::TrackEnded { .. } => {
-                        PlayerEventEnvelope::TrackEnded
-                    }
-                };
-                if let Err(e) = tx.try_send(envelope) {
-                    tracing::warn!(
-                        target: "sinfonic::playback::poller",
-                        error = %e,
-                        "playback event channel full; dropping event"
-                    );
+                if let sinfonic_playback::PlayerEvent::TrackEnded { .. } = event {
+                    let handle = advance_handle.clone();
+                    let app = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        commands::advance_queue_on_end(&handle, &app).await;
+                    });
                 }
             });
 

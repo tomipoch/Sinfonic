@@ -74,10 +74,12 @@ unsafe impl Sync for OutputStreamHolder {}
 
 /// How often the position-poller thread reads the rodio Sink.
 ///
-/// Temporarily 1 s (1 Hz) while we diagnose whether the WKWebView
-/// event channel is the bottleneck. Re-raise to 250 ms once the
-/// dispatch path is confirmed non-blocking.
-const POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// The poller only updates the cached `position_seconds` and fires
+/// the track-end detector — it does NOT emit a state-change event.
+/// Runtime state for the UI is read on demand via `cached_state()`
+/// or polled by the frontend via `get_playback_state`, so a slow
+/// WKWebView event channel can't stall the position counter.
+const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Events the AudioPlayer emits to the rest of the app. Wired to Tauri
 /// events in `lib.rs::run`.
@@ -427,10 +429,8 @@ impl Drop for AudioPlayer {
 impl Inner {
     fn run_poller(self: Arc<Self>) {
         tracing::debug!(target: "sinfonic::playback::poller", "run_poller: thread started");
-        let mut tick_count: u64 = 0;
         while !self.poller_stop.load(Ordering::Relaxed) {
             std::thread::sleep(POLL_INTERVAL);
-            tick_count += 1;
 
             let snapshot = {
                 let sink_slot = self.sink.lock();
@@ -444,28 +444,20 @@ impl Inner {
             };
 
             let Some((pos, empty, paused)) = snapshot else {
-                if tick_count % 10 == 1 {
-                    tracing::debug!(target: "sinfonic::playback::poller", tick = tick_count, "run_poller: no sink");
-                }
                 continue;
             };
-            if tick_count % 10 == 1 {
-                tracing::debug!(
-                    target: "sinfonic::playback::poller",
-                    tick = tick_count,
-                    pos = pos.as_secs(),
-                    paused,
-                    empty,
-                    "run_poller: snapshot"
-                );
-            }
 
             let position_seconds = pos.as_secs() as u32;
             self.position_seconds.store(position_seconds, Ordering::Relaxed);
             self.is_paused.store(paused, Ordering::Relaxed);
 
             // Track-end detection: sink is empty + we have a track +
-            // we never fired TrackEnded for it + not paused.
+            // we never fired TrackEnded for it + not paused. This is
+            // the ONLY event the poller fires — every other state
+            // transition is driven from the public command methods
+            // (play / pause / resume / seek / set_volume / set_muted
+            // / stop), which already emit PlayerEvent::StateChanged
+            // synchronously from the calling thread.
             let track_id = self.track_id.lock().clone();
             if empty && !paused {
                 if let Some(track_id) = track_id {
@@ -477,18 +469,6 @@ impl Inner {
                 }
             } else {
                 self.ended_fired.store(false, Ordering::Relaxed);
-            }
-
-            // Emit state.
-            if let Some(cb) = self.on_event.get() {
-                cb(PlayerEvent::StateChanged {
-                    track_id: self.track_id.lock().clone(),
-                    position_seconds,
-                    is_playing: !paused && self.track_id.lock().is_some(),
-                    volume: *self.volume.lock(),
-                    muted: *self.muted.lock(),
-                    duration_seconds: self.duration_seconds.load(Ordering::Relaxed),
-                });
             }
         }
         tracing::debug!(target: "sinfonic::playback::poller", "run_poller: thread exiting");
@@ -574,6 +554,50 @@ mod tests {
         player.stop();
         std::thread::sleep(StdDuration::from_millis(50));
         assert!(counter.load(Ordering::Relaxed) > 0);
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// The position poller does NOT emit `StateChanged` events on
+    /// every tick — only the public command methods do, plus
+    /// `TrackEnded` on sink dry. This regression test exists because
+    /// the previous implementation fired `StateChanged` four times a
+    /// second from the poller thread, which on macOS wedged
+    /// Tauri's `app.emit` hook and froze the seek bar after the
+    /// first snapshot.
+    #[test]
+    fn poller_does_not_emit_state_changed() {
+        use std::sync::atomic::AtomicU32;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build runtime");
+        let player = AudioPlayer::new();
+        let state_count = Arc::new(AtomicU32::new(0));
+        let track_count = Arc::new(AtomicU32::new(0));
+        let s = state_count.clone();
+        let t = track_count.clone();
+        player.set_event_callback(move |event| match event {
+            PlayerEvent::StateChanged { .. } => {
+                s.fetch_add(1, Ordering::Relaxed);
+            }
+            PlayerEvent::TrackEnded { .. } => {
+                t.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+        // Drive the player through several poller ticks without
+        // invoking any command method. None of those ticks should
+        // see a StateChanged event.
+        let path = tmp_wav(1);
+        let _ = runtime.block_on(player.play(TrackId::from("track-noemit"), path.to_str().unwrap()));
+        let before = state_count.load(Ordering::Relaxed);
+        std::thread::sleep(StdDuration::from_millis(700));
+        let after = state_count.load(Ordering::Relaxed);
+        assert_eq!(
+            before, after,
+            "poller fired StateChanged unexpectedly: before={before} after={after}"
+        );
+        player.stop();
+        std::thread::sleep(StdDuration::from_millis(50));
         std::fs::remove_file(&path).ok();
     }
 
