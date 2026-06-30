@@ -19,7 +19,7 @@
 //!   `playback-state-changed` every 250ms and `track-changed` on end.
 
 use std::sync::Arc;
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, EventTarget, Manager};
 use tokio::sync::{mpsc, Mutex};
 
 mod commands;
@@ -192,17 +192,41 @@ pub fn run() {
                                 repeat,
                                 shuffle,
                             };
-                            if let Err(e) = emit_app.emit(
-                                EventName::PlaybackStateChanged.as_str(),
-                                &payload,
-                            ) {
-                                tracing::warn!(
-                                    target: "sinfonic::playback::poller",
-                                    error = %e,
-                                    pos = position_seconds,
-                                    "playback-state-changed: emit failed"
-                                );
-                            }
+                            // Hop the emit onto its own task so the
+                            // mpsc receiver never blocks on
+                            // `app.emit`. We measured the WebView
+                            // hook (which Tauri uses on macOS)
+                            // wedging after one or two events —
+                            // when the receiver task is inlined
+                            // here, the channel fills, the poller
+                            // starts dropping envelopes at 64,
+                            // and the position bar stops updating.
+                            // Spinning out a task per envelope is
+                            // cheap (Tauri's runtime is
+                            // multi-threaded) and keeps the
+                            // receiver loop unblocked.
+                            //
+                            // We also route via `emit_to(app)`
+                            // rather than `emit` (Any). `emit`
+                            // serialises the event for every
+                            // registered target even when there
+                            // is only one window; `emit_to(app)`
+                            // walks the app-level listeners once
+                            // and skips the per-target fan-out.
+                            let app = emit_app.clone();
+                            let event = EventName::PlaybackStateChanged.as_str().to_string();
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(e) =
+                                    app.emit_to(EventTarget::app(), event.as_str(), &payload)
+                                {
+                                    tracing::warn!(
+                                        target: "sinfonic::playback::poller",
+                                        error = %e,
+                                        pos = position_seconds,
+                                        "playback-state-changed: emit failed"
+                                    );
+                                }
+                            });
                         }
                         PlayerEventEnvelope::TrackEnded => {
                             let handle = emit_handle.clone();
