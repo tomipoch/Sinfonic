@@ -20,6 +20,7 @@ interface SeekBarProps {
 }
 
 const WAVE_PATH = `M 0 6 ${"q 3.125 -6 6.25 0 ".repeat(16).trimEnd()}`;
+const LINE_PATH = "M 0 6 L 100 6";
 
 export function SeekBar({ enabled }: SeekBarProps) {
   const { snapshot, seekTo } = usePlaybackContext();
@@ -54,9 +55,10 @@ export function SeekBar({ enabled }: SeekBarProps) {
           aria-hidden
         >
           <path
-            d={WAVE_PATH}
+            d={LINE_PATH}
             fill="none"
-            stroke="var(--muted)"
+            stroke="var(--muted-foreground)"
+            strokeOpacity={0.4}
             strokeWidth={1}
             vectorEffect="non-scaling-stroke"
           />
