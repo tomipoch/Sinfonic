@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 
 mod commands;
 mod events;
@@ -34,6 +34,23 @@ pub use events::{
 };
 pub use state::AppState;
 pub use sinfonic_domain::RepeatMode;
+
+/// Thin envelope around the AudioPlayer events. The poller thread
+/// can't `await` the AppState mutex or call `app.emit` synchronously
+/// without risking a stall (we measured: `app.emit` blocks the poller
+/// on the first event, stopping the 4 Hz stream). Instead the poller
+/// `try_send`s the envelope through an mpsc channel; a dedicated
+/// tokio task drains it and does the actual emit on the runtime.
+enum PlayerEventEnvelope {
+    StateChanged {
+        position_seconds: u32,
+        is_playing: bool,
+        volume: f32,
+        muted: bool,
+        duration_seconds: u32,
+    },
+    TrackEnded,
+}
 
 /// Re-exported so integration tests can drive the sync pipeline
 /// without going through Tauri.
@@ -117,18 +134,93 @@ pub fn run() {
             // — repeat-one re-plays the current track, repeat-all wraps,
             // repeat-off either advances or stops at the end of the queue.
             //
-            // The callback itself runs on the poller thread (which is
-            // NOT an async executor) so we can't `.await` the AppState
-            // mutex here without spinning up a tokio task each poll.
-            // The hot path therefore mirrors the AudioPlayer atomics
-            // directly into the payload and asks the AppState for
-            // `repeat` / `shuffle` via a non-blocking try_lock — if
-            // the lock is contended we fall back to defaults. IPC
-            // handlers that mutate repeat/shuffle emit a follow-up
-            // `playback-state-changed` from the main thread, so the
-            // UI catches up within one poll.
+            // The callback runs on the poller thread (NOT an async
+            // executor) so we cannot `.await` directly. Two ways to
+            // get the event onto the wire:
+            //   1. `app.emit` synchronously from the poller thread —
+            //      works, but if the WebView is slow to drain its
+            //      event queue, `emit` blocks and stalls the poller
+            //      (the 4 Hz snapshot thread stops emitting).
+            //   2. Hand the event off to a dedicated tokio task via an
+            //      mpsc channel — `try_send` is non-blocking so the
+            //      poller keeps running even if the WebView backs up.
+            //      The receiver task does the actual `app.emit` and
+            //      IPC mutations without competing for the poller.
+            //
+            // We use (2) because (1) is what we just measured: the
+            // poller emits exactly one event then blocks on
+            // `app.emit`, never reaching tick=2.
+            let (event_tx, mut event_rx) = mpsc::channel::<PlayerEventEnvelope>(64);
+            let emit_handle = callback_handle.clone();
+            let emit_app = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                while let Some(env) = event_rx.recv().await {
+                    match env {
+                        PlayerEventEnvelope::StateChanged {
+                            position_seconds,
+                            is_playing,
+                            volume,
+                            muted,
+                            duration_seconds,
+                        } => {
+                            // Read the queue's repeat/shuffle under a
+                            // non-blocking try_lock. Falls back to
+                            // defaults if the lock is held; IPC
+                            // handlers emit a follow-up event on the
+                            // main thread once the lock is free, so
+                            // the UI catches up within one poll.
+                            let (repeat, shuffle) = match emit_handle.try_lock() {
+                                Ok(state_ref) => (
+                                    state_ref.queue.repeat(),
+                                    state_ref.queue.shuffle_enabled(),
+                                ),
+                                Err(e) => {
+                                    tracing::debug!(
+                                        target: "sinfonic::playback::poller",
+                                        error = %e,
+                                        "playback-state-changed: try_lock failed, using defaults"
+                                    );
+                                    (RepeatMode::Off, false)
+                                }
+                            };
+                            let payload = PlaybackStatePayload {
+                                is_playing,
+                                position_seconds,
+                                duration_seconds,
+                                volume,
+                                muted,
+                                repeat,
+                                shuffle,
+                            };
+                            if let Err(e) = emit_app.emit(
+                                EventName::PlaybackStateChanged.as_str(),
+                                &payload,
+                            ) {
+                                tracing::warn!(
+                                    target: "sinfonic::playback::poller",
+                                    error = %e,
+                                    pos = position_seconds,
+                                    "playback-state-changed: emit failed"
+                                );
+                            }
+                        }
+                        PlayerEventEnvelope::TrackEnded => {
+                            let handle = emit_handle.clone();
+                            let app = emit_app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                commands::advance_queue_on_end(&handle, &app).await;
+                            });
+                        }
+                    }
+                }
+                tracing::debug!(
+                    target: "sinfonic::playback::poller",
+                    "playback event emitter: channel closed, exiting"
+                );
+            });
+            let tx = event_tx.clone();
             player.set_event_callback(move |event| {
-                match event {
+                let envelope = match event {
                     sinfonic_playback::PlayerEvent::StateChanged {
                         position_seconds,
                         is_playing,
@@ -136,67 +228,23 @@ pub fn run() {
                         muted,
                         duration_seconds,
                         ..
-                    } => {
-                        // Non-blocking read of the queue's repeat/shuffle
-                        // so the payload stays consistent with the
-                        // player's position even when an IPC handler
-                        // is mid-mutation. Falls back to defaults if
-                        // the lock is held (the next IPC-driven
-                        // playback-state-changed event will catch up).
-                        let (repeat, shuffle) = match callback_handle.try_lock() {
-                            Ok(state_ref) => (
-                                state_ref.queue.repeat(),
-                                state_ref.queue.shuffle_enabled(),
-                            ),
-                            Err(e) => {
-                                tracing::debug!(
-                                    target: "sinfonic::playback::poller",
-                                    error = %e,
-                                    "playback-state-changed: try_lock failed, using defaults"
-                                );
-                                (RepeatMode::Off, false)
-                            }
-                        };
-                        let payload = PlaybackStatePayload {
-                            is_playing,
-                            position_seconds,
-                            duration_seconds,
-                            volume,
-                            muted,
-                            repeat,
-                            shuffle,
-                        };
-                        // Sample every 4th tick to avoid log spam — at
-                        // 4 Hz that's once per second, enough to confirm
-                        // the emitter is live without flooding stderr.
-                        if position_seconds % 4 == 0 {
-                            tracing::debug!(
-                                target: "sinfonic::playback::poller",
-                                pos = position_seconds,
-                                dur = duration_seconds,
-                                "playback-state-changed: about to emit"
-                            );
-                        }
-                        match app_handle.emit(
-                            EventName::PlaybackStateChanged.as_str(),
-                            &payload,
-                        ) {
-                            Ok(()) => {}
-                            Err(e) => tracing::warn!(
-                                target: "sinfonic::playback::poller",
-                                error = %e,
-                                pos = position_seconds,
-                                "playback-state-changed: emit failed"
-                            ),
-                        }
+                    } => PlayerEventEnvelope::StateChanged {
+                        position_seconds,
+                        is_playing,
+                        volume,
+                        muted,
+                        duration_seconds,
+                    },
+                    sinfonic_playback::PlayerEvent::TrackEnded { .. } => {
+                        PlayerEventEnvelope::TrackEnded
                     }
-                    sinfonic_playback::PlayerEvent::TrackEnded { track_id: _ } => {
-                        let handle = callback_handle.clone();
-                        let app = app_handle.clone();
-                        tauri::async_runtime::spawn(async move {
-                            commands::advance_queue_on_end(&handle, &app).await;
-                        });
-                    }
+                };
+                if let Err(e) = tx.try_send(envelope) {
+                    tracing::warn!(
+                        target: "sinfonic::playback::poller",
+                        error = %e,
+                        "playback event channel full; dropping event"
+                    );
                 }
             });
 
