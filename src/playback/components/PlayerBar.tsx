@@ -65,7 +65,7 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
       </div>
 
       <TransportBusyProvider>
-        <div className="flex flex-col items-center gap-1.5">
+        <div className="flex shrink-0 flex-col items-center gap-1.5">
           <TransportControls canStep={canStep} />
           <SeekBar enabled={true} />
         </div>
