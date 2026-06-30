@@ -1,9 +1,10 @@
 // Transport controls — shuffle, prev, play/pause, next, repeat.
 //
-// The play/pause button is rendered inline because it's the only one
-// with custom sizing + primary background; the others are IconButton
-// instances. The "busy" lock (while an IPC is in flight) is
-// published to `useTransportBusy()` so the SeekBar can lock too.
+// The play/pause button is rendered inline because it's the only
+// one with custom sizing + the primary-coloured circle that
+// anchors the transport row; the others are IconButton instances.
+// The "busy" lock (while an IPC is in flight) is published to
+// `useTransportBusy()` so the SeekBar can lock too.
 
 import { type ReactNode, useCallback } from "react";
 import { toast } from "sonner";
@@ -63,15 +64,15 @@ interface TransportControlsProps {
  * Play / pause toggle.
  *
  * Renders the Google Material Symbols glyph for the current
- * state, sized to match the surrounding transport icons:
+ * state inside a coloured circular button:
  *   - isPlaying=true  → 'pause'
  *   - isPlaying=false → 'play_arrow'
  *
- * No background — the icon itself sits in the accent colour
- * (`text-primary`) so it stands out without a coloured circle.
- * `weight={700}` keeps the glyph solid at this size; the rounded
- * variant of play_arrow without `fill` looks outline-y next to
- * the rest of the transport row.
+ * The circle uses `bg-primary` so the play / pause button stays
+ * the visual anchor of the transport row even with the larger
+ * skip buttons around it. `weight={700}` keeps the glyph solid
+ * at this size; the rounded variant of play_arrow without
+ * `fill` looks outline-y next to the rest of the transport row.
  */
 function PlayPauseButton({
   isPlaying,
@@ -90,9 +91,10 @@ function PlayPauseButton({
       aria-label={isPlaying ? "Pause" : "Play"}
       title={isPlaying ? "Pause" : "Play"}
       className={cn(
-        "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-primary transition-all",
-        "hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        "disabled:opacity-40",
+        "group relative flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-all",
+        "hover:scale-105 hover:shadow-md hover:shadow-primary/20 active:scale-95",
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card",
+        "disabled:opacity-40 disabled:hover:scale-100 disabled:hover:shadow-sm",
       )}
     >
       <MaterialSymbol
