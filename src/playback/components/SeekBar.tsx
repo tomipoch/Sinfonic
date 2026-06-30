@@ -42,7 +42,7 @@ export function SeekBar({ enabled }: SeekBarProps) {
     durationSeconds > 0 ? Math.min(100, (seekDrag.value / durationSeconds) * 100) : 0;
 
   return (
-    <div className="flex w-full sm:w-[28rem] items-center gap-2.5">
+    <div className="flex w-full items-center gap-2.5">
       <span className="w-10 shrink-0 text-right font-mono text-[11px] tabular-nums text-muted-foreground">
         {formatDuration(seekDrag.value)}
       </span>
