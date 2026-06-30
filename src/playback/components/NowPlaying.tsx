@@ -57,20 +57,20 @@ export function NowPlaying() {
 
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2">
-      <div className="h-12 w-12 shrink-0" aria-hidden={!cover}>
+      <div className="h-10 w-10 shrink-0 sm:h-12 sm:w-12" aria-hidden={!cover}>
         {cover ? (
           <AlbumCover
             source={cover}
             ariaLabel={`Cover art for ${cover.title}`}
-            className="h-12 w-12 rounded-md shadow-sm ring-1 ring-inset ring-border/40"
+            className="h-10 w-10 rounded-md shadow-sm ring-1 ring-inset ring-border/40 sm:h-12 sm:w-12"
           />
         ) : (
-          <div className="flex h-12 w-12 items-center justify-center rounded-md bg-gradient-to-br from-secondary to-muted ring-1 ring-inset ring-border/60">
+          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-gradient-to-br from-secondary to-muted ring-1 ring-inset ring-border/60 sm:h-12 sm:w-12">
             <HugeiconsIcon
               icon={LeftToRightListBulletIcon}
-              size={16}
+              size={14}
               strokeWidth={1.5}
-              className="text-muted-foreground/70"
+              className="text-muted-foreground/70 sm:size-4"
             />
           </div>
         )}
@@ -89,13 +89,21 @@ export function NowPlaying() {
           {currentTrack?.artist ?? "—"}
         </div>
         {currentTrack?.album && (
-          <div className="truncate text-[11px] text-muted-foreground/70" title={currentTrack.album}>
+          <div
+            className="hidden truncate text-[11px] text-muted-foreground/70 sm:block"
+            title={currentTrack.album}
+          >
             {currentTrack.album}
           </div>
         )}
       </div>
       {fullTrack && (
-        <FavoriteButton kind="track" itemId={fullTrack.id} initialFavorite={fullTrack.favorite} />
+        <FavoriteButton
+          kind="track"
+          itemId={fullTrack.id}
+          initialFavorite={fullTrack.favorite}
+          size={18}
+        />
       )}
     </div>
   );

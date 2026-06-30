@@ -91,7 +91,7 @@ function PlayPauseButton({
       aria-label={isPlaying ? "Pause" : "Play"}
       title={isPlaying ? "Pause" : "Play"}
       className={cn(
-        "group relative flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-all",
+        "group relative flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-all",
         "hover:scale-105 hover:shadow-md hover:shadow-primary/20 active:scale-95",
         "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card",
         "disabled:opacity-40 disabled:hover:scale-100 disabled:hover:shadow-sm",
@@ -102,7 +102,7 @@ function PlayPauseButton({
         size={28}
         weight={700}
         fill
-        className={isPlaying ? "" : "translate-x-[1px]"}
+        className="[--mat-symbol-size:24px] sm:[--mat-symbol-size:28px] translate-x-[1px]"
       />
     </button>
   );
@@ -143,11 +143,21 @@ export function TransportControls({ canStep }: TransportControlsProps) {
         <MaterialSymbol name="shuffle" size={18} />
       </IconButton>
       <IconButton ariaLabel="Previous track" onClick={onPrev} disabled={!canStep || actionLock}>
-        <MaterialSymbol name="skip_previous" size={26} fill />
+        <MaterialSymbol
+          name="skip_previous"
+          size={26}
+          fill
+          className="[--mat-symbol-size:22px] sm:[--mat-symbol-size:26px]"
+        />
       </IconButton>
       <PlayPauseButton isPlaying={isPlaying} disabled={busy === "play"} onToggle={onTogglePlay} />
       <IconButton ariaLabel="Next track" onClick={onNext} disabled={!canStep || actionLock}>
-        <MaterialSymbol name="skip_next" size={26} fill />
+        <MaterialSymbol
+          name="skip_next"
+          size={26}
+          fill
+          className="[--mat-symbol-size:22px] sm:[--mat-symbol-size:26px]"
+        />
       </IconButton>
       <IconButton ariaLabel="Repeat" disabled className="opacity-40">
         <MaterialSymbol name="repeat" size={18} />
