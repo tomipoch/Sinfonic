@@ -29,10 +29,15 @@ interface SeekBarProps {
   enabled: boolean;
 }
 
-// 8-cycle wave with amplitude ±5 inside a 16-unit-tall viewBox. Wider
-// peaks than 16 cycles of ±6 because at this scale a denser wave
-// turned into a blur; 8 sharp peaks reads as a waveform instead.
-const WAVE_PATH = `M 0 8 ${"c 1.5 -5 4 -5 6.25 0 c 2.25 5 4.75 5 6.25 0 ".repeat(4).trimEnd()}`;
+// 8-cycle wave with amplitude ±5 inside a 16-unit-tall viewBox. Each
+// cycle is a pair of cubic Beziers (one going up, one coming back
+// down) so the peaks read as sharp ridges rather than smooth
+// sine curves. The pattern repeats 8 times so the path spans the
+// full viewBox width (x = 0 → 100); earlier iterations repeated
+// only 4 times and stopped at x = 50, which made the
+// `pathLength="100"` normalisation incoherent and the
+// stroke-dasharray reveal jump around the bar.
+const WAVE_PATH = `M 0 8 ${"c 2 -5 5 -5 6.25 0 c 2 5 5 5 6.25 0 ".repeat(8).trimEnd()}`;
 const LINE_PATH = "M 0 8 L 100 8";
 
 export function SeekBar({ enabled }: SeekBarProps) {
