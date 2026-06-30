@@ -60,7 +60,7 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
       role="contentinfo"
       aria-label="Player controls"
     >
-      <div className="min-w-0 flex-[1.8]">
+      <div className="min-w-0 flex-[2.2]">
         <NowPlaying />
       </div>
 

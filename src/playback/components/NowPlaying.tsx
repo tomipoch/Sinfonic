@@ -75,21 +75,21 @@ export function NowPlaying() {
           </div>
         )}
       </div>
-      <div className="flex min-w-0 flex-col gap-0.5">
+      <div className="flex min-w-0 flex-col gap-1">
         <div
           className={cn(
-            "truncate text-sm font-semibold tracking-tight",
+            "truncate text-base font-medium tracking-tight",
             hasTrack ? "text-foreground" : "text-muted-foreground",
           )}
           title={currentTrack?.title}
         >
           {currentTrack?.title ?? "Nothing playing"}
         </div>
-        <div className="truncate text-xs text-muted-foreground" title={currentTrack?.artist}>
+        <div className="truncate text-sm text-muted-foreground" title={currentTrack?.artist}>
           {currentTrack?.artist ?? "—"}
         </div>
         {currentTrack?.album && (
-          <div className="truncate text-[11px] text-muted-foreground/70" title={currentTrack.album}>
+          <div className="truncate text-xs text-muted-foreground/70" title={currentTrack.album}>
             {currentTrack.album}
           </div>
         )}
