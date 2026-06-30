@@ -35,6 +35,7 @@ use super::ids::{QueueEntryId, ServerId, TrackId};
 // ─── Repeat / Origin ────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum RepeatMode {
     #[default]
     Off,
@@ -996,6 +997,30 @@ mod tests {
             let keys: std::collections::HashSet<u64> =
                 (0..100).map(|i| splitmix64_mix(s, i)).collect();
             assert_eq!(keys.len(), 100, "seed {s} produced duplicate keys");
+        }
+    }
+
+    #[test]
+    fn repeat_mode_serializes_lowercase() {
+        let cases = [
+            (RepeatMode::Off, "\"off\""),
+            (RepeatMode::All, "\"all\""),
+            (RepeatMode::One, "\"one\""),
+        ];
+        for (mode, expected) in cases {
+            assert_eq!(serde_json::to_string(&mode).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn repeat_mode_deserializes_lowercase() {
+        let cases = [
+            ("\"off\"", RepeatMode::Off),
+            ("\"all\"", RepeatMode::All),
+            ("\"one\"", RepeatMode::One),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(serde_json::from_str::<RepeatMode>(input).unwrap(), expected);
         }
     }
 }
