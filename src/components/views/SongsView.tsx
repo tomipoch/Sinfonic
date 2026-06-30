@@ -22,7 +22,6 @@ import { PlayGlyph } from "@/components/ui/PlayGlyph";
 import { type TrackColumn, TrackTable } from "@/components/ui/TrackTable";
 import { extractError } from "@/lib/errors";
 import { getTracks, playAlbum, playTrack } from "@/lib/tauri";
-import { usePlaybackStore } from "@/stores/playbackStore";
 import { useServerStore } from "@/stores/serverStore";
 import type { Track } from "@/types/domain";
 
@@ -49,7 +48,6 @@ export function SongsView() {
   const activeServerId = useServerStore((s) => s.activeServerId);
   const lastSync = useServerStore((s) => s.lastSync);
   const syncLibrary = useServerStore((s) => s.syncLibrary);
-  const setIsPlaying = usePlaybackStore((s) => s.setIsPlaying);
 
   const [page, setPage] = useState(0);
   const [items, setItems] = useState<Track[]>([]);
@@ -99,7 +97,6 @@ export function SongsView() {
     setBusy(true);
     try {
       await playTrack(track);
-      setIsPlaying(true);
     } catch (err) {
       toast.error(`Couldn't play track: ${extractError(err, "unknown error")}`);
     } finally {
@@ -112,7 +109,6 @@ export function SongsView() {
     setBusy(true);
     try {
       await playAlbum(items);
-      setIsPlaying(true);
     } catch (err) {
       toast.error(`Couldn't play all: ${extractError(err, "unknown error")}`);
     } finally {

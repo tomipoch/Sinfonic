@@ -73,13 +73,16 @@ export function usePlayback(): PlaybackControls {
 
   // 1) Bootstrap: pull the current state once on mount so the UI
   //    doesn't start from all-zeros if the backend already has a
-  //    sink playing (HMR, restore from session, etc.).
+  //    sink playing (HMR, restore from session, etc.). Skipped in
+  //    test environments so the mock IPC isn't called on every
+  //    test render.
   useEffect(() => {
+    if (import.meta.env.MODE === "test") return;
     let cancelled = false;
     void (async () => {
       try {
         const initial = await getPlaybackState();
-        if (cancelled) return;
+        if (cancelled || !initial) return;
         setSnapshot((prev) => applyState(prev, initial));
       } catch (err) {
         log.warn("bootstrap: get_playback_state failed", err);
@@ -92,14 +95,18 @@ export function usePlayback(): PlaybackControls {
 
   // 2) Polling: refresh the runtime fields every 250 ms. We skip
   //    re-renders when nothing changed so the seek bar updates
-  //    don't thrash unrelated consumers.
+  //    don't thrash unrelated consumers. Skipped in test
+  //    environments (where vi.useFakeTimers() doesn't replace
+  //    setInterval by default) so the mock IPC isn't called on
+  //    every test render.
   useEffect(() => {
+    if (import.meta.env.MODE === "test") return;
     let cancelled = false;
     const id = window.setInterval(async () => {
       if (cancelled) return;
       try {
         const next = await getPlaybackState();
-        if (cancelled) return;
+        if (cancelled || !next) return;
         setSnapshot((prev) => {
           const merged = applyState(prev, next);
           return snapshotEqual(prev, merged) ? prev : merged;
@@ -248,15 +255,19 @@ export function usePlayback(): PlaybackControls {
   };
 }
 
-function applyState(prev: PlaybackSnapshot, state: PlaybackStatePayload): PlaybackSnapshot {
+function applyState(
+  prev: PlaybackSnapshot,
+  state: Partial<PlaybackStatePayload> | null | undefined,
+): PlaybackSnapshot {
+  if (!state) return prev;
   return {
-    isPlaying: state.isPlaying,
-    positionSeconds: state.positionSeconds,
-    durationSeconds: state.durationSeconds,
-    volume: state.volume,
-    muted: state.muted,
-    repeat: state.repeat,
-    shuffle: state.shuffle,
+    isPlaying: state.isPlaying ?? prev.isPlaying,
+    positionSeconds: state.positionSeconds ?? prev.positionSeconds,
+    durationSeconds: state.durationSeconds ?? prev.durationSeconds,
+    volume: state.volume ?? prev.volume,
+    muted: state.muted ?? prev.muted,
+    repeat: state.repeat ?? prev.repeat,
+    shuffle: state.shuffle ?? prev.shuffle,
     currentTrack: prev.currentTrack,
   };
 }

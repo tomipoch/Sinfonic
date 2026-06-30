@@ -5,10 +5,9 @@
 //   center: shuffle + prev + play/pause + next + repeat, with seek row
 //   right:  volume + queue toggle + lyrics toggle + EQ toggle
 //
-// All state reads from the playback + queue stores, which are kept
-// in sync by the global event bridge at the app root. Click handlers
-// call the typed IPC wrappers directly; the resulting events update
-// the stores for every other component.
+// All state reads from `usePlaybackContext()`; commands go back via
+// the context too. Click handlers don't touch any Zustand store
+// directly — the snapshot is the single source of truth.
 //
 // Seek + volume sliders commit on pointer-up / key-up / blur (not on
 // every onChange) to avoid spamming the backend while the user drags.
@@ -23,7 +22,7 @@ import {
   VolumeOffIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { memo, type ReactNode, useCallback, useEffect, useState } from "react";
+import { memo, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { AlbumCover } from "@/components/ui/AlbumCover";
 import { MaterialSymbol } from "@/components/ui/MaterialSymbol";
@@ -32,18 +31,9 @@ import { useDropTarget } from "@/hooks/useDropTarget";
 import { cn } from "@/lib/cn";
 import { extractError } from "@/lib/errors";
 import { formatDuration } from "@/lib/format";
-import {
-  next,
-  pause,
-  previous,
-  queueAddMany,
-  resume,
-  seek,
-  setMuted,
-  setVolume,
-} from "@/lib/tauri";
+import { queueAddMany } from "@/lib/tauri";
+import { usePlaybackContext } from "@/playback";
 import { useLibraryStore } from "@/stores/libraryStore";
-import { usePlaybackStore } from "@/stores/playbackStore";
 import { useQueueStore } from "@/stores/queueStore";
 import type { Album, Track } from "@/types/domain";
 
@@ -62,31 +52,21 @@ type Props = {
   onToggleLyrics: () => void;
 };
 
-const renderCountRef = { current: 0 };
-
 export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics }: Props) {
-  renderCountRef.current += 1;
-  if (import.meta.env.DEV) {
-    console.log(
-      `[PlayerBar render #${renderCountRef.current}] isPlaying=${usePlaybackStore.getState().isPlaying} pos=${usePlaybackStore.getState().positionSeconds}`,
-    );
-  }
-  // ── global state ──────────────────────────────────────────────
+  const { snapshot, togglePlay, next, previous, seekTo, setVolume, setMuted } =
+    usePlaybackContext();
+  const { isPlaying, positionSeconds, durationSeconds, volume, muted, currentTrack } = snapshot;
+
+  // ── queue / library lookups (cover art) ───────────────────────
   const queueLength = useQueueStore((s) => s.entries.length);
   const tracks = useLibraryStore((s) => s.tracks);
   const albums = useLibraryStore((s) => s.albums);
-  const currentTrack = usePlaybackStore((s) => s.currentTrack);
-  const isPlaying = usePlaybackStore((s) => s.isPlaying);
-  const position = usePlaybackStore((s) => s.positionSeconds);
-  const duration = usePlaybackStore((s) => s.durationSeconds);
-  const volume = usePlaybackStore((s) => s.volume);
-  const muted = usePlaybackStore((s) => s.muted);
 
   // ── UI state ──────────────────────────────────────────────────
   const [eqOpen, setEqOpen] = useState(false);
   const [busy, setBusy] = useState<Busy>(null);
 
-  const seekDrag = useDragCommit({ value: position });
+  const seekDrag = useDragCommit({ value: positionSeconds });
   const volumeDrag = useDragCommit({ value: muted ? 0 : volume });
 
   // ── handlers ─────────────────────────────────────────────────
@@ -106,88 +86,39 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
   );
 
   const onTogglePlay = () => {
-    if (import.meta.env.DEV) console.log("[PlayerBar] onTogglePlay clicked, isPlaying=", isPlaying);
-    run(
-      "play",
-      async () => {
-        const next = !isPlaying;
-        // Optimistic flip — the backend takes a few hundred ms to flip
-        // the rodio sink. Showing the state immediately feels responsive.
-        usePlaybackStore.getState().setIsPlaying(next);
-        if (isPlaying) await pause();
-        else await resume();
-        if (import.meta.env.DEV) console.log("[PlayerBar] onTogglePlay done");
-      },
-      "Playback",
-    );
+    run("play", () => togglePlay(), "Playback");
   };
 
   const onPrev = () => {
-    if (import.meta.env.DEV) console.log("[PlayerBar] onPrev clicked");
-    run(
-      "prev",
-      async () => {
-        usePlaybackStore.getState().setIsPlaying(false);
-        await previous();
-      },
-      "Previous",
-    );
+    run("prev", () => previous(), "Previous");
   };
 
   const onNext = () => {
-    if (import.meta.env.DEV) console.log("[PlayerBar] onNext clicked");
-    run(
-      "next",
-      async () => {
-        usePlaybackStore.getState().setIsPlaying(false);
-        await next();
-      },
-      "Next",
-    );
+    run("next", () => next(), "Next");
   };
 
-  const seekEnabled = currentTrack !== null && duration > 0;
+  const seekEnabled = currentTrack !== null && durationSeconds > 0;
 
   const finishSeek = useCallback(() => {
     if (!seekEnabled) return;
     const drag = seekDrag.value;
     seekDrag.finish();
-    if (drag === position) return;
-    if (import.meta.env.DEV) console.log(`[PlayerBar] finishSeek to ${drag}`);
-    run(
-      null,
-      async () => {
-        await seek(drag);
-        usePlaybackStore.getState().setPosition(drag);
-        if (import.meta.env.DEV) console.log("[PlayerBar] finishSeek done");
-      },
-      "Seek",
-    );
-  }, [run, seekDrag, seekEnabled, position]);
+    if (drag === positionSeconds) return;
+    run(null, () => seekTo(drag), "Seek");
+  }, [run, seekDrag, seekEnabled, positionSeconds, seekTo]);
 
   const finishVolume = useCallback(() => {
     const drag = volumeDrag.value;
     volumeDrag.finish();
     const committed = muted ? 0 : volume;
     if (drag === committed) return;
-    if (import.meta.env.DEV) console.log(`[PlayerBar] finishVolume to ${drag}`);
-    run(
-      null,
-      async () => {
-        await setVolume(drag);
-        usePlaybackStore.getState().setVolume(drag);
-        if (import.meta.env.DEV) console.log("[PlayerBar] finishVolume done");
-      },
-      "Set volume",
-    );
-  }, [run, volumeDrag, muted, volume]);
+    run(null, () => setVolume(drag), "Set volume");
+  }, [run, volumeDrag, muted, volume, setVolume]);
 
   const onMuteToggle = () => {
-    const nextMuted = !muted;
-    if (import.meta.env.DEV) console.log("[PlayerBar] onMuteToggle", nextMuted);
-    setMuted(nextMuted)
-      .then(() => usePlaybackStore.getState().setMuted(nextMuted))
-      .catch((err) => toast.error(`Toggle mute: ${extractError(err, "unknown error")}`));
+    setMuted(!muted).catch((err) =>
+      toast.error(`Toggle mute: ${extractError(err, "unknown error")}`),
+    );
   };
 
   // Esc closes the EQ popover.
@@ -204,7 +135,8 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
   const cover = useCurrentCover(albums, tracks, currentTrack);
   const hasTrack = currentTrack !== null;
   const canStep = queueLength > 0;
-  const seekProgress = duration > 0 ? Math.min(100, (seekDrag.value / duration) * 100) : 0;
+  const seekProgress =
+    durationSeconds > 0 ? Math.min(100, (seekDrag.value / durationSeconds) * 100) : 0;
   const effectiveVolume = muted ? 0 : volume;
   const volumeProgress = Math.max(0, Math.min(1, volumeDrag.value)) * 100;
   const volumeIcon = volumeIconFor(effectiveVolume, muted);
@@ -349,7 +281,7 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
             <input
               type="range"
               min={0}
-              max={duration || 0}
+              max={durationSeconds || 0}
               step={1}
               value={seekDrag.value}
               onChange={seekDrag.onChange}
@@ -362,13 +294,13 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
               disabled={!seekEnabled || busy === "prev" || busy === "next" || busy === "play"}
               aria-label="Seek"
               aria-valuemin={0}
-              aria-valuemax={duration}
+              aria-valuemax={durationSeconds}
               aria-valuenow={seekDrag.value}
               className="player-range-wave absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent outline-none disabled:cursor-not-allowed disabled:opacity-40"
             />
           </div>
           <span className="w-10 shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
-            {formatDuration(duration)}
+            {formatDuration(durationSeconds)}
           </span>
         </div>
       </div>
@@ -466,7 +398,6 @@ function useDragCommit({ value }: { value: number }) {
     value: drag ?? value,
     onChange,
     finish: () => setDrag(null),
-    setDrag,
   };
 }
 
@@ -477,20 +408,22 @@ function useCurrentCover(
   tracks: Track[],
   currentTrack: { trackId: string; title: string; artist: string; album: string } | null,
 ) {
-  const albumById = new Map(albums.map((a) => [a.id, a]));
-  const trackById = new Map(tracks.map((t) => [t.id, t]));
-  if (!currentTrack) return null;
-  const full = trackById.get(currentTrack.trackId);
-  if (full?.imageRef) {
-    return { id: full.id, title: full.album || full.title, imageRef: full.imageRef };
-  }
-  if (full) {
-    const album = albumById.get(full.albumId);
-    if (album?.imageRef) {
-      return { id: full.id, title: album.title, imageRef: album.imageRef };
+  return useMemo(() => {
+    if (!currentTrack) return null;
+    const albumById = new Map(albums.map((a) => [a.id, a]));
+    const trackById = new Map(tracks.map((t) => [t.id, t]));
+    const full = trackById.get(currentTrack.trackId);
+    if (full?.imageRef) {
+      return { id: full.id, title: full.album || full.title, imageRef: full.imageRef };
     }
-  }
-  return null;
+    if (full) {
+      const album = albumById.get(full.albumId);
+      if (album?.imageRef) {
+        return { id: full.id, title: album.title, imageRef: album.imageRef };
+      }
+    }
+    return null;
+  }, [albums, tracks, currentTrack]);
 }
 
 function volumeIconFor(volume: number, muted: boolean) {
@@ -499,11 +432,8 @@ function volumeIconFor(volume: number, muted: boolean) {
   return VolumeHighIcon;
 }
 
-const WAVE_PATH = (() => {
-  let d = "M 0 6";
-  for (let i = 0; i < 16; i += 1) d += " q 3.125 -6 6.25 0";
-  return d;
-})();
+const WAVE_PATH =
+  "M 0 6 q 3.125 -6 6.25 0 q 3.125 -6 6.25 0 q 3.125 -6 6.25 0 q 3.125 -6 6.25 0 q 3.125 -6 6.25 0 q 3.125 -6 6.25 0 q 3.125 -6 6.25 0 q 3.125 -6 6.25 0 q 3.125 -6 6.25 0 q 3.125 -6 6.25 0 q 3.125 -6 6.25 0 q 3.125 -6 6.25 0 q 3.125 -6 6.25 0 q 3.125 -6 6.25 0 q 3.125 -6 6.25 0 q 3.125 -6 6.25 0";
 
 type IconButtonProps = {
   ariaLabel: string;

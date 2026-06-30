@@ -15,17 +15,9 @@ import { MaterialSymbol } from "@/components/ui/MaterialSymbol";
 import { cn } from "@/lib/cn";
 import { extractError } from "@/lib/errors";
 import { formatDuration } from "@/lib/format";
-import { nextRepeat, repeatLabel } from "@/lib/repeat";
-import {
-  getLyrics,
-  type LyricsPayload,
-  queueClear,
-  queueJumpTo,
-  queueRemove,
-  setRepeat,
-  setShuffle,
-} from "@/lib/tauri";
-import { usePlaybackStore } from "@/stores/playbackStore";
+import { getLyrics, type LyricsPayload, queueClear, queueJumpTo, queueRemove } from "@/lib/tauri";
+import { usePlaybackContext } from "@/playback";
+import { repeatLabel } from "@/playback/repeat";
 import { useQueueStore } from "@/stores/queueStore";
 
 type Mode = "queue" | "lyrics";
@@ -144,8 +136,8 @@ function SegmentedModeToggle({
 
 function QueueActions() {
   const entries = useQueueStore((s) => s.entries);
-  const repeat = useQueueStore((s) => s.repeat);
-  const shuffle = useQueueStore((s) => s.shuffle);
+  const { snapshot, cycleRepeat, setShuffle } = usePlaybackContext();
+  const { repeat, shuffle } = snapshot;
   const [busy, setBusy] = useState(false);
 
   const run = async (fn: () => Promise<unknown>, label: string) => {
@@ -160,10 +152,7 @@ function QueueActions() {
     }
   };
 
-  const onToggleRepeat = () =>
-    run(async () => {
-      await setRepeat(nextRepeat(repeat));
-    }, "Repeat");
+  const onToggleRepeat = () => run(cycleRepeat, "Repeat");
 
   const onToggleShuffle = () =>
     run(async () => {
@@ -339,8 +328,8 @@ function parseLrc(input: string): SyncedLine[] | null {
 }
 
 function LyricsView() {
-  const currentTrack = usePlaybackStore((s) => s.currentTrack);
-  const positionSeconds = usePlaybackStore((s) => s.positionSeconds);
+  const { snapshot } = usePlaybackContext();
+  const { currentTrack, positionSeconds } = snapshot;
   const trackId = currentTrack?.trackId ?? null;
 
   const [state, setState] = useState<

@@ -2,18 +2,19 @@
 //
 // The original bug: switching source (or logging out / deleting the
 // active server) only stopped the audio on the backend; the Zustand
-// `queueStore` and `playbackStore` kept their old contents, so the
-// QueuePanel and PlayerBar briefly rendered tracks from a server
+// `queueStore` and the playback snapshot kept their old contents, so
+// the QueuePanel and PlayerBar briefly rendered tracks from a server
 // that no longer existed. The fix: `setActive`, `logout`, and
-// `deleteServer` (when active) eagerly reset queue + playback in
-// addition to the existing library reset.
+// `deleteServer` (when active) call `resetSessionState`, which
+// eagerly clears the library / queue / playback snapshot before the
+// backend event lands.
 
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { registerPlaybackReset } from "@/lifecycle/resetSession";
+import { useLibraryStore } from "@/stores/libraryStore";
 import { useServerStore } from "./serverStore";
 import { useQueueStore } from "./queueStore";
-import { usePlaybackStore } from "./playbackStore";
-import { useLibraryStore } from "./libraryStore";
 import { invokeMock } from "@/test/setup";
 
 const setQueueSnapshot = (serverId: string | null) => {
@@ -40,20 +41,7 @@ const setQueueSnapshot = (serverId: string | null) => {
   });
 };
 
-const setPlaybackState = (playing: boolean) => {
-  usePlaybackStore.setState({
-    isPlaying: playing,
-    currentTrack: playing
-      ? { trackId: "track-old", title: "Old", artist: "Old Artist", album: "Old Album" }
-      : null,
-    positionSeconds: playing ? 30 : 0,
-    durationSeconds: playing ? 180 : 0,
-    volume: 0.5,
-    muted: false,
-    repeat: "off",
-    shuffle: false,
-  });
-};
+let playbackResetCalls = 0;
 
 beforeEach(() => {
   useServerStore.setState({
@@ -65,7 +53,6 @@ beforeEach(() => {
     pendingConnection: null,
   });
   setQueueSnapshot("server-old");
-  setPlaybackState(true);
   useLibraryStore.setState({
     albums: [],
     artists: [],
@@ -76,25 +63,29 @@ beforeEach(() => {
     error: null,
   });
   invokeMock.mockReset();
+  playbackResetCalls = 0;
+  // Simulate the PlaybackProvider registering its reset callback.
+  registerPlaybackReset(() => {
+    playbackResetCalls += 1;
+  });
 });
 
 describe("serverStore — source switch / logout cleanup", () => {
-  it("logout clears queue, playback, and library eagerly", async () => {
+  it("logout clears the queue, library, and triggers the playback reset", async () => {
     invokeMock.mockResolvedValueOnce(undefined); // providerLogout
 
     await useServerStore.getState().logout();
 
+    // queue + library were eagerly wiped by resetSessionState.
     expect(useQueueStore.getState().entries).toHaveLength(0);
     expect(useQueueStore.getState().currentIndex).toBeNull();
     expect(useQueueStore.getState().serverId).toBeNull();
-
-    expect(usePlaybackStore.getState().isPlaying).toBe(false);
-    expect(usePlaybackStore.getState().currentTrack).toBeNull();
-    expect(usePlaybackStore.getState().positionSeconds).toBe(0);
-    expect(usePlaybackStore.getState().durationSeconds).toBe(0);
+    expect(useLibraryStore.getState().albums).toHaveLength(0);
+    // Playback snapshot reset was triggered through the registered callback.
+    expect(playbackResetCalls).toBe(1);
   });
 
-  it("setActive clears queue and playback eagerly", async () => {
+  it("setActive clears the queue, library, and triggers the playback reset", async () => {
     useServerStore.setState({
       servers: [
         { id: "server-jellyfin", kind: "jellyfin", name: "Jellyfin", baseUrl: "http://jellyfin.local" },
@@ -112,11 +103,11 @@ describe("serverStore — source switch / logout cleanup", () => {
 
     expect(useQueueStore.getState().entries).toHaveLength(0);
     expect(useQueueStore.getState().currentIndex).toBeNull();
-    expect(usePlaybackStore.getState().currentTrack).toBeNull();
-    expect(usePlaybackStore.getState().isPlaying).toBe(false);
+    expect(useLibraryStore.getState().albums).toHaveLength(0);
+    expect(playbackResetCalls).toBe(1);
   });
 
-  it("deleteServer on the active server clears queue and playback", async () => {
+  it("deleteServer on the active server clears state and resets playback", async () => {
     useServerStore.setState({
       servers: [
         { id: "server-jellyfin", kind: "jellyfin", name: "Jellyfin", baseUrl: "http://jellyfin.local" },
@@ -128,7 +119,7 @@ describe("serverStore — source switch / logout cleanup", () => {
     await useServerStore.getState().deleteServer("server-jellyfin");
 
     expect(useQueueStore.getState().entries).toHaveLength(0);
-    expect(usePlaybackStore.getState().currentTrack).toBeNull();
     expect(useServerStore.getState().activeServerId).toBeNull();
+    expect(playbackResetCalls).toBe(1);
   });
 });

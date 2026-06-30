@@ -21,7 +21,6 @@ import { extractError } from "@/lib/errors";
 import { compareNumberDesc, compareString } from "@/lib/sort";
 import { getAlbumDetail, playAlbum } from "@/lib/tauri";
 import { useLibraryStore } from "@/stores/libraryStore";
-import { usePlaybackStore } from "@/stores/playbackStore";
 import { useServerStore } from "@/stores/serverStore";
 import type { Artist } from "@/types/domain";
 
@@ -51,7 +50,6 @@ export function ArtistsView() {
   const activeServerId = useServerStore((s) => s.activeServerId);
   const lastSync = useServerStore((s) => s.lastSync);
   const syncLibrary = useServerStore((s) => s.syncLibrary);
-  const setIsPlaying = usePlaybackStore((s) => s.setIsPlaying);
 
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [busy, setBusy] = useState(false);
@@ -81,7 +79,6 @@ export function ArtistsView() {
       const local = tracks.filter((t) => t.artistId === artist.id);
       if (local.length > 0) {
         await playAlbum(local);
-        setIsPlaying(true);
         return;
       }
       const albums = useLibraryStore.getState().albums;
@@ -97,7 +94,6 @@ export function ArtistsView() {
         return;
       }
       await playAlbum(allTracks);
-      setIsPlaying(true);
     } catch (err) {
       toast.error(`Couldn't play artist: ${extractError(err, "unknown error")}`);
     } finally {

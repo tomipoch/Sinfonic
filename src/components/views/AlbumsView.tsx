@@ -21,7 +21,6 @@ import { formatDuration } from "@/lib/format";
 import { compareNumberDesc, compareString } from "@/lib/sort";
 import { playAlbum } from "@/lib/tauri";
 import { useLibraryStore } from "@/stores/libraryStore";
-import { usePlaybackStore } from "@/stores/playbackStore";
 import { useServerStore } from "@/stores/serverStore";
 import type { Album } from "@/types/domain";
 
@@ -51,7 +50,6 @@ export function AlbumsView() {
   const activeServerId = useServerStore((s) => s.activeServerId);
   const lastSync = useServerStore((s) => s.lastSync);
   const syncLibrary = useServerStore((s) => s.syncLibrary);
-  const setIsPlaying = usePlaybackStore((s) => s.setIsPlaying);
 
   const [sortKey, setSortKey] = useState<SortKey>("title");
   const [busy, setBusy] = useState(false);
@@ -84,7 +82,6 @@ export function AlbumsView() {
         return;
       }
       await playAlbum(queue);
-      setIsPlaying(true);
     } catch (err) {
       toast.error(`Couldn't play all: ${extractError(err, "unknown error")}`);
     } finally {
