@@ -25,9 +25,10 @@ interface IconButtonProps {
   children: ReactNode;
   onClick?: () => void;
   active?: boolean;
+  className?: string;
 }
 
-function IconButton({ ariaLabel, children, onClick, active }: IconButtonProps) {
+function IconButton({ ariaLabel, children, onClick, active, className }: IconButtonProps) {
   return (
     <button
       type="button"
@@ -39,6 +40,7 @@ function IconButton({ ariaLabel, children, onClick, active }: IconButtonProps) {
         "hover:bg-muted hover:text-foreground",
         "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         active && "bg-muted text-primary hover:bg-muted hover:text-primary",
+        className,
       )}
     >
       {children}
@@ -86,6 +88,7 @@ export function PanelToggles({
         aria-expanded={lyricsOpen}
         aria-pressed={lyricsOpen}
         active={lyricsOpen}
+        className="hidden sm:inline-flex"
       >
         <MaterialSymbol name="subtitles" size={18} />
       </IconButton>
@@ -95,6 +98,7 @@ export function PanelToggles({
         aria-expanded={eqOpen}
         aria-pressed={eqOpen}
         active={eqOpen}
+        className="hidden md:inline-flex"
       >
         <MaterialSymbol name="graphic_eq" size={18} />
       </IconButton>

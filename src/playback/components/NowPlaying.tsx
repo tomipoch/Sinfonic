@@ -57,18 +57,18 @@ export function NowPlaying() {
 
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2">
-      <div className="h-10 w-10 shrink-0 sm:h-12 sm:w-12" aria-hidden={!cover}>
+      <div className="h-9 w-9 shrink-0 sm:h-11 sm:w-11 md:h-12 md:w-12" aria-hidden={!cover}>
         {cover ? (
           <AlbumCover
             source={cover}
             ariaLabel={`Cover art for ${cover.title}`}
-            className="h-10 w-10 rounded-md shadow-sm ring-1 ring-inset ring-border/40 sm:h-12 sm:w-12"
+            className="h-9 w-9 rounded-md shadow-sm ring-1 ring-inset ring-border/40 sm:h-11 sm:w-11 md:h-12 md:w-12"
           />
         ) : (
-          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-gradient-to-br from-secondary to-muted ring-1 ring-inset ring-border/60 sm:h-12 sm:w-12">
+          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-gradient-to-br from-secondary to-muted ring-1 ring-inset ring-border/60 sm:h-11 sm:w-11 md:h-12 md:w-12">
             <HugeiconsIcon
               icon={LeftToRightListBulletIcon}
-              size={14}
+              size={12}
               strokeWidth={1.5}
               className="text-muted-foreground/70 sm:size-4"
             />
@@ -98,12 +98,14 @@ export function NowPlaying() {
         )}
       </div>
       {fullTrack && (
-        <FavoriteButton
-          kind="track"
-          itemId={fullTrack.id}
-          initialFavorite={fullTrack.favorite}
-          size={18}
-        />
+        <span className="hidden sm:inline-flex">
+          <FavoriteButton
+            kind="track"
+            itemId={fullTrack.id}
+            initialFavorite={fullTrack.favorite}
+            size={18}
+          />
+        </span>
       )}
     </div>
   );
