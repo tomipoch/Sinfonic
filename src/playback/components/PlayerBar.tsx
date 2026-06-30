@@ -11,6 +11,7 @@
 // `TransportBusyProvider` that lets TransportControls publish its
 // in-flight flag to SeekBar without prop-drilling.
 
+import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 
 import { useDropTarget } from "@/hooks/useDropTarget";
@@ -50,9 +51,51 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
     },
   });
 
+  // Layout probe — runs once on mount and on every window resize
+  // so a developer can resize the window and read the actual
+  // pixel widths + any overflows from the browser console.
+  // Tag the grid children with data-pb-col="nowplaying" /
+  // "transport" / "right" to make them easy to address.
+  const footerRef = useRef<HTMLElement | null>(null);
+  const { ref: dropRef, ...restDroppable } = droppableProps as unknown as {
+    ref?: (node: HTMLElement | null) => void;
+  };
+  const mergeRefs = (el: HTMLElement | null) => {
+    footerRef.current = el;
+    dropRef?.(el);
+  };
+  useEffect(() => {
+    const footer = footerRef.current;
+    if (!footer) return;
+
+    const probe = () => {
+      const cols = Array.from(footer.querySelectorAll<HTMLElement>("[data-pb-col]"));
+      const summary = cols.map((el) => {
+        const overflow = el.scrollWidth - el.clientWidth;
+        return {
+          col: el.dataset.pbCol ?? "?",
+          width: Math.round(el.getBoundingClientRect().width),
+          content: el.scrollWidth,
+          clientWidth: el.clientWidth,
+          overflow,
+        };
+      });
+      console.log("[PlayerBar probe]", {
+        viewport: `${window.innerWidth}×${window.innerHeight}`,
+        footer: Math.round(footer.getBoundingClientRect().width),
+        columns: summary,
+      });
+    };
+
+    probe();
+    window.addEventListener("resize", probe);
+    return () => window.removeEventListener("resize", probe);
+  }, []);
+
   return (
     <footer
-      {...droppableProps}
+      ref={mergeRefs}
+      {...restDroppable}
       className={cn(
         "relative grid h-14 shrink-0 grid-cols-[1fr_minmax(16rem,24rem)_1fr] items-center gap-1 border-t border-border bg-card px-2 transition-colors sm:h-[5rem] sm:gap-2 sm:px-3 md:h-[5.5rem] md:px-4",
         dragOver && "bg-primary/10 ring-1 ring-inset ring-primary/40",
@@ -60,18 +103,18 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
       role="contentinfo"
       aria-label="Player controls"
     >
-      <div className="min-w-0">
+      <div className="min-w-0" data-pb-col="nowplaying">
         <NowPlaying />
       </div>
 
       <TransportBusyProvider>
-        <div className="flex w-full min-w-0 flex-col items-center gap-1.5">
+        <div className="flex w-full min-w-0 flex-col items-center gap-1.5" data-pb-col="transport">
           <TransportControls canStep={canStep} />
           <SeekBar enabled={true} />
         </div>
       </TransportBusyProvider>
 
-      <div className="flex min-w-0 items-center justify-end gap-1">
+      <div className="flex min-w-0 items-center justify-end gap-1" data-pb-col="right">
         <VolumeControl />
         <div className="mx-1 h-5 w-px shrink-0 bg-border" aria-hidden />
         <PanelToggles
