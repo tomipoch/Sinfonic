@@ -54,13 +54,15 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
     <footer
       {...droppableProps}
       className={cn(
-        "relative flex h-[5.5rem] shrink-0 items-center justify-between gap-6 border-t border-border bg-card px-5 transition-colors",
+        "relative flex h-[5.5rem] shrink-0 items-center justify-between gap-4 border-t border-border bg-card px-5 transition-colors",
         dragOver && "bg-primary/10 ring-1 ring-inset ring-primary/40",
       )}
       role="contentinfo"
       aria-label="Player controls"
     >
-      <NowPlaying />
+      <div className="min-w-0 flex-[1.8]">
+        <NowPlaying />
+      </div>
 
       <TransportBusyProvider>
         <div className="flex w-full max-w-2xl flex-col items-center gap-1.5">
