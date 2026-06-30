@@ -2,9 +2,12 @@
 //
 // The EQ popover is rendered as an absolutely-positioned child of the
 // player bar so it sits above the right-hand cluster. Esc closes it.
+//
+// All three icons come from the Google Material Symbols rounded font
+// (loaded once in main.tsx via `material-symbols-rounded`) so they
+// stay visually consistent with the play/pause/skip buttons in
+// TransportControls.
 
-import { LeftToRightListBulletIcon, SlidersHorizontalIcon } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
 import { type ReactNode, useEffect, useState } from "react";
 import { MaterialSymbol } from "@/components/ui/MaterialSymbol";
 import { EqPanel } from "@/components/views/EqPanel";
@@ -75,7 +78,7 @@ export function PanelToggles({
         aria-pressed={queueOpen}
         active={queueOpen}
       >
-        <HugeiconsIcon icon={LeftToRightListBulletIcon} size={16} strokeWidth={1.75} />
+        <MaterialSymbol name="queue_music" size={18} />
       </IconButton>
       <IconButton
         ariaLabel="Toggle lyrics"
@@ -84,7 +87,7 @@ export function PanelToggles({
         aria-pressed={lyricsOpen}
         active={lyricsOpen}
       >
-        <MaterialSymbol name="lyrics" size={18} />
+        <MaterialSymbol name="subtitles" size={18} />
       </IconButton>
       <IconButton
         ariaLabel="Toggle equalizer"
@@ -93,7 +96,7 @@ export function PanelToggles({
         aria-pressed={eqOpen}
         active={eqOpen}
       >
-        <HugeiconsIcon icon={SlidersHorizontalIcon} size={16} strokeWidth={1.75} />
+        <MaterialSymbol name="graphic_eq" size={18} />
       </IconButton>
     </>
   );

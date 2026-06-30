@@ -54,7 +54,7 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
     <footer
       {...droppableProps}
       className={cn(
-        "relative flex h-[5.5rem] shrink-0 items-center justify-between gap-6 border-t border-border bg-card/80 px-5 backdrop-blur supports-[backdrop-filter]:bg-card/60 transition-colors",
+        "relative flex h-[5.5rem] shrink-0 items-center justify-between gap-6 border-t border-border bg-card px-5 transition-colors",
         dragOver && "bg-primary/10 ring-1 ring-inset ring-primary/40",
       )}
       role="contentinfo"
