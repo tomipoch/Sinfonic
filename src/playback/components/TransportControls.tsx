@@ -90,14 +90,14 @@ function PlayPauseButton({
       aria-label={isPlaying ? "Pause" : "Play"}
       title={isPlaying ? "Pause" : "Play"}
       className={cn(
-        "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-primary transition-all",
+        "flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-primary transition-all",
         "hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         "disabled:opacity-40",
       )}
     >
       <MaterialSymbol
         name={isPlaying ? "pause" : "play_arrow"}
-        size={22}
+        size={28}
         weight={700}
         fill
         className={isPlaying ? "" : "translate-x-[1px]"}
@@ -141,11 +141,11 @@ export function TransportControls({ canStep }: TransportControlsProps) {
         <MaterialSymbol name="shuffle" size={18} />
       </IconButton>
       <IconButton ariaLabel="Previous track" onClick={onPrev} disabled={!canStep || actionLock}>
-        <MaterialSymbol name="skip_previous" size={20} fill />
+        <MaterialSymbol name="skip_previous" size={26} fill />
       </IconButton>
       <PlayPauseButton isPlaying={isPlaying} disabled={busy === "play"} onToggle={onTogglePlay} />
       <IconButton ariaLabel="Next track" onClick={onNext} disabled={!canStep || actionLock}>
-        <MaterialSymbol name="skip_next" size={20} fill />
+        <MaterialSymbol name="skip_next" size={26} fill />
       </IconButton>
       <IconButton ariaLabel="Repeat" disabled className="opacity-40">
         <MaterialSymbol name="repeat" size={18} />
