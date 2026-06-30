@@ -62,16 +62,16 @@ interface TransportControlsProps {
 /**
  * Play / pause toggle.
  *
- * Renders the primary circular button with the Google Material
- * Symbols glyph for the current state:
+ * Renders the Google Material Symbols glyph for the current
+ * state, sized to match the surrounding transport icons:
  *   - isPlaying=true  → 'pause'
  *   - isPlaying=false → 'play_arrow'
  *
- * `weight={700}` makes the glyph sit a notch heavier than the
- * surrounding 500-weight transport icons so it reads as the
- * primary action; `fill` keeps the glyph solid (the rounded
- * variant of play_arrow without `fill` looks outline-y at small
- * sizes).
+ * No background — the icon itself sits in the accent colour
+ * (`text-primary`) so it stands out without a coloured circle.
+ * `weight={700}` keeps the glyph solid at this size; the rounded
+ * variant of play_arrow without `fill` looks outline-y next to
+ * the rest of the transport row.
  */
 function PlayPauseButton({
   isPlaying,
@@ -90,10 +90,9 @@ function PlayPauseButton({
       aria-label={isPlaying ? "Pause" : "Play"}
       title={isPlaying ? "Pause" : "Play"}
       className={cn(
-        "group relative flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-all",
-        "hover:scale-105 hover:shadow-md hover:shadow-primary/20 active:scale-95",
-        "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card",
-        "disabled:opacity-40 disabled:hover:scale-100 disabled:hover:shadow-sm",
+        "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-primary transition-all",
+        "hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "disabled:opacity-40",
       )}
     >
       <MaterialSymbol
