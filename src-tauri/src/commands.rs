@@ -2714,8 +2714,6 @@ fn emit_track_changed_from_entry(
 
 // Kept for future use by the player when the resolved track differs
 // from the queue entry (e.g., the entry was restored without metadata).
-#[allow(dead_code)]
-fn _ensure_track_id_used(_: TrackId) {}
 
 /// Open the settings window. Idempotent — if the window is already open,
 /// this brings it to the foreground instead of creating a duplicate.
