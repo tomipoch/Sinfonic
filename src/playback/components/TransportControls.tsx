@@ -59,6 +59,54 @@ interface TransportControlsProps {
   canStep: boolean;
 }
 
+/**
+ * Play / pause toggle.
+ *
+ * Renders the primary circular button with the Google Material
+ * Symbols glyph for the current state:
+ *   - isPlaying=true  → 'pause'
+ *   - isPlaying=false → 'play_arrow'
+ *
+ * `weight={700}` makes the glyph sit a notch heavier than the
+ * surrounding 500-weight transport icons so it reads as the
+ * primary action; `fill` keeps the glyph solid (the rounded
+ * variant of play_arrow without `fill` looks outline-y at small
+ * sizes).
+ */
+function PlayPauseButton({
+  isPlaying,
+  disabled,
+  onToggle,
+}: {
+  isPlaying: boolean;
+  disabled: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      disabled={disabled}
+      aria-label={isPlaying ? "Pause" : "Play"}
+      title={isPlaying ? "Pause" : "Play"}
+      className={cn(
+        "group relative flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-all",
+        "hover:scale-105 hover:shadow-md hover:shadow-primary/20 active:scale-95",
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card",
+        "disabled:opacity-40 disabled:hover:scale-100 disabled:hover:shadow-sm",
+      )}
+    >
+      <MaterialSymbol
+        name={isPlaying ? "pause" : "play_arrow"}
+        size={22}
+        weight={700}
+        fill
+        className={isPlaying ? "" : "translate-x-[1px]"}
+      />
+    </button>
+  );
+}
+
 export function TransportControls({ canStep }: TransportControlsProps) {
   const { snapshot, togglePlay, next, previous } = usePlaybackContext();
   const { isPlaying } = snapshot;
@@ -96,26 +144,7 @@ export function TransportControls({ canStep }: TransportControlsProps) {
       <IconButton ariaLabel="Previous track" onClick={onPrev} disabled={!canStep || actionLock}>
         <MaterialSymbol name="skip_previous" size={20} fill />
       </IconButton>
-      <button
-        type="button"
-        onClick={onTogglePlay}
-        disabled={busy === "play"}
-        aria-label={isPlaying ? "Pause" : "Play"}
-        title={isPlaying ? "Pause" : "Play"}
-        className={cn(
-          "group relative flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-all",
-          "hover:scale-105 hover:shadow-md hover:shadow-primary/20 active:scale-95",
-          "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card",
-          "disabled:opacity-40 disabled:hover:scale-100 disabled:hover:shadow-sm",
-        )}
-      >
-        <MaterialSymbol
-          name={isPlaying ? "pause" : "play_arrow"}
-          size={22}
-          fill
-          className={isPlaying ? "" : "translate-x-[1px]"}
-        />
-      </button>
+      <PlayPauseButton isPlaying={isPlaying} disabled={busy === "play"} onToggle={onTogglePlay} />
       <IconButton ariaLabel="Next track" onClick={onNext} disabled={!canStep || actionLock}>
         <MaterialSymbol name="skip_next" size={20} fill />
       </IconButton>
