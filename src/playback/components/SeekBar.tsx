@@ -1,18 +1,8 @@
 // Seek bar — drag-to-position with commit-on-release.
 //
-// Two paths share the same viewBox:
-//   - A flat horizontal line covers the full width as the
-//     unplayed segment.
-//   - A wavy stroke (pathLength normalised to 100) is drawn on top
-//     with `stroke-dasharray=100` and `stroke-dashoffset` advancing
-//     with the playhead, so the played portion reveals itself as
-//     the wavy path while the rest stays hidden.
-//
-// Using `pathLength="100"` + dasharray instead of `clip-path: inset()`
-// makes the reveal robust across WebKit / Safari where SVG path
-// clip-path can be flaky. The native <input type="range"> sits on top
-// of the SVG with a transparent track so the visuals stay bound to
-// the theme variables and the slider keeps full keyboard / a11y.
+// The wavy SVG behind the slider gives the bar a visual identity
+// when no track is loaded (the slider is then disabled, but the
+// track still renders).
 
 import { useCallback } from "react";
 import { toast } from "sonner";
@@ -29,16 +19,7 @@ interface SeekBarProps {
   enabled: boolean;
 }
 
-// 8-cycle wave with amplitude ±5 inside a 16-unit-tall viewBox. Each
-// cycle is a pair of cubic Beziers (one going up, one coming back
-// down) so the peaks read as sharp ridges rather than smooth
-// sine curves. The pattern repeats 8 times so the path spans the
-// full viewBox width (x = 0 → 100); earlier iterations repeated
-// only 4 times and stopped at x = 50, which made the
-// `pathLength="100"` normalisation incoherent and the
-// stroke-dasharray reveal jump around the bar.
-const WAVE_PATH = `M 0 8 ${"c 2 -5 5 -5 6.25 0 c 2 5 5 5 6.25 0 ".repeat(8).trimEnd()}`;
-const LINE_PATH = "M 0 8 L 100 8";
+const WAVE_PATH = `M 0 6 ${"q 3.125 -6 6.25 0 ".repeat(16).trimEnd()}`;
 
 export function SeekBar({ enabled }: SeekBarProps) {
   const { snapshot, seekTo } = usePlaybackContext();
@@ -65,35 +46,30 @@ export function SeekBar({ enabled }: SeekBarProps) {
       <span className="w-10 shrink-0 text-right font-mono text-[11px] tabular-nums text-muted-foreground">
         {formatDuration(seekDrag.value)}
       </span>
-      <div className="relative h-4 flex-1">
+      <div className="relative h-3 flex-1">
         <svg
           className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
-          viewBox="0 0 100 16"
+          viewBox="0 0 100 12"
           preserveAspectRatio="none"
           aria-hidden
         >
-          {/* Unplayed segment — a flat horizontal line at mid-height. */}
           <path
-            d={LINE_PATH}
+            d={WAVE_PATH}
             fill="none"
-            stroke="var(--muted-foreground)"
-            strokeOpacity={0.4}
+            stroke="var(--muted)"
             strokeWidth={1}
             vectorEffect="non-scaling-stroke"
           />
-          {/* Played segment — same wavy path revealed up to progress%.
-              pathLength="100" normalises the path so dashoffset maps
-              directly to a 0–100 percentage. */}
           <path
             d={WAVE_PATH}
             fill="none"
             stroke="var(--primary)"
-            strokeWidth={1.75}
-            strokeLinecap="round"
+            strokeWidth={1.5}
             vectorEffect="non-scaling-stroke"
-            pathLength={100}
-            strokeDasharray={100}
-            strokeDashoffset={100 - progress}
+            style={{
+              clipPath: `inset(0 ${100 - progress}% 0 0)`,
+              WebkitClipPath: `inset(0 ${100 - progress}% 0 0)`,
+            }}
           />
         </svg>
         <input
