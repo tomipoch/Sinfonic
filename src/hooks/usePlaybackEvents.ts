@@ -53,26 +53,26 @@ export function usePlaybackEvents(): void {
 
     void Promise.all([
       listen<PlaybackStatePayload>("playback-state-changed", (e) => {
-        log.log("playback-state-changed", {
-          isPlaying: e.payload.isPlaying,
-          position: e.payload.positionSeconds,
-          duration: e.payload.durationSeconds,
-        });
+        const t = performance.now();
+        console.log(`[event @${t.toFixed(0)}] playback-state-changed`, e.payload);
         usePlaybackStore.getState().setState(e.payload);
+        console.log(
+          `[event @${t.toFixed(0)}] setState done, delta=${(performance.now() - t).toFixed(0)}ms`,
+        );
       }),
       listen<TrackChangedPayload>("track-changed", (e) => {
-        log.log("track-changed", {
-          trackId: e.payload.trackId,
-          title: e.payload.title,
-        });
+        const t = performance.now();
+        console.log(`[event @${t.toFixed(0)}] track-changed`, e.payload);
         usePlaybackStore.getState().setTrack(e.payload);
+        console.log(
+          `[event @${t.toFixed(0)}] setTrack done, delta=${(performance.now() - t).toFixed(0)}ms`,
+        );
       }),
       listen<QueueSnapshotPayload>("queue-changed", (e) => {
-        log.log("queue-changed", {
+        const t = performance.now();
+        console.log(`[event @${t.toFixed(0)}] queue-changed`, {
           entries: e.payload.entries.length,
           currentIndex: e.payload.currentIndex,
-          repeat: e.payload.repeat,
-          shuffle: e.payload.shuffle,
         });
         useQueueStore.setState({
           entries: e.payload.entries,
@@ -80,6 +80,7 @@ export function usePlaybackEvents(): void {
           repeat: e.payload.repeat,
           shuffle: e.payload.shuffle,
         });
+        console.log(`[event @${t.toFixed(0)}] queueStore.setState done`);
       }),
     ]).then((arr) => {
       if (cancelled) {

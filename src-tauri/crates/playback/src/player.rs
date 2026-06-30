@@ -74,11 +74,10 @@ unsafe impl Sync for OutputStreamHolder {}
 
 /// How often the position-poller thread reads the rodio Sink.
 ///
-/// 250 ms (4 Hz) gives a smooth progress bar without thrashing the
-/// Tauri event bus. Each tick is a `parking_lot::Mutex` snapshot plus
-/// an atomic store — measured well under 100 µs on macOS — so four
-/// events per second is cheap.
-const POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// Temporarily 1 s (1 Hz) while we diagnose whether the WKWebView
+/// event channel is the bottleneck. Re-raise to 250 ms once the
+/// dispatch path is confirmed non-blocking.
+const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Events the AudioPlayer emits to the rest of the app. Wired to Tauri
 /// events in `lib.rs::run`.

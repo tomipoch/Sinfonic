@@ -62,7 +62,15 @@ type Props = {
   onToggleLyrics: () => void;
 };
 
+const renderCountRef = { current: 0 };
+
 export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics }: Props) {
+  renderCountRef.current += 1;
+  if (import.meta.env.DEV) {
+    console.log(
+      `[PlayerBar render #${renderCountRef.current}] isPlaying=${usePlaybackStore.getState().isPlaying} pos=${usePlaybackStore.getState().positionSeconds}`,
+    );
+  }
   // ── global state ──────────────────────────────────────────────
   const queueLength = useQueueStore((s) => s.entries.length);
   const tracks = useLibraryStore((s) => s.tracks);
@@ -97,7 +105,8 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
     [busy],
   );
 
-  const onTogglePlay = () =>
+  const onTogglePlay = () => {
+    if (import.meta.env.DEV) console.log("[PlayerBar] onTogglePlay clicked, isPlaying=", isPlaying);
     run(
       "play",
       async () => {
@@ -107,11 +116,14 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
         usePlaybackStore.getState().setIsPlaying(next);
         if (isPlaying) await pause();
         else await resume();
+        if (import.meta.env.DEV) console.log("[PlayerBar] onTogglePlay done");
       },
       "Playback",
     );
+  };
 
-  const onPrev = () =>
+  const onPrev = () => {
+    if (import.meta.env.DEV) console.log("[PlayerBar] onPrev clicked");
     run(
       "prev",
       async () => {
@@ -120,8 +132,10 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
       },
       "Previous",
     );
+  };
 
-  const onNext = () =>
+  const onNext = () => {
+    if (import.meta.env.DEV) console.log("[PlayerBar] onNext clicked");
     run(
       "next",
       async () => {
@@ -130,6 +144,7 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
       },
       "Next",
     );
+  };
 
   const seekEnabled = currentTrack !== null && duration > 0;
 
@@ -138,11 +153,13 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
     const drag = seekDrag.value;
     seekDrag.finish();
     if (drag === position) return;
+    if (import.meta.env.DEV) console.log(`[PlayerBar] finishSeek to ${drag}`);
     run(
       null,
       async () => {
         await seek(drag);
         usePlaybackStore.getState().setPosition(drag);
+        if (import.meta.env.DEV) console.log("[PlayerBar] finishSeek done");
       },
       "Seek",
     );
@@ -153,11 +170,13 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
     volumeDrag.finish();
     const committed = muted ? 0 : volume;
     if (drag === committed) return;
+    if (import.meta.env.DEV) console.log(`[PlayerBar] finishVolume to ${drag}`);
     run(
       null,
       async () => {
         await setVolume(drag);
         usePlaybackStore.getState().setVolume(drag);
+        if (import.meta.env.DEV) console.log("[PlayerBar] finishVolume done");
       },
       "Set volume",
     );
@@ -165,6 +184,7 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
 
   const onMuteToggle = () => {
     const nextMuted = !muted;
+    if (import.meta.env.DEV) console.log("[PlayerBar] onMuteToggle", nextMuted);
     setMuted(nextMuted)
       .then(() => usePlaybackStore.getState().setMuted(nextMuted))
       .catch((err) => toast.error(`Toggle mute: ${extractError(err, "unknown error")}`));
