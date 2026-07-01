@@ -54,7 +54,7 @@ export function SeekBar({ enabled }: SeekBarProps) {
       <span className="w-9 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
         {formatDuration(seekDrag.value)}
       </span>
-      <div className="relative h-0.5 flex-1">
+      <div className="relative h-1.5 w-full max-w-40 flex-1">
         <svg
           className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
           viewBox="0 0 100 2"
