@@ -76,7 +76,10 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
         </div>
       </TransportBusyProvider>
 
-      <div className="flex min-w-0 items-center justify-end gap-1" data-pb-col="right">
+      <div
+        className="flex min-w-0 items-center justify-end gap-0.5 rounded-md bg-muted/40 p-0.5"
+        data-pb-col="right"
+      >
         <VolumeControl />
         <PanelToggles
           queueOpen={queueOpen}
