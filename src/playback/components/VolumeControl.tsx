@@ -50,15 +50,17 @@ export function VolumeControl() {
   };
 
   return (
-    <div className="group flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted/60 focus-within:bg-muted/60">
+    <div className="group flex items-center gap-0.5">
       <button
         type="button"
         onClick={onMuteToggle}
         aria-label={muted ? "Unmute" : "Mute"}
         aria-pressed={muted}
         className={cn(
-          "flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors group-hover:text-foreground",
-          muted && "text-primary",
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-all",
+          "hover:bg-muted hover:text-foreground",
+          "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          muted && "bg-muted text-primary hover:bg-muted hover:text-primary",
         )}
       >
         <HugeiconsIcon icon={volumeIcon} size={16} strokeWidth={1.75} />
