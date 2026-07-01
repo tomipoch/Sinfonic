@@ -19,7 +19,7 @@ interface SeekBarProps {
   enabled: boolean;
 }
 
-const WAVE_PATH = `M 0 4 ${"q 3.125 -3.5 6.25 0 ".repeat(16).trimEnd()}`;
+const WAVE_PATH = `M 0 3 ${"q 3.125 -2.5 6.25 0 ".repeat(16).trimEnd()}`;
 
 export function SeekBar({ enabled }: SeekBarProps) {
   const { snapshot, seekTo } = usePlaybackContext();
@@ -46,10 +46,10 @@ export function SeekBar({ enabled }: SeekBarProps) {
       <span className="w-9 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
         {formatDuration(seekDrag.value)}
       </span>
-      <div className="relative h-2 flex-1">
+      <div className="relative h-1.5 flex-1">
         <svg
           className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
-          viewBox="0 0 100 8"
+          viewBox="0 0 100 6"
           preserveAspectRatio="none"
           aria-hidden
         >
@@ -57,14 +57,14 @@ export function SeekBar({ enabled }: SeekBarProps) {
             d={WAVE_PATH}
             fill="none"
             stroke="var(--muted)"
-            strokeWidth={0.75}
+            strokeWidth={1.25}
             vectorEffect="non-scaling-stroke"
           />
           <path
             d={WAVE_PATH}
             fill="none"
             stroke="var(--primary)"
-            strokeWidth={1}
+            strokeWidth={1.75}
             vectorEffect="non-scaling-stroke"
             style={{
               clipPath: `inset(0 ${100 - progress}% 0 0)`,
