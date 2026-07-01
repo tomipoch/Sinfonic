@@ -27,7 +27,7 @@ interface SeekBarProps {
   enabled: boolean;
 }
 
-const LINE_PATH = "M 0 2 L 100 2";
+const LINE_PATH = "M 0 1.5 L 100 1.5";
 
 export function SeekBar({ enabled }: SeekBarProps) {
   const { snapshot, seekTo } = usePlaybackContext();
@@ -54,10 +54,10 @@ export function SeekBar({ enabled }: SeekBarProps) {
       <span className="w-9 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
         {formatDuration(seekDrag.value)}
       </span>
-      <div className="relative h-1 flex-1">
+      <div className="relative h-[3px] flex-1">
         <svg
           className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
-          viewBox="0 0 100 4"
+          viewBox="0 0 100 3"
           preserveAspectRatio="none"
           aria-hidden
         >
@@ -66,14 +66,14 @@ export function SeekBar({ enabled }: SeekBarProps) {
             fill="none"
             stroke="var(--muted-foreground)"
             strokeOpacity={0.4}
-            strokeWidth={1.5}
+            strokeWidth={1.25}
             vectorEffect="non-scaling-stroke"
           />
           <path
             d={LINE_PATH}
             fill="none"
             stroke="var(--primary)"
-            strokeWidth={2}
+            strokeWidth={1.75}
             vectorEffect="non-scaling-stroke"
             style={{
               clipPath: `inset(0 ${100 - progress}% 0 0)`,
