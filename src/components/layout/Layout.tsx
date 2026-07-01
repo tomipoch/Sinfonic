@@ -1,16 +1,23 @@
 // Layout — TitleBar + Sidebar + main outlet + PlayerBar + QueuePanel.
 //
+// The right-side QueuePanel reads its mode (queue / lyrics) from
+// the queue store so the PlayerBar's panel toggles and the panel
+// itself stay in sync without prop drilling. Layout only owns the
+// `panelOpen` boolean (derived from the store) for the mr-56 margin
+// and the conditional render.
+//
 // Every major container is tagged with `data-layout-el` so the
 // resize probe (mounted further down in this file) can read each
-// one's pixel dimensions from the DOM and log them to the console.
-// That's what tells us the minimum window size: resize until an
-// element reports overflow > 0, then back off ~20 px.
+// one's pixel dimensions and log them to the console. That's what
+// tells us the minimum window size: resize until an element reports
+// overflow > 0, then back off ~20 px.
 
 import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useLibraryAutoLoad } from "@/hooks/useLibraryAutoLoad";
 import { cn } from "@/lib/cn";
+import { useQueueStore } from "@/stores/queueStore";
 import { PlayerBar } from "./PlayerBar";
 import { QueuePanel } from "./QueuePanel";
 import { Sidebar } from "./Sidebar";
@@ -41,9 +48,13 @@ export function Layout() {
   useKeyboardShortcuts();
   useLibraryAutoLoad();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [panelMode, setPanelMode] = useState<"closed" | "queue" | "lyrics">("closed");
+  const panelMode = useQueueStore((s) => s.panelMode);
+  const setPanelMode = useQueueStore((s) => s.setPanelMode);
 
-  const panelOpen = panelMode !== "closed";
+  const panelOpen = panelMode !== null;
+
+  const toggleQueue = () => setPanelMode(panelMode === "queue" ? null : "queue");
+  const toggleLyrics = () => setPanelMode(panelMode === "lyrics" ? null : "lyrics");
 
   // Top-level layout probe — runs on mount and on every window
   // resize. Walks the DOM for anything tagged with data-layout-el
@@ -54,10 +65,6 @@ export function Layout() {
       const root = document.body;
       const nodes = Array.from(root.querySelectorAll<HTMLElement>("[data-layout-el]"));
       const entries = nodes.map(probeElement);
-      // PlayerBar's column widths come from the same DOM but are
-      // nested inside the main element — query them separately
-      // so the log lists them at the same level as the top-level
-      // elements.
       const playerCols = Array.from(root.querySelectorAll<HTMLElement>("[data-pb-col]")).map(
         (el) => ({
           col: el.dataset.pbCol ?? "?",
@@ -105,17 +112,14 @@ export function Layout() {
           </div>
           <PlayerBar
             queueOpen={panelMode === "queue"}
-            onToggleQueue={() => setPanelMode((m) => (m === "queue" ? "closed" : "queue"))}
+            onToggleQueue={toggleQueue}
             lyricsOpen={panelMode === "lyrics"}
-            onToggleLyrics={() => setPanelMode((m) => (m === "lyrics" ? "closed" : "lyrics"))}
+            onToggleLyrics={toggleLyrics}
           />
         </main>
         {panelOpen && (
           <div data-layout-el="queuepanel">
-            <QueuePanel
-              initialMode={panelMode === "lyrics" ? "lyrics" : "queue"}
-              onClose={() => setPanelMode("closed")}
-            />
+            <QueuePanel initialMode={panelMode ?? "queue"} />
           </div>
         )}
       </div>
