@@ -1,8 +1,10 @@
 // Seek bar — drag-to-position with commit-on-release.
 //
-// The wavy SVG behind the slider gives the bar a visual identity
-// when no track is loaded (the slider is then disabled, but the
-// track still renders).
+// Flat horizontal line for the unplayed segment, the same line
+// in the accent colour clipped up to progress% for the played
+// portion. Native <input type="range"> sits on top of the SVG so
+// the visuals stay bound to the theme variables and the slider
+// keeps full keyboard / a11y.
 
 import { useCallback } from "react";
 import { toast } from "sonner";
@@ -19,7 +21,7 @@ interface SeekBarProps {
   enabled: boolean;
 }
 
-const WAVE_PATH = `M 0 3 ${"q 3.125 -2.5 6.25 0 ".repeat(16).trimEnd()}`;
+const LINE_PATH = "M 0 2 L 100 2";
 
 export function SeekBar({ enabled }: SeekBarProps) {
   const { snapshot, seekTo } = usePlaybackContext();
@@ -46,25 +48,26 @@ export function SeekBar({ enabled }: SeekBarProps) {
       <span className="w-9 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
         {formatDuration(seekDrag.value)}
       </span>
-      <div className="relative h-1.5 flex-1">
+      <div className="relative h-1 flex-1">
         <svg
           className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
-          viewBox="0 0 100 6"
+          viewBox="0 0 100 4"
           preserveAspectRatio="none"
           aria-hidden
         >
           <path
-            d={WAVE_PATH}
+            d={LINE_PATH}
             fill="none"
-            stroke="var(--muted)"
-            strokeWidth={1.25}
+            stroke="var(--muted-foreground)"
+            strokeOpacity={0.4}
+            strokeWidth={1.5}
             vectorEffect="non-scaling-stroke"
           />
           <path
-            d={WAVE_PATH}
+            d={LINE_PATH}
             fill="none"
             stroke="var(--primary)"
-            strokeWidth={1.75}
+            strokeWidth={2}
             vectorEffect="non-scaling-stroke"
             style={{
               clipPath: `inset(0 ${100 - progress}% 0 0)`,
@@ -91,7 +94,7 @@ export function SeekBar({ enabled }: SeekBarProps) {
           aria-valuemax={durationSeconds}
           aria-valuenow={seekDrag.value}
           className={cn(
-            "player-range-wave absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent outline-none",
+            "player-range absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent outline-none",
             "disabled:cursor-not-allowed disabled:opacity-40",
           )}
         />
