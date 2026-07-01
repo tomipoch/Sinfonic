@@ -96,7 +96,7 @@ export function Layout() {
         <main
           className={cn(
             "flex min-w-0 flex-1 flex-col transition-all duration-200",
-            panelOpen && "mr-72",
+            panelOpen && "mr-56",
           )}
           data-layout-el="main"
         >
