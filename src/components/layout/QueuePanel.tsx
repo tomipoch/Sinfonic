@@ -35,7 +35,7 @@ export function QueuePanel({ onClose, initialMode = "queue" }: Props) {
   }, [initialMode]);
 
   return (
-    <div className="absolute inset-y-0 right-0 z-40 flex w-80 flex-col border-l border-border bg-card shadow-xl">
+    <div className="absolute inset-y-0 right-0 z-40 flex w-56 flex-col border-l border-border bg-card shadow-xl">
       <PanelHeader mode={mode} onModeChange={setMode} onClose={onClose} />
       {mode === "queue" ? <QueueList /> : <LyricsView />}
     </div>
