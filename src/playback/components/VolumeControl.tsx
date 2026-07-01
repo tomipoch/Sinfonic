@@ -50,7 +50,21 @@ export function VolumeControl() {
   };
 
   return (
-    <div className="group flex items-center gap-0.5">
+    <div className="group flex items-center gap-0.5 rounded-md bg-muted/40 p-0.5">
+      <button
+        type="button"
+        onClick={onMuteToggle}
+        aria-label={muted ? "Unmute" : "Mute"}
+        aria-pressed={muted}
+        className={cn(
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-all",
+          "hover:bg-muted hover:text-foreground",
+          "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          muted && "bg-muted text-primary hover:bg-muted hover:text-primary",
+        )}
+      >
+        <HugeiconsIcon icon={volumeIcon} size={16} strokeWidth={1.75} />
+      </button>
       <input
         type="range"
         min={VOLUME_MIN}
@@ -71,20 +85,6 @@ export function VolumeControl() {
           background: `linear-gradient(to right, var(--primary) 0%, var(--primary) ${progress}%, var(--muted) ${progress}%, var(--muted) 100%)`,
         }}
       />
-      <button
-        type="button"
-        onClick={onMuteToggle}
-        aria-label={muted ? "Unmute" : "Mute"}
-        aria-pressed={muted}
-        className={cn(
-          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-all",
-          "hover:bg-muted hover:text-foreground",
-          "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          muted && "bg-muted text-primary hover:bg-muted hover:text-primary",
-        )}
-      >
-        <HugeiconsIcon icon={volumeIcon} size={16} strokeWidth={1.75} />
-      </button>
     </div>
   );
 }
