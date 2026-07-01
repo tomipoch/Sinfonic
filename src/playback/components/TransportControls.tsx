@@ -91,7 +91,7 @@ function PlayPauseButton({
       aria-label={isPlaying ? "Pause" : "Play"}
       title={isPlaying ? "Pause" : "Play"}
       className={cn(
-        "group relative flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-all",
+        "group relative flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-all",
         "hover:scale-105 hover:shadow-md hover:shadow-primary/20 active:scale-95",
         "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card",
         "disabled:opacity-40 disabled:hover:scale-100 disabled:hover:shadow-sm",
@@ -99,10 +99,10 @@ function PlayPauseButton({
     >
       <MaterialSymbol
         name={isPlaying ? "pause" : "play_arrow"}
-        size={28}
+        size={22}
         weight={700}
         fill
-        className="[--mat-symbol-size:24px] sm:[--mat-symbol-size:28px] translate-x-[1px]"
+        className="[--mat-symbol-size:20px] sm:[--mat-symbol-size:22px] translate-x-[1px]"
       />
     </button>
   );
@@ -149,18 +149,18 @@ export function TransportControls({ canStep }: TransportControlsProps) {
       <IconButton ariaLabel="Previous track" onClick={onPrev} disabled={!canStep || actionLock}>
         <MaterialSymbol
           name="skip_previous"
-          size={26}
+          size={22}
           fill
-          className="[--mat-symbol-size:22px] sm:[--mat-symbol-size:26px]"
+          className="[--mat-symbol-size:18px] sm:[--mat-symbol-size:22px]"
         />
       </IconButton>
       <PlayPauseButton isPlaying={isPlaying} disabled={busy === "play"} onToggle={onTogglePlay} />
       <IconButton ariaLabel="Next track" onClick={onNext} disabled={!canStep || actionLock}>
         <MaterialSymbol
           name="skip_next"
-          size={26}
+          size={22}
           fill
-          className="[--mat-symbol-size:22px] sm:[--mat-symbol-size:26px]"
+          className="[--mat-symbol-size:18px] sm:[--mat-symbol-size:22px]"
         />
       </IconButton>
       <IconButton
