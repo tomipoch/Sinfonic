@@ -59,7 +59,7 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
     <footer
       {...droppableProps}
       className={cn(
-        "relative grid h-14 shrink-0 grid-cols-[1fr_minmax(16rem,24rem)_1fr] items-center gap-1 border-t border-border bg-card px-2 transition-colors sm:h-[5rem] sm:gap-2 sm:px-3 md:h-[5.5rem] md:px-4",
+        "relative grid h-14 shrink-0 grid-cols-[1fr_minmax(16rem,24rem)_1fr] items-center gap-1 border-t border-border bg-card px-2 transition-colors data-[panels-open=true]:grid-cols-[1fr_minmax(12rem,17rem)_1fr] sm:h-[5rem] sm:gap-2 sm:px-3 md:h-[5.5rem] md:px-4",
         dragOver && "bg-primary/10 ring-1 ring-inset ring-primary/40",
       )}
       role="contentinfo"

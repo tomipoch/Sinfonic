@@ -139,7 +139,11 @@ export function TransportControls({ canStep }: TransportControlsProps) {
 
   return (
     <div className="flex items-center gap-1">
-      <IconButton ariaLabel="Shuffle" disabled className="opacity-40">
+      <IconButton
+        ariaLabel="Shuffle"
+        disabled
+        className="hidden opacity-40 data-[panels-open=true]:inline-flex"
+      >
         <MaterialSymbol name="shuffle" size={18} />
       </IconButton>
       <IconButton ariaLabel="Previous track" onClick={onPrev} disabled={!canStep || actionLock}>
@@ -159,7 +163,11 @@ export function TransportControls({ canStep }: TransportControlsProps) {
           className="[--mat-symbol-size:22px] sm:[--mat-symbol-size:26px]"
         />
       </IconButton>
-      <IconButton ariaLabel="Repeat" disabled className="opacity-40">
+      <IconButton
+        ariaLabel="Repeat"
+        disabled
+        className="hidden opacity-40 data-[panels-open=true]:inline-flex"
+      >
         <MaterialSymbol name="repeat" size={18} />
       </IconButton>
     </div>

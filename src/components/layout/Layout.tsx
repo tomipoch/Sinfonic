@@ -106,6 +106,7 @@ export function Layout() {
             panelOpen && "mr-56",
           )}
           data-layout-el="main"
+          data-panels-open={panelOpen || undefined}
         >
           <div className="flex-1 overflow-auto [overscroll-behavior:contain]">
             <Outlet />
