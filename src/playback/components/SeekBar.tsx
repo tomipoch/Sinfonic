@@ -1,14 +1,16 @@
 // Seek bar — drag-to-position with commit-on-release.
 //
-// Single flat horizontal line in the muted-foreground colour sits
-// behind the native <input type="range"> for visual reference. No
-// progress-coloured overlay: the played portion is communicated by
-// the thumb position on the line itself, not by a second coloured
-// path clipped to progress%.
+// Two stacked flat horizontal lines:
+//   1. Background muted-foreground line at low opacity — the
+//      full track length.
+//   2. Accent-coloured line clipped to progress% — the played
+//      portion so the user can see how far they are into the
+//      track.
 //
-// The native input keeps full keyboard / a11y. Its track and thumb
-// are styled transparent in src/index.css so only this SVG line is
-// visible.
+// Both paths share the same SVG and viewBox (0 0 100 4) so they
+// sit on the same baseline at h-1 (4 px). Native <input type="range">
+// on top keeps keyboard / a11y; its track + thumb are styled
+// transparent in src/index.css.
 
 import { useCallback } from "react";
 import { toast } from "sonner";
@@ -44,6 +46,9 @@ export function SeekBar({ enabled }: SeekBarProps) {
     }
   }, [seekDrag, positionSeconds, seekTo]);
 
+  const progress =
+    durationSeconds > 0 ? Math.min(100, (seekDrag.value / durationSeconds) * 100) : 0;
+
   return (
     <div className="flex w-full items-center gap-2">
       <span className="w-9 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
@@ -63,6 +68,17 @@ export function SeekBar({ enabled }: SeekBarProps) {
             strokeOpacity={0.4}
             strokeWidth={1.5}
             vectorEffect="non-scaling-stroke"
+          />
+          <path
+            d={LINE_PATH}
+            fill="none"
+            stroke="var(--primary)"
+            strokeWidth={2}
+            vectorEffect="non-scaling-stroke"
+            style={{
+              clipPath: `inset(0 ${100 - progress}% 0 0)`,
+              WebkitClipPath: `inset(0 ${100 - progress}% 0 0)`,
+            }}
           />
         </svg>
         <input
