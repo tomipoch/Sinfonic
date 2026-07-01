@@ -78,7 +78,6 @@ export function PlayerBar({ queueOpen, onToggleQueue, lyricsOpen, onToggleLyrics
 
       <div className="flex min-w-0 items-center justify-end gap-1" data-pb-col="right">
         <VolumeControl />
-        <div className="mx-1 h-5 w-px shrink-0 bg-border" aria-hidden />
         <PanelToggles
           queueOpen={queueOpen}
           onToggleQueue={onToggleQueue}
