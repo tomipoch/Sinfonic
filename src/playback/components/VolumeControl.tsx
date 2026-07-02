@@ -72,10 +72,17 @@ export function VolumeControl() {
   }, [volumeDrag, muted, volume, setVolume]);
 
   const onButtonClick = () => {
-    setOpen((o) => !o);
-    setMuted(!muted).catch((err) =>
-      toast.error(`Toggle mute: ${extractError(err, "unknown error")}`),
-    );
+    // First click: open the popover. Second click: mute the
+    // volume and close. Subsequent clicks alternate: open, mute
+    // + close, open, mute + close, ...
+    if (open) {
+      setMuted(!muted).catch((err) =>
+        toast.error(`Toggle mute: ${extractError(err, "unknown error")}`),
+      );
+      setOpen(false);
+    } else {
+      setOpen(true);
+    }
   };
 
   return (
@@ -115,8 +122,8 @@ export function VolumeControl() {
         aria-label="Volume"
         tabIndex={open ? 0 : -1}
         className={cn(
-          "player-range absolute top-1/2 left-9 -translate-y-1/2 h-1 cursor-pointer appearance-none rounded-full border border-border bg-card outline-none accent-primary transition-[width,opacity] duration-200 ease-out",
-          open ? "w-24 opacity-100" : "w-0 opacity-0 pointer-events-none",
+          "player-range absolute top-1/2 left-9 -translate-y-1/2 h-3 cursor-pointer appearance-none rounded-md border border-border bg-card px-2 outline-none accent-primary transition-[width,opacity] duration-200 ease-out",
+          open ? "w-28 opacity-100" : "w-0 opacity-0 pointer-events-none",
         )}
         style={{
           background: `linear-gradient(to right, var(--primary) 0%, var(--primary) ${progress}%, var(--muted) ${progress}%, var(--muted) 100%)`,
