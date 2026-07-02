@@ -1,10 +1,16 @@
-// Volume control — mute toggle + hidden-by-default slider that
-// expands on hover / focus. The slider shares the drag-then-commit
-// pattern with the seek bar.
+// Volume control — mute toggle + click-to-open slider that
+// overlays the rest of the right cluster. The slider only
+// appears on click of the volume button (not on hover), and
+// is positioned absolutely so it doesn't push the queue /
+// lyrics / EQ toggles around.
+//
+// The slider shares the drag-then-commit pattern with the seek
+// bar. Clicking outside the component (or pressing Escape)
+// closes the popover.
 
 import { VolumeHighIcon, VolumeLowIcon, VolumeOffIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/cn";
@@ -31,6 +37,28 @@ export function VolumeControl() {
   const progress = Math.max(0, Math.min(1, volumeDrag.value)) * 100;
   const volumeIcon = volumeIconFor(effectiveVolume, muted);
 
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click or Escape.
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [open]);
+
   const commit = useCallback(async () => {
     const drag = volumeDrag.value;
     volumeDrag.finish();
@@ -43,24 +71,30 @@ export function VolumeControl() {
     }
   }, [volumeDrag, muted, volume, setVolume]);
 
-  const onMuteToggle = () => {
+  const onButtonClick = () => {
+    setOpen((o) => !o);
     setMuted(!muted).catch((err) =>
       toast.error(`Toggle mute: ${extractError(err, "unknown error")}`),
     );
   };
 
   return (
-    <div className="group flex items-center gap-0.5 rounded-md bg-muted/40 p-0.5">
+    <div
+      ref={wrapperRef}
+      className="relative z-30 flex items-center gap-0.5 rounded-md bg-muted/40 p-0.5"
+    >
       <button
         type="button"
-        onClick={onMuteToggle}
+        onClick={onButtonClick}
         aria-label={muted ? "Unmute" : "Mute"}
         aria-pressed={muted}
+        aria-expanded={open}
+        aria-haspopup="dialog"
         className={cn(
           "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-all",
           "hover:bg-muted hover:text-foreground",
           "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          muted && "bg-muted text-primary hover:bg-muted hover:text-primary",
+          (muted || open) && "bg-muted text-primary hover:bg-muted hover:text-primary",
         )}
       >
         <HugeiconsIcon icon={volumeIcon} size={16} strokeWidth={1.75} />
@@ -79,8 +113,11 @@ export function VolumeControl() {
         }}
         onBlur={commit}
         aria-label="Volume"
-        tabIndex={0}
-        className="player-range h-1 w-0 cursor-pointer appearance-none rounded-full bg-muted opacity-0 outline-none accent-primary transition-[width,opacity,padding] duration-200 ease-out group-hover:w-24 group-hover:opacity-100 group-focus-within:w-24 group-focus-within:opacity-100 focus:w-24 focus:opacity-100"
+        tabIndex={open ? 0 : -1}
+        className={cn(
+          "player-range absolute top-1/2 left-9 -translate-y-1/2 h-1 cursor-pointer appearance-none rounded-full bg-muted outline-none accent-primary transition-[width,opacity] duration-200 ease-out",
+          open ? "w-24 opacity-100" : "w-0 opacity-0 pointer-events-none",
+        )}
         style={{
           background: `linear-gradient(to right, var(--primary) 0%, var(--primary) ${progress}%, var(--muted) ${progress}%, var(--muted) 100%)`,
         }}
