@@ -1,12 +1,13 @@
-// Volume control — mute toggle + click-to-open slider that
-// overlays the rest of the right cluster. The slider only
-// appears on click of the volume button (not on hover), and
-// is positioned absolutely so it doesn't push the queue /
-// lyrics / EQ toggles around.
+// Volume control — single integrated chip with the speaker icon
+// on the left and the slider on the right. The whole chip is
+// the popover: it appears on click of the icon (or on hover
+// of the wrapper) and disappears on click outside or Escape.
 //
-// The slider shares the drag-then-commit pattern with the seek
-// bar. Clicking outside the component (or pressing Escape)
-// closes the popover.
+// Clicking the icon mutes / unmutes; dragging the slider
+// adjusts the volume. The icon and the slider share the same
+// `border border-border bg-card` chip so the clickable area
+// is wide enough that clicking the padding doesn't dismiss
+// the popover via the outside-click listener.
 
 import { VolumeHighIcon, VolumeLowIcon, VolumeOffIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -71,47 +72,40 @@ export function VolumeControl() {
     }
   }, [volumeDrag, muted, volume, setVolume]);
 
-  const onButtonClick = () => {
-    // First click: open the popover. Second click: mute the
-    // volume and close. Subsequent clicks alternate: open, mute
-    // + close, open, mute + close, ...
-    if (open) {
-      setMuted(!muted).catch((err) =>
-        toast.error(`Toggle mute: ${extractError(err, "unknown error")}`),
-      );
-      setOpen(false);
-    } else {
-      setOpen(true);
-    }
+  const onMuteClick = () => {
+    setMuted(!muted).catch((err) =>
+      toast.error(`Toggle mute: ${extractError(err, "unknown error")}`),
+    );
   };
 
   return (
-    <div
-      ref={wrapperRef}
-      className="relative z-30 flex items-center gap-0.5 rounded-md bg-muted/40 p-0.5"
-    >
-      <button
-        type="button"
-        onClick={onButtonClick}
-        aria-label={muted ? "Unmute" : "Mute"}
-        aria-pressed={muted}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        className={cn(
-          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-all",
-          "hover:bg-muted hover:text-foreground",
-          "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          (muted || open) && "bg-muted text-primary hover:bg-muted hover:text-primary",
-        )}
-      >
-        <HugeiconsIcon icon={volumeIcon} size={16} strokeWidth={1.75} />
-      </button>
+    <div ref={wrapperRef} className="relative z-30 flex items-center rounded-md p-0.5">
+      {/* Integrated chip: speaker icon + slider, both inside the
+          same bordered card. Width collapses to 0 when closed so
+          the chip doesn't push the queue / lyrics / EQ toggles
+          around. */}
       <div
         className={cn(
-          "absolute top-1/2 left-9 -translate-y-1/2 flex items-center rounded-md border border-border bg-card px-3 transition-[width,opacity] duration-200 ease-out",
-          open ? "w-32 h-9 opacity-100" : "w-0 h-9 opacity-0 pointer-events-none",
+          "flex items-center gap-2 rounded-md border border-border bg-card px-2 transition-[width,padding,opacity] duration-200 ease-out",
+          open
+            ? "w-36 h-9 py-1 opacity-100"
+            : "pointer-events-none w-0 h-9 p-0 opacity-0 overflow-hidden",
         )}
       >
+        <button
+          type="button"
+          onClick={onMuteClick}
+          aria-label={muted ? "Unmute" : "Mute"}
+          aria-pressed={muted}
+          className={cn(
+            "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors",
+            "hover:bg-muted hover:text-foreground",
+            "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            muted && "bg-muted text-primary hover:bg-muted hover:text-primary",
+          )}
+        >
+          <HugeiconsIcon icon={volumeIcon} size={16} strokeWidth={1.75} />
+        </button>
         <input
           type="range"
           min={VOLUME_MIN}
@@ -133,6 +127,25 @@ export function VolumeControl() {
           }}
         />
       </div>
+      {/* Always-visible icon outside the chip — doubles as the
+          popover trigger. Clicking the icon toggles open / mute
+          (same semantics as the chip's own icon when open). */}
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-label={muted ? "Unmute" : "Mute"}
+        aria-pressed={muted}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        className={cn(
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-all",
+          "hover:bg-muted hover:text-foreground",
+          "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          (muted || open) && "bg-muted text-primary hover:bg-muted hover:text-primary",
+        )}
+      >
+        <HugeiconsIcon icon={volumeIcon} size={16} strokeWidth={1.75} />
+      </button>
     </div>
   );
 }
