@@ -115,7 +115,7 @@ export function VolumeControl() {
         aria-label="Volume"
         tabIndex={open ? 0 : -1}
         className={cn(
-          "player-range absolute top-1/2 left-9 -translate-y-1/2 h-1 cursor-pointer appearance-none rounded-full bg-muted outline-none accent-primary transition-[width,opacity] duration-200 ease-out",
+          "player-range absolute top-1/2 left-9 -translate-y-1/2 h-1 cursor-pointer appearance-none rounded-full border border-border bg-card outline-none accent-primary transition-[width,opacity] duration-200 ease-out",
           open ? "w-24 opacity-100" : "w-0 opacity-0 pointer-events-none",
         )}
         style={{
