@@ -106,29 +106,33 @@ export function VolumeControl() {
       >
         <HugeiconsIcon icon={volumeIcon} size={16} strokeWidth={1.75} />
       </button>
-      <input
-        type="range"
-        min={VOLUME_MIN}
-        max={VOLUME_MAX}
-        step={VOLUME_STEP}
-        value={volumeDrag.value}
-        onChange={volumeDrag.onChange}
-        onPointerUp={commit}
-        onKeyUp={(event) => {
-          if (event.key === "Tab") return;
-          commit();
-        }}
-        onBlur={commit}
-        aria-label="Volume"
-        tabIndex={open ? 0 : -1}
+      <div
         className={cn(
-          "player-range absolute top-1/2 left-9 -translate-y-1/2 h-3 cursor-pointer appearance-none rounded-md border border-border bg-card px-2 outline-none accent-primary transition-[width,opacity] duration-200 ease-out",
-          open ? "w-28 opacity-100" : "w-0 opacity-0 pointer-events-none",
+          "absolute top-1/2 left-9 -translate-y-1/2 flex items-center rounded-md border border-border bg-card px-3 transition-[width,opacity] duration-200 ease-out",
+          open ? "w-32 h-9 opacity-100" : "w-0 h-9 opacity-0 pointer-events-none",
         )}
-        style={{
-          background: `linear-gradient(to right, var(--primary) 0%, var(--primary) ${progress}%, var(--muted) ${progress}%, var(--muted) 100%)`,
-        }}
-      />
+      >
+        <input
+          type="range"
+          min={VOLUME_MIN}
+          max={VOLUME_MAX}
+          step={VOLUME_STEP}
+          value={volumeDrag.value}
+          onChange={volumeDrag.onChange}
+          onPointerUp={commit}
+          onKeyUp={(event) => {
+            if (event.key === "Tab") return;
+            commit();
+          }}
+          onBlur={commit}
+          aria-label="Volume"
+          tabIndex={open ? 0 : -1}
+          className="player-range h-1 w-full cursor-pointer appearance-none rounded-full outline-none accent-primary"
+          style={{
+            background: `linear-gradient(to right, var(--primary) 0%, var(--primary) ${progress}%, var(--muted) ${progress}%, var(--muted) 100%)`,
+          }}
+        />
+      </div>
     </div>
   );
 }
