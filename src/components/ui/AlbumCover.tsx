@@ -53,9 +53,38 @@ interface AlbumCoverProps {
   className?: string;
   ariaLabel?: string;
   initial?: string;
+  /**
+   * Inline styles applied to the outer wrapper. Useful for overriding
+   * the default `aspect-square` (e.g. hero sections that need the
+   * image to fill an arbitrary-sized container).
+   */
+  style?: CSSProperties;
+  /**
+   * Called when the underlying image finishes loading. Receives the
+   * native `img` event so callers can read `naturalWidth` /
+   * `naturalHeight` to pick a layout that fits the photo's aspect
+   * ratio (portrait vs landscape). Not called when the image is
+   * missing, cached-but-already-loaded, or has failed to load.
+   */
+  onLoad?: React.ReactEventHandler<HTMLImageElement>;
+  /**
+   * Called when the underlying image fails to load. Lets callers
+   * fall back to a different layout (e.g. switch from a landscape
+   * banner to a portrait card so the gradient + initial render
+   * gracefully instead of as a stretched banner).
+   */
+  onError?: React.ReactEventHandler<HTMLImageElement>;
 }
 
-export function AlbumCover({ source, className, ariaLabel, initial }: AlbumCoverProps) {
+export function AlbumCover({
+  source,
+  className,
+  ariaLabel,
+  initial,
+  style,
+  onLoad,
+  onError,
+}: AlbumCoverProps) {
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -111,6 +140,7 @@ export function AlbumCover({ source, className, ariaLabel, initial }: AlbumCover
   return (
     <div
       className={`relative aspect-square w-full overflow-hidden rounded-md shadow-sm ${className ?? ""}`}
+      style={{ aspectRatio: "1 / 1", ...style }}
       aria-label={ariaLabel ?? `Cover art for ${source.title}`}
     >
       <div
@@ -127,7 +157,11 @@ export function AlbumCover({ source, className, ariaLabel, initial }: AlbumCover
           className="absolute inset-0 h-full w-full object-cover"
           draggable={false}
           loading="lazy"
-          onError={() => setFailed(true)}
+          onLoad={onLoad}
+          onError={(e) => {
+            setFailed(true);
+            onError?.(e);
+          }}
         />
       )}
     </div>

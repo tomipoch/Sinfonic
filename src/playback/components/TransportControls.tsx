@@ -13,6 +13,7 @@ import { MaterialSymbol } from "@/components/ui/MaterialSymbol";
 import { cn } from "@/lib/cn";
 import { extractError } from "@/lib/errors";
 import { usePlaybackContext } from "@/playback";
+import { repeatLabel } from "@/playback/repeat";
 
 import { useTransportBusy } from "./TransportBusyContext";
 
@@ -38,6 +39,7 @@ function IconButton({
       type="button"
       aria-label={ariaLabel}
       title={ariaLabel}
+      aria-pressed={active ? true : undefined}
       onClick={onClick}
       disabled={disabled}
       className={cn(
@@ -109,8 +111,8 @@ function PlayPauseButton({
 }
 
 export function TransportControls({ canStep }: TransportControlsProps) {
-  const { snapshot, togglePlay, next, previous } = usePlaybackContext();
-  const { isPlaying } = snapshot;
+  const { snapshot, togglePlay, next, previous, cycleRepeat, setShuffle } = usePlaybackContext();
+  const { isPlaying, repeat, shuffle } = snapshot;
   const { setBusy, busy } = useTransportBusy();
   const actionLock = busy !== null;
 
@@ -137,14 +139,36 @@ export function TransportControls({ canStep }: TransportControlsProps) {
   const onPrev = () => run("prev", () => previous(), "Previous");
   const onNext = () => run("next", () => next(), "Next");
 
+  const onShuffle = () => {
+    void (async () => {
+      try {
+        await setShuffle(!shuffle);
+      } catch (err) {
+        toast.error(`Shuffle: ${extractError(err, "unknown error")}`);
+      }
+    })();
+  };
+
+  const onRepeat = () => {
+    void (async () => {
+      try {
+        await cycleRepeat();
+      } catch (err) {
+        toast.error(`Repeat: ${extractError(err, "unknown error")}`);
+      }
+    })();
+  };
+
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1 sm:gap-1.5">
       <IconButton
-        ariaLabel="Shuffle"
-        disabled
-        className="hidden opacity-40 data-[panels-open=true]:inline-flex"
+        ariaLabel={shuffle ? "Disable shuffle" : "Enable shuffle"}
+        onClick={onShuffle}
+        active={shuffle}
+        disabled={actionLock}
+        className="hidden data-[panels-open=true]:inline-flex"
       >
-        <MaterialSymbol name="shuffle" size={18} />
+        <MaterialSymbol name="shuffle" size={18} fill={shuffle} />
       </IconButton>
       <IconButton ariaLabel="Previous track" onClick={onPrev} disabled={!canStep || actionLock}>
         <MaterialSymbol
@@ -164,11 +188,17 @@ export function TransportControls({ canStep }: TransportControlsProps) {
         />
       </IconButton>
       <IconButton
-        ariaLabel="Repeat"
-        disabled
-        className="hidden opacity-40 data-[panels-open=true]:inline-flex"
+        ariaLabel={`Repeat: ${repeatLabel(repeat)}`}
+        onClick={onRepeat}
+        active={repeat !== "off"}
+        disabled={actionLock}
+        className="hidden data-[panels-open=true]:inline-flex"
       >
-        <MaterialSymbol name="repeat" size={18} />
+        <MaterialSymbol
+          name={repeat === "one" ? "repeat_one" : "repeat"}
+          size={18}
+          fill={repeat !== "off"}
+        />
       </IconButton>
     </div>
   );

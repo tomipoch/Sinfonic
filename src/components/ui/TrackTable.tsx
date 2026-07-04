@@ -239,9 +239,9 @@ export function TrackTable({
   };
 
   return (
-    <div className={cn("overflow-hidden rounded-md border border-border", className)}>
-      <table className="w-full text-sm">
-        <thead className="bg-muted text-xs uppercase tracking-wide text-muted-foreground">
+    <div className={cn("overflow-x-auto rounded-md border border-border", className)}>
+      <table className="w-full table-fixed text-sm">
+        <thead className="bg-muted text-xs tracking-wide text-muted-foreground">
           <tr>
             {hasSelection && (
               <th scope="col" className="w-10 px-2 py-2">
@@ -386,10 +386,9 @@ function SortHeader({
   onClick: () => void;
   align?: "left" | "right";
 }) {
+  const baseClass = cn("font-medium", align === "right" && "block text-right");
   if (!sortable) {
-    return (
-      <span className={cn("font-medium", align === "right" && "block text-right")}>{label}</span>
-    );
+    return <span className={baseClass}>{label}</span>;
   }
   return (
     <button

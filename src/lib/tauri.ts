@@ -27,6 +27,7 @@ import type {
   Genre,
   PagedResponse,
   PlaybackStatePayload,
+  PlayContext,
   Playlist,
   QueueSnapshot,
   SearchResults,
@@ -58,6 +59,14 @@ export const getArtists = (offset = 0, limit = 50) =>
 /** Fetch every genre (rarely paginated — usually < 200 entries). */
 export const getGenres = () => invoke<Genre[]>("get_genres");
 
+/** Paged albums carrying the given genre tag. */
+export const getAlbumsByGenre = (genre: string, offset = 0, limit = 50) =>
+  invoke<PagedResponse<Album>>("get_albums_by_genre", { genre, offset, limit });
+
+/** Paged tracks under the given genre (via album tag). */
+export const getTracksByGenre = (genre: string, offset = 0, limit = 200) =>
+  invoke<PagedResponse<Track>>("get_tracks_by_genre", { genre, offset, limit });
+
 /** Fetch a paginated slice of tracks. */
 export const getTracks = (offset = 0, limit = 50) =>
   invoke<PagedResponse<Track>>("get_tracks", { offset, limit });
@@ -80,8 +89,20 @@ export const getQueue = () => invoke<QueueSnapshot>("get_queue");
 /** Replace the queue with `[track]` and start playing it. Returns the new entry id. */
 export const playTrack = (track: Track) => invoke<string>("play_track", { track });
 
+/**
+ * Like `playTrack` but also records a `PlayContext` so the
+ * backend can auto-append the rest of the album / playlist /
+ * favourites to the queue. Pass `null` for no context.
+ */
+export const playTrackWithContext = (track: Track, context: PlayContext | null) =>
+  invoke<string>("play_track_with_context", { track, context });
+
 /** Replace the queue with the supplied tracks. */
 export const playAlbum = (tracks: Track[]) => invoke<void>("play_album", { tracks });
+
+/** Like `playAlbum` but records a `PlayContext` for auto-fill. */
+export const playAlbumWithContext = (tracks: Track[], context: PlayContext | null) =>
+  invoke<void>("play_album_with_context", { tracks, context });
 
 export const pause = () => invoke<void>("pause");
 export const resume = () => invoke<void>("resume");
@@ -115,6 +136,14 @@ export const queueAddMany = (tracks: Track[]) => invoke<string[]>("queue_add_man
 /** Insert every supplied track just after the currently-playing entry. */
 export const queuePlayNextMany = (tracks: Track[]) =>
   invoke<string[]>("queue_play_next_many", { tracks });
+
+/**
+ * Append up to `n` more tracks from the active `PlayContext` (set
+ * by a previous `playTrackWithContext` / `playAlbumWithContext`
+ * call) to the end of the queue. Returns the number actually
+ * added (0 if no context or the context is exhausted).
+ */
+export const queueExtendMore = (n: number) => invoke<number>("queue_extend_more", { n });
 
 /** Every saved user playlist (metadata only). */
 export const playlistsGet = () => invoke<Playlist[]>("playlists_get");
@@ -270,6 +299,22 @@ export const setEqBand = (hz: number, gainDb: number) =>
   invoke<void>("set_eq_band", { band: { hz, gainDb } });
 
 export const resetEq = () => invoke<void>("reset_eq");
+
+// ─── Crossfade (Phase 3) ────────────────────────────────────────
+
+/**
+ * Configure crossfade. `seconds` is clamped to [0, 12] on the
+ * Rust side so a hostile or buggy caller can't schedule
+ * hour-long fades. The configuration is persisted via
+ * `library.set_preference` so the next launch restores it
+ * before the first track plays.
+ */
+export const setCrossfade = (enabled: boolean, seconds: number) =>
+  invoke<void>("set_crossfade", { enabled, seconds });
+
+/** Snapshot the current crossfade configuration. */
+export const getCrossfadeConfig = () =>
+  invoke<{ crossfadeEnabled: boolean; crossfadeSeconds: number }>("get_crossfade_config");
 
 // ─── Search ─────────────────────────────────────────────────────
 

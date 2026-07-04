@@ -317,7 +317,7 @@ impl SubsonicProvider {
 /// strictly optional.
 fn subsonic_capabilities() -> ProviderCapabilities {
     ProviderCapabilities {
-        lyrics: false,
+        lyrics: true,
         playback_reporting: true,
         playlist_mutations: true,
         playlist_delete: true,
@@ -992,22 +992,11 @@ impl MusicProvider for SubsonicProvider {
             .value
             .as_deref()
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
-        if plain.is_none() && resp.lyrics.r#struct.is_empty() {
+            .map(str::to_string);
+        let synced = synced_lines_to_lrc(&resp.lyrics.r#struct);
+        if plain.is_none() && synced.is_none() {
             return Ok(None);
         }
-        let synced = if resp.lyrics.r#struct.is_empty() {
-            None
-        } else {
-            Some(
-                resp.lyrics
-                    .r#struct
-                    .iter()
-                    .map(|l| l.value.clone())
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            )
-        };
         Ok(Some(Lyrics {
             plain,
             synced,
@@ -1038,6 +1027,65 @@ impl MusicProvider for SubsonicProvider {
             .await?;
         Ok(())
     }
+}
+
+/// Render a `lyrics.struct[]` payload as the LRC-flavoured string
+/// the frontend expects (`[mm:ss.xx]line\n[mm:ss.xx]line…`).
+///
+/// Picks the synced entries when the server flags them with
+/// `synced: true`; falls back to every entry when the flag is
+/// absent (some servers omit it). Lines from multiple language
+/// entries are flattened and sorted by their millisecond `start`
+/// so multi-language servers don't shuffle playback order. Lines
+/// without a `start` (rare for synced entries, but defensible for
+/// unsynced fallbacks) are emitted with no timestamp prefix so the
+/// frontend still sees the text. Returns `None` when no usable
+/// lines exist.
+fn synced_lines_to_lrc(entries: &[dto::LyricsStructEntryDto]) -> Option<String> {
+    if entries.is_empty() {
+        return None;
+    }
+    let has_synced_flag = entries.iter().any(|e| e.synced.is_some());
+    let keep: Vec<&dto::LyricsStructEntryDto> = if has_synced_flag {
+        entries.iter().filter(|e| e.synced.unwrap_or(false)).collect()
+    } else {
+        entries.iter().collect()
+    };
+    let mut lines: Vec<(&Option<u64>, &str)> = keep
+        .iter()
+        .flat_map(|e| e.line.iter())
+        .map(|l| (&l.start, l.value.as_str()))
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    // Sort by `start` (None last so unsynced trailing lines don't
+    // jump to the top after a synced block).
+    lines.sort_by_key(|(start, _)| start.unwrap_or(u64::MAX));
+    let body = lines
+        .into_iter()
+        .map(|(start, text)| match start {
+            Some(ms) => format!("[{}]{}", format_lrc_timestamp(*ms), text),
+            None => text.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(body)
+}
+
+/// Format a millisecond offset as the LRC canonical `[mm:ss.xx]`.
+/// Two-digit centisecond precision matches what the frontend's
+/// `parseLrc` accepts (alongside `mm:ss` and `mm:ss.xxx`). The
+/// caller guarantees `ms` is the line's `start`; no clamping for
+/// tracks longer than 99 minutes (the LRC spec only allocates two
+/// digits to minutes and overflow is the same edge case all LRC
+/// parsers ignore).
+fn format_lrc_timestamp(ms: u64) -> String {
+    let total_seconds = ms / 1000;
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    let centiseconds = (ms % 1000) / 10;
+    format!("{:02}:{:02}.{:02}", minutes, seconds, centiseconds)
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────

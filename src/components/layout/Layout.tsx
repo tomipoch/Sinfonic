@@ -59,8 +59,10 @@ export function Layout() {
   // Top-level layout probe — runs on mount and on every window
   // resize. Walks the DOM for anything tagged with data-layout-el
   // and logs the actual pixel dimensions + overflow so we can pick
-  // a sensible minimum window size.
+  // a sensible minimum window size. Gated behind import.meta.env.DEV
+  // so production consoles stay clean.
   useEffect(() => {
+    if (!import.meta.env.DEV) return;
     const probe = () => {
       const root = document.body;
       const nodes = Array.from(root.querySelectorAll<HTMLElement>("[data-layout-el]"));
@@ -120,7 +122,7 @@ export function Layout() {
         </main>
         {panelOpen && (
           <div data-layout-el="queuepanel">
-            <QueuePanel initialMode={panelMode ?? "queue"} />
+            <QueuePanel />
           </div>
         )}
       </div>

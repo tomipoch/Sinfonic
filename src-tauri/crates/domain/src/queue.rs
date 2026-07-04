@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use super::entities::Track;
 use super::error::DomainError;
-use super::ids::{QueueEntryId, ServerId, TrackId};
+use super::ids::{AlbumId, PlaylistId, QueueEntryId, ServerId, TrackId};
 
 // ─── Repeat / Origin ────────────────────────────────────────────
 
@@ -41,6 +41,66 @@ pub enum RepeatMode {
     Off,
     One,
     All,
+}
+
+/// Where a play request originated. Used by `commands::play_*` to
+/// decide what to auto-append after the clicked track so the queue
+/// keeps flowing without the user having to manually queue the
+/// rest of the album / playlist / favourites.
+///
+/// The context is **transient**: only the most recent play context
+/// is meaningful (it powers the "Seguir reproduciendo" auto-fill).
+/// It is NOT persisted per entry — instead it lives on the engine
+/// snapshot's `last_context` field so a follow-up `queue_extend_more`
+/// call from the UI can resolve more tracks from the same source.
+///
+/// Wire format (matches the TypeScript `PlayContext` type in
+/// `src/types/domain.ts`):
+/// - `{"kind":"album","albumId":"…"}`
+/// - `{"kind":"playlist","playlistId":"…","serverId":"…"}`
+/// - `{"kind":"favorites","serverId":"…"}`
+/// - `{"kind":"all","serverId":"…"}`
+///
+/// `rename_all = "camelCase"` rewrites the variant tag values
+/// (single-word variants render identically in lowercase here) and
+/// `rename_all_fields = "camelCase"` (serde ≥ 1.0.166) rewrites the
+/// inner field names — without that second attribute, `Album {
+/// album_id }` would expect `"album_id"` on the wire but the TS
+/// side sends `"albumId"`.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum PlayContext {
+    /// Played from an album view — extend with the remaining tracks
+    /// of the album in `disc_number, track_number` order.
+    Album { album_id: AlbumId },
+    /// Played from a playlist — extend with the remaining entries of
+    /// the playlist in `position` order.
+    Playlist {
+        playlist_id: PlaylistId,
+        server_id: ServerId,
+    },
+    /// Played from the favourites view — extend with the remaining
+    /// favourited tracks for the active server.
+    Favorites { server_id: ServerId },
+    /// Played from a flat track list (SongsView). Extend with the
+    /// next N tracks of the library in the title-ascending order
+    /// `list_tracks` returns. Pagination happens server-side to
+    /// avoid loading the whole library at once.
+    All { server_id: ServerId },
+}
+
+impl PlayContext {
+    /// Returns the server id this context is anchored to, if any.
+    /// `Album` resolves its server via the caller; `Playlist`,
+    /// `Favorites`, and `All` carry it explicitly.
+    pub fn server_id(&self) -> Option<&ServerId> {
+        match self {
+            Self::Playlist { server_id, .. }
+            | Self::Favorites { server_id }
+            | Self::All { server_id } => Some(server_id),
+            Self::Album { .. } => None,
+        }
+    }
 }
 
 // ─── Entry / Origin ─────────────────────────────────────────────
@@ -132,6 +192,14 @@ pub struct QueueSnapshot {
     pub repeat: RepeatMode,
     pub shuffle: bool,
     pub shuffle_seed: u64,
+    /// The play context that produced the current queue, if any.
+    /// Set by `commands::play_track_with_context` /
+    /// `commands::play_album_with_context`. Used by
+    /// `commands::queue_extend_more` to resolve further tracks from
+    /// the same source. Persisted so a follow-up "+N más" click
+    /// after a restart still resolves to the right album / playlist.
+    #[serde(default)]
+    pub last_context: Option<PlayContext>,
 }
 
 // ─── Engine ─────────────────────────────────────────────────────
@@ -150,6 +218,7 @@ pub struct QueueEngine {
     shuffle: bool,
     shuffle_seed: u64,
     next_entry_seq: u64,
+    last_context: Option<PlayContext>,
 }
 
 impl QueueEngine {
@@ -176,6 +245,7 @@ impl QueueEngine {
             shuffle: snapshot.shuffle,
             shuffle_seed: snapshot.shuffle_seed,
             next_entry_seq,
+            last_context: snapshot.last_context,
         }
     }
 
@@ -187,6 +257,7 @@ impl QueueEngine {
             repeat: self.repeat,
             shuffle: self.shuffle,
             shuffle_seed: self.shuffle_seed,
+            last_context: self.last_context.clone(),
         }
     }
 
@@ -196,6 +267,14 @@ impl QueueEngine {
 
     pub fn set_server_id(&mut self, server_id: ServerId) {
         self.server_id = Some(server_id);
+    }
+
+    /// Drops the server anchor. Called from
+    /// `teardown_active_provider` so a future user-driven mutation
+    /// doesn't accidentally persist the queue under the wrong
+    /// server id.
+    pub fn clear_server_id(&mut self) {
+        self.server_id = None;
     }
 
     // ── Accessors ──────────────────────────────────────────────
@@ -226,6 +305,14 @@ impl QueueEngine {
 
     pub fn position_of(&self, entry_id: &QueueEntryId) -> Option<usize> {
         self.entries.iter().position(|e| &e.id == entry_id)
+    }
+
+    /// Find the entry that wraps `track_id`, if any. Used by the
+    /// context-aware play commands to avoid adding a duplicate
+    /// entry when the user clicks a track that's already in the
+    /// queue — instead we just `jump_to` the existing one.
+    pub fn find_by_track_id(&self, track_id: &TrackId) -> Option<&QueueEntry> {
+        self.entries.iter().find(|e| &e.track_id == track_id)
     }
 
     pub fn repeat(&self) -> RepeatMode {
@@ -419,7 +506,11 @@ impl QueueEngine {
 
     /// Moves the entry with `entry_id` to `target_index` in the current
     /// ordering. The engine clamps `target_index` to the valid range
-    /// and adjusts `current_index` so the same entry remains current.
+    /// and keeps the current entry playing through the move:
+    ///   - If the moved entry **was** the current one, `current_index`
+    ///     follows it to its new position.
+///   - Otherwise, `current_index` is adjusted only if the splice
+    ///     shifted it past the new position.
     pub fn move_entry(
         &mut self,
         entry_id: &QueueEntryId,
@@ -431,21 +522,31 @@ impl QueueEngine {
         if from == target_index {
             return Ok(());
         }
+        // Snapshot the current id so we can re-anchor by id after the
+        // splice. Following the index through `remove` + `insert` is
+        // harder to get right when the current entry is the one being
+        // moved (the remove shifts the index, the insert shifts it
+        // back — order of operations changes the result).
+        let current_id = self.current().map(|e| e.id.clone());
         let entry = self.entries.remove(from);
         let target = target_index.min(self.entries.len());
         self.entries.insert(target, entry);
 
-        // Re-anchor current_index to the moved entry.
-        self.current_index = Some(target);
+        self.current_index = current_id
+            .as_ref()
+            .and_then(|id| self.position_of(id));
         Ok(())
     }
 
     /// Empties the queue. Server id, repeat and shuffle settings are
     /// preserved so the user doesn't lose their mode after a clear.
+    /// `last_context` is also cleared: with no queue, the
+    /// "+N más" affordance has nothing to extend from.
     pub fn clear(&mut self) {
         self.entries.clear();
         self.current_index = None;
         self.next_entry_seq = 0;
+        self.last_context = None;
     }
 
     // ── Mode switches ──────────────────────────────────────────
@@ -543,6 +644,44 @@ impl QueueEngine {
         } else {
             Some(0)
         };
+    }
+
+    /// Drops every entry at position `keep` or later, then fixes up
+    /// `current_index` if it now points past the new end. Used on
+    /// app launch to throw away the queued "upcoming" portion while
+    /// keeping the history (`entries[0..currentIndex+1]`).
+    pub fn truncate_after(&mut self, keep: usize) {
+        self.entries.truncate(keep);
+        if let Some(idx) = self.current_index {
+            if idx >= self.entries.len() {
+                self.current_index = if self.entries.is_empty() {
+                    None
+                } else {
+                    Some(self.entries.len() - 1)
+                };
+            }
+        }
+        if self.entries.is_empty() {
+            self.next_entry_seq = 0;
+        }
+    }
+
+    // ── Last play context ────────────────────────────────────────
+
+    /// Records the context that produced the current queue. Called
+    /// by `commands::play_track_with_context` /
+    /// `commands::play_album_with_context` so a follow-up
+    /// `queue_extend_more` can resolve more tracks from the same
+    /// source. `None` means "no context — extending does nothing".
+    pub fn set_last_context(&mut self, context: Option<PlayContext>) {
+        self.last_context = context;
+    }
+
+    /// The current play context, if any. Persisted in
+    /// `QueueSnapshot::last_context` so a "+N más" click after a
+    /// restart still resolves to the right album / playlist.
+    pub fn last_context(&self) -> Option<&PlayContext> {
+        self.last_context.as_ref()
     }
 
     // ── Internals ──────────────────────────────────────────────
@@ -782,6 +921,22 @@ mod tests {
         assert_eq!(e.current_index(), Some(2));
     }
 
+    #[test]
+    fn find_by_track_id_returns_some_for_existing() {
+        let e = filled_engine(3);
+        let track_id = e.entries()[1].track_id.clone();
+        let entry = e.find_by_track_id(&track_id).expect("entry present");
+        assert_eq!(entry.track_id, track_id);
+        assert_eq!(entry.title, "T1");
+    }
+
+    #[test]
+    fn find_by_track_id_returns_none_for_missing() {
+        let e = filled_engine(3);
+        let missing = TrackId::new("track-doesnt-exist");
+        assert!(e.find_by_track_id(&missing).is_none());
+    }
+
     // ── move_entry ─────────────────────────────────────────────
 
     #[test]
@@ -806,6 +961,90 @@ mod tests {
         let mut e = filled_engine(2);
         let err = e.move_entry(&QueueEntryId::fake(99), 0).unwrap_err();
         assert!(matches!(err, DomainError::Validation(_)));
+    }
+
+    #[test]
+    fn move_non_current_entry_keeps_current_track() {
+        // current = position 0 (entry "T0"). Move entry "T1" to the
+        // end of a 3-entry queue. The current track must NOT change.
+        let mut e = filled_engine(3);
+        let current_id = e.entries()[0].id.clone();
+        let moved = e.entries()[1].id.clone();
+        e.move_entry(&moved, 2).unwrap();
+        assert_eq!(e.current_index(), Some(0));
+        assert_eq!(e.current().unwrap().id, current_id);
+        assert_eq!(e.entries()[2].id, moved);
+    }
+
+    #[test]
+    fn move_current_entry_to_later_position_follows_it() {
+        // current = position 0 (entry "T0"). Move the current entry
+        // to position 2. The current pointer must follow.
+        let mut e = filled_engine(3);
+        let moved = e.entries()[0].id.clone();
+        e.move_entry(&moved, 2).unwrap();
+        assert_eq!(e.entries()[2].id, moved);
+        assert_eq!(e.current_index(), Some(2));
+        assert_eq!(e.current().unwrap().id, moved);
+    }
+
+    #[test]
+    fn move_non_current_entry_past_current_shifts_index_up() {
+        // current = position 1 (entry "T1"). Move entry at position 3
+        // (T3) up to position 1. After splice, T1 should sit at
+        // position 2 (shifting up by 1).
+        let mut e = filled_engine(4);
+        let current_id = e.entries()[1].id.clone();
+        e.jump_to(&current_id);
+        let moved = e.entries()[3].id.clone();
+        e.move_entry(&moved, 1).unwrap();
+        assert_eq!(e.entries()[1].id, moved);
+        assert_eq!(e.current_index(), Some(2));
+        assert_eq!(e.current().unwrap().id, current_id);
+    }
+
+    // ── truncate_after ───────────────────────────────────────────
+
+    #[test]
+    fn truncate_after_drops_upcoming_and_keeps_history() {
+        // 5 entries, current at index 2. truncate_after(3) keeps
+        // entries[0..3] and drops the rest. current_index must stay
+        // at 2 (still valid).
+        let mut e = filled_engine(5);
+        let third = e.entries()[2].id.clone();
+        e.jump_to(&third);
+        e.truncate_after(3);
+        assert_eq!(e.len(), 3);
+        assert_eq!(e.current_index(), Some(2));
+        assert_eq!(e.current().unwrap().id, third);
+    }
+
+    #[test]
+    fn truncate_after_clamps_current_when_truncated_past_it() {
+        // 5 entries, current at index 4 (last). truncate_after(2)
+        // would push current past the new end; clamp to len - 1.
+        let mut e = filled_engine(5);
+        let fifth = e.entries()[4].id.clone();
+        e.jump_to(&fifth);
+        e.truncate_after(2);
+        assert_eq!(e.len(), 2);
+        assert_eq!(e.current_index(), Some(1));
+    }
+
+    #[test]
+    fn truncate_after_zero_clears_everything_including_current() {
+        let mut e = filled_engine(3);
+        e.truncate_after(0);
+        assert!(e.is_empty());
+        assert!(e.current().is_none());
+    }
+
+    #[test]
+    fn truncate_after_is_a_noop_when_keep_exceeds_len() {
+        let mut e = filled_engine(3);
+        e.truncate_after(99);
+        assert_eq!(e.len(), 3);
+        assert_eq!(e.current_index(), Some(0));
     }
 
     // ── Navigation ─────────────────────────────────────────────
@@ -1022,5 +1261,132 @@ mod tests {
         for (input, expected) in cases {
             assert_eq!(serde_json::from_str::<RepeatMode>(input).unwrap(), expected);
         }
+    }
+
+    // ── PlayContext wire format ───────────────────────────────────
+    //
+    // Regression for the "missing field album_id" / "missing field
+    // playlist_id" bug: the Rust enum and the TS type must agree on
+    // camelCase field names. The Tauri command boundary surfaces a
+    // deserialise error from serde, and the previous
+    // `rename_all = "lowercase"` only renamed the variant tag values
+    // (which were already lowercase single-word identifiers), not
+    // the inner field names — so `album_id` was expected on the wire
+    // while the frontend sent `albumId`.
+
+    #[test]
+    fn play_context_album_round_trips_as_camelcase() {
+        let ctx = PlayContext::Album {
+            album_id: AlbumId::fake(42),
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(
+            json.contains("\"kind\":\"album\""),
+            "tag value should be lowercase 'album', got {json}"
+        );
+        assert!(
+            json.contains("\"albumId\""),
+            "field name should be camelCase 'albumId', got {json}"
+        );
+        assert!(
+            !json.contains("album_id"),
+            "field name must NOT be snake_case, got {json}"
+        );
+        let back: PlayContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ctx);
+    }
+
+    #[test]
+    fn play_context_playlist_round_trips_as_camelcase() {
+        let ctx = PlayContext::Playlist {
+            playlist_id: PlaylistId::fake(7),
+            server_id: ServerId::fake(1),
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(json.contains("\"kind\":\"playlist\""), "{json}");
+        assert!(json.contains("\"playlistId\""), "{json}");
+        assert!(json.contains("\"serverId\""), "{json}");
+        assert!(!json.contains("playlist_id"), "{json}");
+        assert!(!json.contains("server_id"), "{json}");
+        let back: PlayContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ctx);
+    }
+
+    #[test]
+    fn play_context_favourites_round_trips_as_camelcase() {
+        let ctx = PlayContext::Favorites {
+            server_id: ServerId::fake(3),
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(json.contains("\"kind\":\"favorites\""), "{json}");
+        assert!(json.contains("\"serverId\""), "{json}");
+        assert!(!json.contains("server_id"), "{json}");
+        let back: PlayContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ctx);
+    }
+
+    #[test]
+    fn play_context_all_round_trips_as_camelcase() {
+        let ctx = PlayContext::All {
+            server_id: ServerId::fake(5),
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(json.contains("\"kind\":\"all\""), "{json}");
+        assert!(json.contains("\"serverId\""), "{json}");
+        assert!(!json.contains("server_id"), "{json}");
+        let back: PlayContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ctx);
+    }
+
+    #[test]
+    fn play_context_all_server_id_returns_some() {
+        let ctx = PlayContext::All {
+            server_id: ServerId::fake(9),
+        };
+        assert_eq!(ctx.server_id().map(|s| s.as_str()), Some("server-9"));
+    }
+
+    #[test]
+    fn play_context_deserialises_frontend_payload() {
+        // Exact shape of what AlbumDetailView sends over Tauri IPC.
+        let payload = r#"{"kind":"album","albumId":"album-1"}"#;
+        let ctx: PlayContext = serde_json::from_str(payload).unwrap();
+        assert_eq!(
+            ctx,
+            PlayContext::Album {
+                album_id: AlbumId::fake(1),
+            }
+        );
+
+        // Playlist payload from PlaylistDetailView.
+        let payload = r#"{"kind":"playlist","playlistId":"playlist-7","serverId":"server-1"}"#;
+        let ctx: PlayContext = serde_json::from_str(payload).unwrap();
+        assert_eq!(
+            ctx,
+            PlayContext::Playlist {
+                playlist_id: PlaylistId::fake(7),
+                server_id: ServerId::fake(1),
+            }
+        );
+
+        // Favourites payload from FavoritesView.
+        let payload = r#"{"kind":"favorites","serverId":"server-3"}"#;
+        let ctx: PlayContext = serde_json::from_str(payload).unwrap();
+        assert_eq!(
+            ctx,
+            PlayContext::Favorites {
+                server_id: ServerId::fake(3),
+            }
+        );
+
+        // All payload from SongsView.
+        let payload = r#"{"kind":"all","serverId":"server-5"}"#;
+        let ctx: PlayContext = serde_json::from_str(payload).unwrap();
+        assert_eq!(
+            ctx,
+            PlayContext::All {
+                server_id: ServerId::fake(5),
+            }
+        );
     }
 }

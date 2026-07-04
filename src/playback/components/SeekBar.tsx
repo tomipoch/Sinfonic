@@ -11,8 +11,11 @@
 // sit on the same baseline at h-1 (4 px). Native <input type="range">
 // on top keeps keyboard / a11y; its track + thumb are styled
 // transparent in src/index.css.
+//
+// A floating tooltip follows the thumb while the user drags so
+// they can preview the seek target before releasing (Spotify-style).
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/cn";
@@ -34,6 +37,7 @@ export function SeekBar({ enabled }: SeekBarProps) {
   const { positionSeconds, durationSeconds } = snapshot;
   const seekDrag = useDragCommit({ value: positionSeconds });
   const { isBusy } = useTransportBusy();
+  const [hovering, setHovering] = useState(false);
 
   const commit = useCallback(async () => {
     const drag = seekDrag.value;
@@ -49,12 +53,15 @@ export function SeekBar({ enabled }: SeekBarProps) {
   const progress =
     durationSeconds > 0 ? Math.min(100, (seekDrag.value / durationSeconds) * 100) : 0;
 
+  const showTooltip = hovering && enabled && durationSeconds > 0;
+  const tooltipLeft = `${progress}%`;
+
   return (
     <div className="flex w-full items-center justify-center gap-2 px-2">
       <span className="w-9 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
         {formatDuration(seekDrag.value)}
       </span>
-      <div className="relative h-1.5 w-full max-w-40 flex-1">
+      <div className="relative h-3 w-full max-w-40 flex-1">
         <svg
           className="pointer-events-none absolute inset-0 h-full w-full overflow-visible"
           viewBox="0 0 100 2"
@@ -78,6 +85,7 @@ export function SeekBar({ enabled }: SeekBarProps) {
             style={{
               clipPath: `inset(0 ${100 - progress}% 0 0)`,
               WebkitClipPath: `inset(0 ${100 - progress}% 0 0)`,
+              transition: "clip-path 150ms ease-out",
             }}
           />
         </svg>
@@ -89,21 +97,37 @@ export function SeekBar({ enabled }: SeekBarProps) {
           value={seekDrag.value}
           onChange={seekDrag.onChange}
           onPointerUp={commit}
+          onPointerDown={() => setHovering(true)}
+          onPointerLeave={() => setHovering(false)}
+          onPointerCancel={() => setHovering(false)}
+          onFocus={() => setHovering(true)}
+          onBlur={(_event) => {
+            setHovering(false);
+            commit();
+          }}
           onKeyUp={(event) => {
             if (event.key === "Tab") return;
             commit();
           }}
-          onBlur={commit}
           disabled={!enabled || isBusy}
           aria-label="Seek"
           aria-valuemin={0}
           aria-valuemax={durationSeconds}
           aria-valuenow={seekDrag.value}
+          aria-valuetext={formatDuration(seekDrag.value)}
           className={cn(
             "player-range absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent outline-none",
             "disabled:cursor-not-allowed disabled:opacity-40",
           )}
         />
+        {showTooltip ? (
+          <div
+            className="pointer-events-none absolute -top-7 -translate-x-1/2 rounded bg-foreground px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-background shadow-md"
+            style={{ left: tooltipLeft }}
+          >
+            {formatDuration(seekDrag.value)}
+          </div>
+        ) : null}
       </div>
       <span className="w-9 shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
         {formatDuration(durationSeconds)}

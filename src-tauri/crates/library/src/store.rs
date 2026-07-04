@@ -21,7 +21,8 @@ use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Transaction;
 use sinfonic_domain::{
-    Album, AlbumId, Artist, ArtistId, PagedResponse, Playlist, PlaylistId, ServerId, Track, TrackId,
+    Album, AlbumId, Artist, ArtistId, PagedResponse, Playlist, PlaylistId, QueueSnapshot,
+    ServerId, Track, TrackId,
 };
 
 use crate::error::{LibraryError, LibraryResult};
@@ -177,6 +178,83 @@ impl Store {
         tx.execute(
             "DELETE FROM library_meta WHERE key = ?1",
             rusqlite::params![key],
+        )?;
+        Ok(())
+    }
+
+    // ─── Queue snapshots ────────────────────────────────────────
+    //
+    // One row per server; the row stores a JSON-serialised
+    // `QueueSnapshot`. The persistence layer is intentionally
+    // dumb — it round-trips bytes — so the on-the-wire format lives
+    // entirely in `sinfonic_domain::queue::QueueSnapshot`.
+
+    /// Persist (or overwrite) the queue snapshot for one server.
+    /// Called from every Tauri command that mutates the queue so
+    /// the next launch can restore the user's history.
+    pub fn save_queue_snapshot(
+        &self,
+        server_id: &ServerId,
+        snapshot: &QueueSnapshot,
+    ) -> LibraryResult<()> {
+        let json = serde_json::to_string(snapshot).map_err(|e| {
+            LibraryError::Validation(format!("queue snapshot serialize: {e}"))
+        })?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let conn = self.connection()?;
+        conn.execute(
+            "INSERT INTO queue_snapshots (server_id, snapshot, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(server_id) DO UPDATE SET
+                 snapshot   = excluded.snapshot,
+                 updated_at = excluded.updated_at",
+            rusqlite::params![server_id.as_str(), json, now],
+        )?;
+        Ok(())
+    }
+
+    /// Load the persisted queue snapshot for one server, or `None`
+    /// if no snapshot has ever been written. A malformed snapshot
+    /// (e.g. from an older app version with a different shape) is
+    /// treated as "missing" so the caller falls back to an empty
+    /// queue rather than crashing.
+    pub fn load_queue_snapshot(
+        &self,
+        server_id: &ServerId,
+    ) -> LibraryResult<Option<QueueSnapshot>> {
+        let conn = self.connection()?;
+        let mut stmt =
+            conn.prepare("SELECT snapshot FROM queue_snapshots WHERE server_id = ?1")?;
+        let mut rows = stmt.query([server_id.as_str()])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let json: String = row.get(0)?;
+        match serde_json::from_str::<QueueSnapshot>(&json) {
+            Ok(snap) => Ok(Some(snap)),
+            Err(e) => {
+                tracing::warn!(
+                    target: "sinfonic::library",
+                    error = %e,
+                    "queue snapshot deserialise failed; treating as missing"
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    /// Delete the persisted queue snapshot for one server. Called
+    /// when the user deletes the server row outright (the FK cascade
+    /// already does this, but having an explicit method keeps tests
+    /// + future call sites symmetrical with save/load).
+    pub fn delete_queue_snapshot(&self, server_id: &ServerId) -> LibraryResult<()> {
+        let conn = self.connection()?;
+        conn.execute(
+            "DELETE FROM queue_snapshots WHERE server_id = ?1",
+            rusqlite::params![server_id.as_str()],
         )?;
         Ok(())
     }
@@ -342,6 +420,39 @@ impl Store {
         Ok(PagedResponse::new(items, total as usize))
     }
 
+    /// Recompute `artists.track_count` from the cached tracks table.
+    ///
+    /// Jellyfin's `MusicArtist` DTO doesn't expose a direct track count
+    /// (only an opaque `ChildCount` for albums), so the artist mapper
+    /// hardcodes `0` there. Subsonic does return `songCount` per
+    /// artist, but the value can lag when tracks are deleted on the
+    /// server. After every sync, walk the cached tracks for this
+    /// server and assign each artist a count of tracks whose
+    /// `artist_id` matches. One statement per server, no N+1.
+    pub fn recompute_artist_track_counts(
+        &self,
+        server_id: &ServerId,
+    ) -> LibraryResult<()> {
+        let mut conn = self.connection()?;
+        conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        let tx = conn.transaction()?;
+        // First, normalise: artists that no longer have any matching
+        // tracks must read 0, not whatever the provider left behind.
+        tx.execute(
+            "UPDATE artists
+             SET track_count = COALESCE((
+                 SELECT COUNT(*)
+                 FROM tracks t
+                 WHERE t.server_id = artists.server_id
+                   AND t.artist_id = artists.artist_id
+             ), 0)
+             WHERE server_id = ?1",
+            rusqlite::params![server_id.as_str()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     // ─── Tracks ──────────────────────────────────────────────────
 
     pub fn replace_tracks(&self, server_id: &ServerId, tracks: &[Track]) -> LibraryResult<()> {
@@ -444,6 +555,86 @@ impl Store {
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(items)
+    }
+
+    /// Paged list of albums that have the given genre tag. Used by
+    /// the genre detail view. The `genre` argument is the raw genre
+    /// string (case-insensitive match via `COLLATE NOCASE`), matching
+    /// the rest of the schema (genres are stored as plain text, not
+    /// by integer id).
+    pub fn list_albums_by_genre(
+        &self,
+        server_id: &ServerId,
+        genre: &str,
+        offset: usize,
+        limit: usize,
+    ) -> LibraryResult<PagedResponse<Album>> {
+        let conn = self.connection()?;
+        let total: i64 = conn.query_row(
+            "SELECT COUNT(DISTINCT ag.album_id)
+             FROM album_genres ag
+             WHERE ag.server_id = ?1 AND ag.genre = ?2 COLLATE NOCASE",
+            rusqlite::params![server_id.as_str(), genre],
+            |r| r.get(0),
+        )?;
+        let mut stmt = conn.prepare(
+            "SELECT a.album_id, a.title, a.artist, a.artist_id, a.year, a.track_count,
+                    a.duration_seconds, a.favorite, a.image_kind, a.image_tag
+             FROM albums a
+             INNER JOIN album_genres ag
+               ON ag.server_id = a.server_id AND ag.album_id = a.album_id
+             WHERE a.server_id = ?1 AND ag.genre = ?2 COLLATE NOCASE
+             ORDER BY a.title COLLATE NOCASE
+             LIMIT ?3 OFFSET ?4",
+        )?;
+        let items = stmt
+            .query_map(
+                rusqlite::params![server_id.as_str(), genre, limit as i64, offset as i64],
+                rows::row_to_album,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(PagedResponse::new(items, total as usize))
+    }
+
+    /// Paged list of tracks that belong to an album tagged with the
+    /// given genre. Joins through `album_genres` (per-track genre
+    /// tags are not stored in the schema today). Used by the genre
+    /// detail view's "Tracks" section.
+    pub fn list_tracks_by_genre(
+        &self,
+        server_id: &ServerId,
+        genre: &str,
+        offset: usize,
+        limit: usize,
+    ) -> LibraryResult<PagedResponse<Track>> {
+        let conn = self.connection()?;
+        let total: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM tracks t
+             INNER JOIN album_genres ag
+               ON ag.server_id = t.server_id AND ag.album_id = t.album_id
+             WHERE t.server_id = ?1 AND ag.genre = ?2 COLLATE NOCASE",
+            rusqlite::params![server_id.as_str(), genre],
+            |r| r.get(0),
+        )?;
+        let mut stmt = conn.prepare(
+            "SELECT t.track_id, t.album_id, t.title, t.artist, t.artist_id,
+                    t.album, t.duration_seconds, t.track_number, t.disc_number,
+                    t.favorite, t.image_kind, t.image_tag
+             FROM tracks t
+             INNER JOIN album_genres ag
+               ON ag.server_id = t.server_id AND ag.album_id = t.album_id
+             WHERE t.server_id = ?1 AND ag.genre = ?2 COLLATE NOCASE
+             ORDER BY t.title COLLATE NOCASE, t.disc_number, t.track_number
+             LIMIT ?3 OFFSET ?4",
+        )?;
+        let items = stmt
+            .query_map(
+                rusqlite::params![server_id.as_str(), genre, limit as i64, offset as i64],
+                rows::row_to_track,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(PagedResponse::new(items, total as usize))
     }
 
     pub fn list_album_tracks(
@@ -1271,6 +1462,60 @@ mod tests {
     }
 
     #[test]
+    fn list_albums_by_genre_filters_by_tag_case_insensitive() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+
+        let mut jazz = album("a-jazz", "Jazz Album", "Alice");
+        jazz.genres = vec!["Jazz".into()];
+        let mut rock = album("a-rock", "Rock Album", "Bob");
+        rock.genres = vec!["Rock".into()];
+        let mut both = album("a-both", "Fusion", "Cathy");
+        both.genres = vec!["Jazz".into(), "Rock".into()];
+        store.upsert_album(&s, &jazz).unwrap();
+        store.upsert_album(&s, &rock).unwrap();
+        store.upsert_album(&s, &both).unwrap();
+
+        let page = store.list_albums_by_genre(&s, "jazz", 0, 10).unwrap();
+        assert_eq!(page.total, 2);
+        let ids: Vec<&str> = page.items.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, vec!["a-both", "a-jazz"]);
+    }
+
+    #[test]
+    fn list_tracks_by_genre_joins_through_album_genres() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+
+        let mut a = album("a-1", "Jazz Album", "Alice");
+        a.genres = vec!["Jazz".into()];
+        store.upsert_album(&s, &a).unwrap();
+
+        let artist = artist("ar-1", "Alice");
+        store.upsert_artist(&s, &artist).unwrap();
+
+        store
+            .replace_tracks(
+                &s,
+                &[
+                    track("t-1", "Track 1", "a-1", 1),
+                    track("t-2", "Track 2", "a-1", 2),
+                ],
+            )
+            .unwrap();
+
+        let page = store.list_tracks_by_genre(&s, "jazz", 0, 10).unwrap();
+        assert_eq!(page.total, 2);
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].title, "Track 1");
+        assert_eq!(page.items[1].title, "Track 2");
+
+        let empty = store.list_tracks_by_genre(&s, "Rock", 0, 10).unwrap();
+        assert_eq!(empty.total, 0);
+        assert!(empty.items.is_empty());
+    }
+
+    #[test]
     fn replace_tracks_orders_by_title() {
         let store = Store::open_memory().unwrap();
         let s = server();
@@ -1494,6 +1739,79 @@ mod tests {
     }
 
     #[test]
+    fn recompute_artist_track_counts_aggregates_from_cached_tracks() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        store.upsert_artist(&s, &artist("ar-1", "X")).unwrap();
+        store.upsert_artist(&s, &artist("ar-2", "Y")).unwrap();
+        // One `replace_albums` call so both a-1 and a-2 land in the
+        // same batch — calling it twice would evict the first album
+        // and break the FK when tracks try to reference it.
+        store
+            .replace_albums(
+                &s,
+                &[album("a-1", "A", "X"), album("a-2", "B", "Y")],
+            )
+            .unwrap();
+        // Three tracks for ar-1, two for ar-2. The recompute query
+        // joins on `tracks.artist_id`, so we have to set it explicitly
+        // — the default `track(...)` test helper leaves it as None.
+        store
+            .replace_tracks(
+                &s,
+                &[
+                    Track {
+                        artist_id: Some(ArtistId::new("ar-1")),
+                        ..track("t-1", "T1", "a-1", 1)
+                    },
+                    Track {
+                        artist_id: Some(ArtistId::new("ar-1")),
+                        ..track("t-2", "T2", "a-1", 2)
+                    },
+                    Track {
+                        artist_id: Some(ArtistId::new("ar-1")),
+                        ..track("t-3", "T3", "a-1", 3)
+                    },
+                    Track {
+                        artist_id: Some(ArtistId::new("ar-2")),
+                        ..track("t-4", "T4", "a-2", 1)
+                    },
+                    Track {
+                        artist_id: Some(ArtistId::new("ar-2")),
+                        ..track("t-5", "T5", "a-2", 2)
+                    },
+                ],
+            )
+            .unwrap();
+
+        store.recompute_artist_track_counts(&s).unwrap();
+
+        let page = store.list_artists(&s, 0, 10).unwrap();
+        let by_id: std::collections::HashMap<&str, u32> = page
+            .items
+            .iter()
+            .map(|a| (a.id.as_str(), a.track_count))
+            .collect();
+        assert_eq!(by_id.get("ar-1"), Some(&3));
+        assert_eq!(by_id.get("ar-2"), Some(&2));
+    }
+
+    #[test]
+    fn recompute_artist_track_counts_resets_to_zero_when_no_tracks_match() {
+        // Reproduces the Jellyfin case: provider sends `track_count=0`
+        // and the user owns no tracks for the artist. Recompute must
+        // leave the artist at 0, not whatever was previously cached.
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        let mut a = artist("ar-1", "X");
+        a.track_count = 42;
+        store.upsert_artist(&s, &a).unwrap();
+        store.recompute_artist_track_counts(&s).unwrap();
+        let page = store.list_artists(&s, 0, 10).unwrap();
+        assert_eq!(page.items[0].track_count, 0);
+    }
+
+    #[test]
     fn get_album_returns_some_when_present() {
         let store = Store::open_memory().unwrap();
         let s = server();
@@ -1518,5 +1836,107 @@ mod tests {
         let store2 = Store::open(&path).unwrap();
         let page = store2.list_albums(&server(), 0, 10).unwrap();
         assert_eq!(page.total, 1);
+    }
+
+    // ─── Queue snapshot persistence ─────────────────────────────
+
+    fn empty_snapshot(server_id: ServerId, entries: usize, current: Option<usize>) -> QueueSnapshot {
+        use sinfonic_domain::queue::QueueEngine;
+
+        let mut engine = QueueEngine::new(server_id.clone());
+        let tracks: Vec<Track> = (0..entries)
+            .map(|i| {
+                let mut t = track(&format!("t-{i}"), &format!("T{i}"), "a-1", i as u16 + 1);
+                t.album = "Album 1".into();
+                t
+            })
+            .collect();
+        engine.play_now(&tracks);
+        if let Some(idx) = current {
+            // jump_to is fine here; we just want a non-default current
+            let target_id = engine.entries()[idx.min(entries - 1)].id.clone();
+            let _ = engine.jump_to(&target_id);
+        }
+        engine.snapshot()
+    }
+
+    #[test]
+    fn save_load_round_trip_preserves_entries_and_current() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        store.upsert_server(&s, "subsonic", "Test", "http://x", None).unwrap();
+        let snap = empty_snapshot(s.clone(), 5, Some(2));
+        store.save_queue_snapshot(&s, &snap).unwrap();
+        let loaded = store.load_queue_snapshot(&s).unwrap().unwrap();
+        assert_eq!(loaded.entries.len(), 5);
+        assert_eq!(loaded.current_index, Some(2));
+        assert_eq!(loaded.entries[0].title, "T0");
+        assert_eq!(loaded.entries[4].title, "T4");
+    }
+
+    #[test]
+    fn load_returns_none_when_no_snapshot_persisted() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        store.upsert_server(&s, "subsonic", "Test", "http://x", None).unwrap();
+        assert!(store.load_queue_snapshot(&s).unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_queue_snapshot_removes_the_row() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        store.upsert_server(&s, "subsonic", "Test", "http://x", None).unwrap();
+        let snap = empty_snapshot(s.clone(), 2, Some(0));
+        store.save_queue_snapshot(&s, &snap).unwrap();
+        assert!(store.load_queue_snapshot(&s).unwrap().is_some());
+        store.delete_queue_snapshot(&s).unwrap();
+        assert!(store.load_queue_snapshot(&s).unwrap().is_none());
+    }
+
+    #[test]
+    fn save_overwrites_previous_snapshot() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        store.upsert_server(&s, "subsonic", "Test", "http://x", None).unwrap();
+        let snap1 = empty_snapshot(s.clone(), 2, Some(0));
+        store.save_queue_snapshot(&s, &snap1).unwrap();
+        let snap2 = empty_snapshot(s.clone(), 7, Some(3));
+        store.save_queue_snapshot(&s, &snap2).unwrap();
+        let loaded = store.load_queue_snapshot(&s).unwrap().unwrap();
+        assert_eq!(loaded.entries.len(), 7);
+        assert_eq!(loaded.current_index, Some(3));
+    }
+
+    #[test]
+    fn load_treats_malformed_snapshot_as_missing() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        store.upsert_server(&s, "subsonic", "Test", "http://x", None).unwrap();
+        // Inject a bad row by writing directly.
+        let conn = store.connection().unwrap();
+        conn.execute(
+            "INSERT INTO queue_snapshots (server_id, snapshot, updated_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![s.as_str(), "this is not json", 0],
+        )
+        .unwrap();
+        drop(conn);
+        let loaded = store.load_queue_snapshot(&s).unwrap();
+        assert!(loaded.is_none(), "malformed snapshot must surface as None");
+    }
+
+    #[test]
+    fn cascade_delete_removes_queue_snapshot_with_server() {
+        let store = Store::open_memory().unwrap();
+        let s = server();
+        store.upsert_server(&s, "subsonic", "Test", "http://x", None).unwrap();
+        let snap = empty_snapshot(s.clone(), 3, Some(1));
+        store.save_queue_snapshot(&s, &snap).unwrap();
+        assert!(store.load_queue_snapshot(&s).unwrap().is_some());
+        store.delete_server(&s).unwrap();
+        assert!(
+            store.load_queue_snapshot(&s).unwrap().is_none(),
+            "snapshot should cascade-delete with the server"
+        );
     }
 }

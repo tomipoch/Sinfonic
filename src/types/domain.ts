@@ -102,11 +102,38 @@ export interface QueueSnapshot {
   shuffleSeed: number;
 }
 
+/**
+ * Closed union mirroring the Rust `PlayContext` enum. Used by the
+ * playback commands to tell the backend "the user clicked this
+ * track from album X / playlist Y / favourites / a flat track
+ * list" so it can auto-append the rest of the context to the
+ * upcoming queue.
+ *
+ * - `album` / `playlist` / `favorites` resolve to a sibling-style
+ *   collection (album tracks in track-number order, playlist
+ *   entries in position order, favourites by title).
+ * - `all` resolves to the entire library sorted by title — used
+ *   by SongsView where there's no obvious album / playlist
+ *   grouping.
+ */
+export type PlayContext =
+  | { kind: "album"; albumId: string }
+  | { kind: "playlist"; playlistId: string; serverId: string }
+  | { kind: "favorites"; serverId: string }
+  | { kind: "all"; serverId: string };
+
 export interface QueueSnapshotPayload {
   entries: QueueEntry[];
   currentIndex: number | null;
   repeat: RepeatMode;
   shuffle: boolean;
+  /**
+   * Number of additional tracks available from the active play
+   * context (album / playlist / favourites) that aren't yet in
+   * `entries`. The QueuePanel uses this for the "+N más"
+   * affordance. `undefined` when no context is set.
+   */
+  contextRemaining?: number | null;
 }
 
 export interface PlaybackStatePayload {
@@ -124,6 +151,18 @@ export interface TrackChangedPayload {
   title: string;
   artist: string;
   album: string;
+}
+
+/**
+ * Payload for `playback-config-changed`. Mirrors
+ * `sinfonic_domain::events::PlaybackConfigPayload`. The settings UI
+ * listens so the slider stays in sync after the user touches it
+ * from elsewhere (or after the restore-on-launch path applies the
+ * persisted value).
+ */
+export interface PlaybackConfigPayload {
+  crossfadeEnabled: boolean;
+  crossfadeSeconds: number;
 }
 
 export interface EqBand {

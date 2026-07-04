@@ -151,11 +151,13 @@ export function SmartPlaylistsView() {
       </header>
 
       {/* Create form */}
-      <div className="flex flex-col gap-4 rounded-md border border-border bg-muted p-4">
+      <div className="flex flex-col gap-5 rounded-md border border-border bg-card p-5">
         <h2 className="text-sm font-medium text-foreground">Create new smart playlist</h2>
-        <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-2 items-end">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground" htmlFor="sp-name">
+
+        {/* Row 1 — name + create button */}
+        <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-[1fr_auto]">
+          <div>
+            <label className="label" htmlFor="sp-name">
               Name
             </label>
             <input
@@ -164,56 +166,7 @@ export function SmartPlaylistsView() {
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
               placeholder="My smart playlist"
-              className="input w-full"
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground" htmlFor="sp-field">
-              Field
-            </label>
-            <select
-              id="sp-field"
-              value={form.field}
-              onChange={(e) => setForm((f) => ({ ...f, field: e.target.value as typeof f.field }))}
-              className="input w-full"
-            >
-              {FIELDS.map((f) => (
-                <option key={f.value} value={f.value}>
-                  {f.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground" htmlFor="sp-op">
-              Operator
-            </label>
-            <select
-              id="sp-op"
-              value={form.operator}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, operator: e.target.value as typeof f.operator }))
-              }
-              className="input w-full"
-            >
-              {OPERATORS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-muted-foreground" htmlFor="sp-value">
-              Value
-            </label>
-            <input
-              id="sp-value"
-              type="text"
-              value={form.value}
-              onChange={(e) => setForm((f) => ({ ...f, value: e.target.value }))}
-              placeholder="search term"
-              className="input w-full"
+              className="input"
             />
           </div>
           <button
@@ -225,47 +178,99 @@ export function SmartPlaylistsView() {
             {creating ? "Creating…" : "Create"}
           </button>
         </div>
-        <div className="flex gap-2 items-center text-xs text-muted-foreground">
-          <span>Sort by:</span>
-          <select
-            value={form.sortField}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, sortField: e.target.value as typeof f.sortField }))
-            }
-            className="input py-1 text-xs"
-          >
-            {SORT_FIELDS.map((f) => (
-              <option key={f.value} value={f.value}>
-                {f.label}
-              </option>
-            ))}
-          </select>
-          <select
-            value={form.sortDir}
-            onChange={(e) =>
-              setForm((f) => ({ ...f, sortDir: e.target.value as typeof f.sortDir }))
-            }
-            className="input py-1 text-xs"
-          >
-            {SORT_DIRS.map((d) => (
-              <option key={d.value} value={d.value}>
-                {d.label}
-              </option>
-            ))}
-          </select>
-          <span className="ml-2">Limit:</span>
-          <select
-            value={form.limitN}
-            onChange={(e) => setForm((f) => ({ ...f, limitN: Number(e.target.value) }))}
-            className="input py-1 text-xs"
-          >
-            {LIMIT_OPTIONS.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-          <span>tracks</span>
+
+        {/* Row 2 — rule (field/operator/value) */}
+        <div>
+          <div className="label">Rule</div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_1fr_1fr]">
+            <select
+              aria-label="Field"
+              value={form.field}
+              onChange={(e) => setForm((f) => ({ ...f, field: e.target.value as typeof f.field }))}
+              className="select"
+            >
+              {FIELDS.map((f) => (
+                <option key={f.value} value={f.value}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Operator"
+              value={form.operator}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, operator: e.target.value as typeof f.operator }))
+              }
+              className="select"
+            >
+              {OPERATORS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            <input
+              aria-label="Value"
+              type="text"
+              value={form.value}
+              onChange={(e) => setForm((f) => ({ ...f, value: e.target.value }))}
+              placeholder="search term"
+              className="input"
+            />
+          </div>
+        </div>
+
+        {/* Row 3 — sort + limit */}
+        <div>
+          <div className="label">Sort &amp; limit</div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_1fr_1fr]">
+            <select
+              aria-label="Sort field"
+              value={form.sortField}
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  sortField: e.target.value as typeof f.sortField,
+                }))
+              }
+              className="select"
+            >
+              {SORT_FIELDS.map((f) => (
+                <option key={f.value} value={f.value}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Sort direction"
+              value={form.sortDir}
+              onChange={(e) =>
+                setForm((f) => ({
+                  ...f,
+                  sortDir: e.target.value as typeof f.sortDir,
+                }))
+              }
+              className="select"
+            >
+              {SORT_DIRS.map((d) => (
+                <option key={d.value} value={d.value}>
+                  {d.label}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Limit"
+              value={form.limitN}
+              onChange={(e) => setForm((f) => ({ ...f, limitN: Number(e.target.value) }))}
+              className="select"
+            >
+              {LIMIT_OPTIONS.map((n) => (
+                <option key={n} value={n}>
+                  {n} tracks
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 

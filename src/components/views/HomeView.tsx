@@ -90,7 +90,7 @@ export function HomeView() {
       {recentAlbums.length > 0 && (
         <HorizontalSection title="Recently Added">
           {recentAlbums.map((album) => (
-            <AlbumCard key={album.id} album={album} />
+            <AlbumCard key={album.id} album={album} className="w-40 shrink-0" />
           ))}
         </HorizontalSection>
       )}
@@ -99,7 +99,7 @@ export function HomeView() {
       {recentArtists.length > 0 && (
         <HorizontalSection title="Artists">
           {recentArtists.map((artist) => (
-            <ArtistCard key={artist.id} artist={artist} />
+            <ArtistCard key={artist.id} artist={artist} className="w-36 shrink-0" />
           ))}
         </HorizontalSection>
       )}

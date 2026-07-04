@@ -56,14 +56,17 @@ export function NowPlaying() {
   const hasTrack = currentTrack !== null;
 
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-2">
+    <div className="group flex min-w-0 flex-1 items-center gap-2">
       <div className="h-9 w-9 shrink-0 sm:h-11 sm:w-11 md:h-12 md:w-12" aria-hidden={!cover}>
         {cover ? (
           <AlbumCover
             source={cover}
             ariaLabel={`Cover art for ${cover.title}`}
-            className="h-9 w-9 rounded-md shadow-sm ring-1 ring-inset ring-border/40 sm:h-11 sm:w-11 md:h-12 md:w-12"
+            className="h-9 w-9 rounded-md shadow-sm ring-1 ring-inset ring-border/40 transition-transform duration-200 group-hover:scale-[1.02] sm:h-11 sm:w-11 md:h-12 md:w-12"
           />
+        ) : hasTrack ? (
+          // Skeleton while the cover hasn't loaded yet.
+          <div className="h-9 w-9 animate-pulse rounded-md bg-muted ring-1 ring-inset ring-border/40 sm:h-11 sm:w-11 md:h-12 md:w-12" />
         ) : (
           <div className="flex h-9 w-9 items-center justify-center rounded-md bg-gradient-to-br from-secondary to-muted ring-1 ring-inset ring-border/60 sm:h-11 sm:w-11 md:h-12 md:w-12">
             <HugeiconsIcon
@@ -75,7 +78,7 @@ export function NowPlaying() {
           </div>
         )}
       </div>
-      <div className="flex min-w-0 flex-col gap-0.5">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div
           className={cn(
             "truncate text-sm font-semibold tracking-tight",
@@ -98,7 +101,7 @@ export function NowPlaying() {
         )}
       </div>
       {fullTrack && (
-        <span className="hidden sm:inline-flex">
+        <span className="hidden shrink-0 sm:inline-flex">
           <FavoriteButton
             kind="track"
             itemId={fullTrack.id}

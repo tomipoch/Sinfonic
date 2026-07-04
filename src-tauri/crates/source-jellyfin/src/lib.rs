@@ -220,7 +220,12 @@ impl JellyfinProvider {
 /// playback reporting, playlist mutations).
 fn jellyfin_capabilities() -> ProviderCapabilities {
     ProviderCapabilities {
-        lyrics: false,
+        // Jellyfin has `/Audio/{Id}/Lyrics` but we don't speak it
+        // yet; declaring `true` lets the frontend attempt the lookup
+        // so the LRCLIB fallback in `commands::get_lyrics` runs
+        // when Jellyfin itself comes up empty. The provider's
+        // `lyrics()` implementation still returns `Ok(None)`.
+        lyrics: true,
         playback_reporting: true,
         playlist_mutations: true,
         playlist_delete: true,

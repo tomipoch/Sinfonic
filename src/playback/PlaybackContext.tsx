@@ -17,11 +17,13 @@ import { createContext, type ReactNode, useContext, useEffect } from "react";
 import { registerPlaybackReset } from "@/lifecycle/resetSession";
 
 import { type PlaybackControls, usePlayback } from "./usePlayback";
+import { useQueueBridge } from "./useQueueBridge";
 
 const PlaybackContext = createContext<PlaybackControls | null>(null);
 
 export function PlaybackProvider({ children }: { children: ReactNode }) {
   const controls = usePlayback();
+  useQueueBridge();
   useEffect(() => registerPlaybackReset(controls.reset), [controls.reset]);
   return <PlaybackContext.Provider value={controls}>{children}</PlaybackContext.Provider>;
 }

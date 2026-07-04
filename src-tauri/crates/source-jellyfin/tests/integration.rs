@@ -274,7 +274,7 @@ async fn capabilities_advertise_what_jellyfin_supports() {
     assert!(caps.image_metadata);
     assert!(caps.playlist_mutations);
     assert!(caps.playback_reporting);
-    assert!(!caps.lyrics);
+    assert!(caps.lyrics);
     assert!(!caps.random_tracks);
     assert!(!caps.folder_browsing);
 }

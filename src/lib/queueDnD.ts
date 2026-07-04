@@ -9,8 +9,14 @@ export interface TrackDragData {
     | "tracks-tab"
     | "songs-view"
     | "playlist-detail"
+    | "smart-playlist-detail"
     | "favorites"
-    | "queue";
+    | "favorites-tracks"
+    | "queue"
+    | "genre-detail"
+    | "search"
+    | "artist-top"
+    | "artist-featured";
 }
 
 export const DND_MIME_TYPE = "application/json";

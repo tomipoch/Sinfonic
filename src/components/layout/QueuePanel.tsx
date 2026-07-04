@@ -7,14 +7,14 @@
 //
 // When mode === "queue" the panel shows:
 //   1. A row of two full-width buttons:
-//        - "Seguir reproduciendo" (accent colour) calls next() so
-//          the queue advances; visually the primary action of the
-//          panel.
-//        - "Crossfade" toggles a local crossfade preference (no
-//          backend support yet — wired up so the UI lives; the
-//          audio engine still crossfades per its own configuration).
-//   2. Two sections, each with a clear button next to the title:
-//        - "Historial" — entries[0..currentIndex] (already played)
+//        - "Resume" (accent colour) calls resume() so a paused
+//          queue continues; disabled when already playing.
+//        - "Crossfade" opens the Settings window at the Playback
+//          tab (where the crossfade toggle + slider live).
+//   2. Three sections, each with a clear button next to the title:
+//        - "Now playing" — the entry at currentIndex (if any),
+//          highlighted with the primary colour and a "▶" indicator.
+//        - "History" — entries[0..currentIndex] (already played)
 //        - "Seguir reproduciendo" — entries[currentIndex+1..]
 //          (upcoming). Each section's clear button removes its
 //          entries via a Promise.all of queueRemove calls (no batch
@@ -34,9 +34,18 @@ import { MaterialSymbol } from "@/components/ui/MaterialSymbol";
 import { cn } from "@/lib/cn";
 import { extractError } from "@/lib/errors";
 import { formatDuration } from "@/lib/format";
-import { getLyrics, type LyricsPayload, next, queueClear, queueRemove } from "@/lib/tauri";
+import {
+  getLyrics,
+  type LyricsPayload,
+  queueExtendMore,
+  queueRemove,
+  resume,
+  stop,
+} from "@/lib/tauri";
+import { openSettingsWindow } from "@/modules/preferences/openSettingsWindow";
 import { usePlaybackContext } from "@/playback";
 import { useQueueStore } from "@/stores/queueStore";
+import { useServerStore } from "@/stores/serverStore";
 
 type Mode = "queue" | "lyrics";
 
@@ -45,11 +54,20 @@ interface Props {
    *  toggles in the PlayerBar; an explicit `onClose` is kept for
    *  future callers that want to drive the close from the panel. */
   onClose?: () => void;
-  initialMode?: Mode;
 }
 
-export function QueuePanel({ initialMode = "queue" }: Props) {
-  const mode = useQueueStore((s) => s.panelMode ?? initialMode);
+export function QueuePanel(_: Props = {}) {
+  const storedMode = useQueueStore((s) => s.panelMode);
+  const activeServerId = useServerStore((s) => s.activeServerId);
+  const { snapshot } = usePlaybackContext();
+  const hasTrack = snapshot.currentTrack !== null;
+
+  // Default to Up next when there's something to show; otherwise
+  // fall back to Lyrics, which has a more informative empty state
+  // ("Nothing playing") than two empty queue sections. The user's
+  // explicit toggle is preserved via `storedMode`.
+  const defaultMode: Mode = activeServerId !== null && hasTrack ? "queue" : "lyrics";
+  const mode = storedMode ?? defaultMode;
 
   return (
     <div className="absolute inset-y-0 right-0 z-40 flex w-56 flex-col border-l border-border bg-card shadow-xl">
@@ -63,15 +81,46 @@ export function QueuePanel({ initialMode = "queue" }: Props) {
 function QueueView() {
   const entries = useQueueStore((s) => s.entries);
   const currentIndex = useQueueStore((s) => s.currentIndex);
+  const contextRemaining = useQueueStore((s) => s.contextRemaining);
+  const { snapshot } = usePlaybackContext();
+  const isPlaying = snapshot.isPlaying;
   const [busy, setBusy] = useState(false);
-  const [crossfade, setCrossfade] = useState(false);
+  // Tracks whether the user has scrolled the panel up — when
+  // `true`, the "History" section above the visible viewport is
+  // partially in view and we draw a subtle top shadow so they know
+  // they can keep scrolling. Apple Music does the same.
+  const [canScrollUp, setCanScrollUp] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const upNextRef = useRef<HTMLDivElement>(null);
+
+  // Pin the scroll position to the start of the Up next
+  // container on mount so the first row of Up next is visible at
+  // the top of the viewport. History (which sits above Up next in
+  // the DOM) is scrolled out of view. Both sections have sticky
+  // headers, so scrolling up reveals the History header pinned at
+  // top; scrolling back down past Up next lets the Up next header
+  // take over.
+  useEffect(() => {
+    const el = scrollRef.current;
+    const upNext = upNextRef.current;
+    if (!el || !upNext) return;
+    el.scrollTop = upNext.offsetTop;
+    setCanScrollUp(el.scrollTop > 4);
+    // intentionally empty deps: run once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const historyEntries = useMemo(
     () => (currentIndex === null ? [] : entries.slice(0, Math.min(currentIndex, entries.length))),
     [entries, currentIndex],
   );
-  const upcomingEntries = useMemo(
-    () => (currentIndex === null ? entries : entries.slice(currentIndex + 1)),
+  // Up next = current track (if any) + remaining entries. When
+  // currentIndex is null the whole queue is "next" but no row is
+  // highlighted as current. The current track (when there is one)
+  // is always the first row, with the ▶ indicator + accent
+  // colour from QueueRow's `isCurrent` prop.
+  const nextEntries = useMemo(
+    () => (currentIndex === null ? entries : entries.slice(currentIndex)),
     [entries, currentIndex],
   );
 
@@ -90,18 +139,35 @@ function QueueView() {
     [busy],
   );
 
-  const onPlayNext = () => run(() => next(), "Skip to next");
+  const onResume = () => run(() => resume(), "Resume");
   const onClearHistory = () =>
     run(async () => {
       if (historyEntries.length === 0) return;
       await Promise.all(historyEntries.map((entry) => queueRemove(entry.id)));
     }, "Clear history");
-  const onClearUpcoming = () =>
+  // Apple Music-style "Clear" for Up Next: stops playback, then
+  // removes every entry from the END so the engine's current_index
+  // stays valid until we reach it. After the last removal the
+  // engine clamps current_index to the new last entry (or null),
+  // which preserves history (entries before the old current).
+  const onClearUpNext = () =>
     run(async () => {
-      if (upcomingEntries.length === 0) return;
-      await Promise.all(upcomingEntries.map((entry) => queueRemove(entry.id)));
-    }, "Clear play next");
-  const onClearAll = () => run(() => queueClear(), "Clear queue");
+      if (nextEntries.length === 0) return;
+      await stop();
+      for (const id of nextEntries.map((e) => e.id).reverse()) {
+        await queueRemove(id);
+      }
+    }, "Clear up next");
+  const onExtendMore = (n: number) =>
+    run(async () => {
+      if (n <= 0) return;
+      const added = await queueExtendMore(n);
+      if (added > 0) {
+        toast.success(`Added ${added} more ${added === 1 ? "track" : "tracks"}`);
+      } else {
+        toast.info("No more tracks available from this source");
+      }
+    }, "Load more");
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -109,131 +175,145 @@ function QueueView() {
       <div className="flex shrink-0 flex-col gap-1.5 border-b border-border p-2">
         <button
           type="button"
-          onClick={onPlayNext}
-          disabled={busy || upcomingEntries.length === 0}
+          onClick={onResume}
+          disabled={busy || isPlaying || entries.length === 0}
+          aria-label="Resume playback"
           className="flex h-9 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-40"
         >
           <MaterialSymbol name="play_arrow" size={18} weight={700} fill />
-          Seguir reproduciendo
+          Resume
         </button>
         <button
           type="button"
-          onClick={() => setCrossfade((v) => !v)}
-          aria-pressed={crossfade}
-          className={cn(
-            "flex h-8 w-full items-center justify-center gap-2 rounded-md border border-border text-sm font-medium transition-colors",
-            crossfade
-              ? "bg-primary/15 text-primary border-primary/40"
-              : "bg-background text-foreground hover:bg-muted",
-          )}
+          onClick={() => {
+            void openSettingsWindow("playback");
+          }}
+          className="flex h-8 w-full items-center justify-center gap-2 rounded-md border border-border text-sm font-medium bg-background text-foreground transition-colors hover:bg-muted"
         >
           <MaterialSymbol name="graphic_eq" size={16} />
           Crossfade
         </button>
       </div>
 
-      {/* Scrollable sections */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <Section
-          title="Historial"
-          count={historyEntries.length}
-          onClear={onClearHistory}
-          clearDisabled={busy || historyEntries.length === 0}
-        >
+      {/* Scrollable sections — DOM order is History (hidden above
+          the viewport by the bottom-pin scroll), then Up next.
+          Pinning to scrollHeight on mount puts the user at the
+          bottom; scrolling up reveals History. */}
+      <div
+        ref={scrollRef}
+        onScroll={() => {
+          const el = scrollRef.current;
+          if (!el) return;
+          setCanScrollUp(el.scrollTop > 4);
+        }}
+        className="relative min-h-0 flex-1 overflow-y-auto"
+      >
+        {/* Top shadow hints that there's hidden content above when
+            the user has scrolled into the History section. */}
+        <div
+          aria-hidden
+          className={cn(
+            "pointer-events-none sticky top-0 z-10 h-3 -mb-3 bg-gradient-to-b from-card to-transparent transition-opacity duration-200",
+            canScrollUp ? "opacity-100" : "opacity-0",
+          )}
+        />
+
+        <div>
+          <header className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-card/95 px-3 py-2 backdrop-blur-sm">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              History
+              {historyEntries.length > 0 ? (
+                <span className="ml-1 text-muted-foreground/60">· {historyEntries.length}</span>
+              ) : null}
+            </h3>
+            <button
+              type="button"
+              onClick={onClearHistory}
+              disabled={busy || historyEntries.length === 0}
+              aria-label="Clear History"
+              className="size-6 rounded p-0.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-30"
+            >
+              <MaterialSymbol name="delete" size={14} />
+            </button>
+          </header>
+
           {historyEntries.length === 0 ? (
             <p className="px-3 py-2 text-xs text-muted-foreground">
               Nothing played yet in this session.
             </p>
           ) : (
             <ol className="divide-y divide-border">
-              {historyEntries.map((entry, index) => (
+              {historyEntries.map((entry) => (
                 <QueueRow
                   key={entry.id}
                   title={entry.title}
                   artist={entry.artist}
                   duration={formatDuration(entry.durationSeconds)}
-                  index={index + 1}
-                  isCurrent={false}
                 />
               ))}
             </ol>
           )}
-        </Section>
+        </div>
 
-        <Section
-          title="Seguir reproduciendo"
-          count={upcomingEntries.length}
-          onClear={onClearUpcoming}
-          clearDisabled={busy || upcomingEntries.length === 0}
-        >
-          {upcomingEntries.length === 0 ? (
+        <div ref={upNextRef}>
+          <header className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-card/95 px-3 py-2 backdrop-blur-sm">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Up next
+              {nextEntries.length > 0 ? (
+                <span className="ml-1 text-muted-foreground/60">· {nextEntries.length}</span>
+              ) : null}
+            </h3>
+            <button
+              type="button"
+              onClick={onClearUpNext}
+              disabled={busy || nextEntries.length === 0}
+              aria-label="Clear Up next"
+              className="size-6 rounded p-0.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-30"
+            >
+              <MaterialSymbol name="delete" size={14} />
+            </button>
+          </header>
+
+          {nextEntries.length === 0 ? (
             <p className="px-3 py-2 text-xs text-muted-foreground">
               Queue is empty — the next track will start when the current one ends.
             </p>
           ) : (
             <ol className="divide-y divide-border">
-              {upcomingEntries.map((entry, index) => {
-                const absoluteIndex = currentIndex === null ? index : currentIndex + 1 + index;
+              {nextEntries.map((entry, index) => {
+                // The first row is the current track when there is
+                // a current track. The accent colour, background
+                // tint, and left border on QueueRow's `isCurrent`
+                // styling make it obvious without a position
+                // indicator.
+                const isCurrent = currentIndex !== null && index === 0;
                 return (
                   <QueueRow
                     key={entry.id}
                     title={entry.title}
                     artist={entry.artist}
                     duration={formatDuration(entry.durationSeconds)}
-                    index={absoluteIndex + 1}
-                    isCurrent={false}
+                    isCurrent={isCurrent}
                   />
                 );
               })}
             </ol>
           )}
-        </Section>
-
-        {entries.length > 0 && (
-          <div className="border-t border-border p-2">
+          {contextRemaining !== null && contextRemaining > 0 ? (
             <button
               type="button"
-              onClick={onClearAll}
+              onClick={() => onExtendMore(contextRemaining)}
               disabled={busy}
-              className="w-full rounded-md px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
+              aria-label={`Load ${contextRemaining} more tracks from this source`}
+              className="mx-3 mb-2 mt-1 inline-flex items-center justify-center gap-1.5 rounded-md border border-border bg-muted/40 px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted hover:text-primary disabled:opacity-40"
             >
-              Clear entire queue
+              <MaterialSymbol name="add" size={14} weight={700} />
+              {contextRemaining} more from this source
             </button>
-          </div>
-        )}
+          ) : null}
+        </div>
       </div>
     </div>
-  );
-}
-
-interface SectionProps {
-  title: string;
-  count: number;
-  onClear: () => void;
-  clearDisabled: boolean;
-  children: React.ReactNode;
-}
-
-function Section({ title, count, onClear, clearDisabled, children }: SectionProps) {
-  return (
-    <section className="border-b border-border py-2 last:border-b-0">
-      <header className="flex items-center justify-between px-3 pb-1">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {title}
-          {count > 0 ? <span className="ml-1 text-muted-foreground/60">· {count}</span> : null}
-        </h3>
-        <button
-          type="button"
-          onClick={onClear}
-          disabled={clearDisabled}
-          aria-label={`Clear ${title}`}
-          className="size-6 rounded p-0.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-30"
-        >
-          <MaterialSymbol name="delete" size={14} />
-        </button>
-      </header>
-      {children}
-    </section>
   );
 }
 
@@ -241,16 +321,20 @@ interface QueueRowProps {
   title: string;
   artist: string;
   duration: string;
-  index: number;
-  isCurrent: boolean;
+  /** When true, renders the row with the primary colour, a tinted
+   *  background, and a left accent border — the visual cue that
+   *  this is the currently-playing track (Apple Music style). */
+  isCurrent?: boolean;
 }
 
-function QueueRow({ title, artist, duration, index, isCurrent }: QueueRowProps) {
+function QueueRow({ title, artist, duration, isCurrent = false }: QueueRowProps) {
   return (
-    <li className="flex items-center gap-2 px-3 py-2 text-sm">
-      <span className="w-5 shrink-0 text-right font-mono text-[11px] text-muted-foreground">
-        {index}
-      </span>
+    <li
+      className={cn(
+        "flex items-center gap-2 px-3 py-2 text-sm",
+        isCurrent && "bg-primary/10 border-l-2 border-primary",
+      )}
+    >
       <div className="min-w-0 flex-1">
         <div
           className={cn(

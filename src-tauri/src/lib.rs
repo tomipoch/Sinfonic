@@ -39,6 +39,10 @@ pub use sinfonic_domain::RepeatMode;
 /// without going through Tauri.
 pub use commands::sync_library_data;
 
+/// Re-exported so integration tests can exercise the lyrics
+/// orchestration without going through Tauri.
+pub use commands::lookup_lyrics;
+
 /// Entrypoint invoked by `main.rs` (and the mobile target on iOS/Android).
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -152,6 +156,37 @@ pub fn run() {
                     let state_ref = setup_handle.lock().await;
                     commands::try_resume_lastfm(&state_ref).await;
                 }
+                // 1b) Restore persisted playback configuration
+                //     (crossfade on/off + duration). Done here so
+                //     the first track the user plays already honours
+                //     the saved preference. Both prefs are
+                //     best-effort: a missing or unparseable value
+                //     falls back to the AudioPlayer defaults
+                //     (off, 6 s).
+                {
+                    let state_ref = setup_handle.lock().await;
+                    let enabled = state_ref
+                        .library
+                        .get_preference("playback.crossfade_enabled")
+                        .ok()
+                        .flatten()
+                        .map(|v| v == "true")
+                        .unwrap_or(false);
+                    let seconds = state_ref
+                        .library
+                        .get_preference("playback.crossfade_seconds")
+                        .ok()
+                        .flatten()
+                        .and_then(|v| v.parse::<u32>().ok())
+                        .unwrap_or(6);
+                    state_ref.player.set_crossfade(enabled, seconds);
+                    tracing::debug!(
+                        target: "sinfonic::app",
+                        enabled,
+                        seconds,
+                        "restored crossfade config"
+                    );
+                }
                 // 2) Take clones of the bits the watcher needs, then
                 //    hand them off. This keeps the watcher's mutex
                 //    pressure off the IPC lock.
@@ -174,14 +209,18 @@ pub fn run() {
             commands::get_albums,
             commands::get_artists,
             commands::get_genres,
+            commands::get_albums_by_genre,
+            commands::get_tracks_by_genre,
             commands::get_tracks,
             commands::get_album,
             commands::get_album_detail,
             commands::play_album,
+            commands::play_album_with_context,
             // Playback (Phase 1 + Phase 4 audio)
             commands::get_playback_state,
             commands::get_queue,
             commands::play_track,
+            commands::play_track_with_context,
             commands::queue_play_now,
             commands::queue_play_next,
             commands::queue_add,
@@ -189,6 +228,7 @@ pub fn run() {
             commands::queue_jump_to,
             commands::queue_move,
             commands::queue_clear,
+            commands::queue_extend_more,
             // Queue bulk + Playlist CRUD (Phase 9)
             commands::queue_add_many,
             commands::queue_play_next_many,
@@ -223,6 +263,9 @@ pub fn run() {
             commands::set_eq_band,
             commands::reset_eq,
             commands::get_eq_bands,
+            // Crossfade (Phase 3)
+            commands::set_crossfade,
+            commands::get_crossfade_config,
             // Search (Phase 2)
             commands::search,
             // Provider (Phase 3 + Phase 5)

@@ -16,6 +16,11 @@ import type { QueueSnapshot } from "@/types/domain";
 export type QueuePanelMode = "queue" | "lyrics";
 
 export interface QueueStore extends QueueSnapshot {
+  /** Count of additional tracks the active play context (album /
+   *  playlist / favourites) can still yield that aren't in
+   *  `entries`. Drives the QueuePanel "+N más" button. `null`
+   *  when no context is set. */
+  contextRemaining: number | null;
   panelMode: QueuePanelMode | null;
   setSnapshot: (snapshot: QueueSnapshot) => void;
   clear: () => void;
@@ -29,9 +34,17 @@ export const useQueueStore = create<QueueStore>((set) => ({
   repeat: "off",
   shuffle: false,
   shuffleSeed: 0,
+  contextRemaining: null,
   panelMode: null,
 
   setSnapshot: (snapshot) => set(snapshot),
-  clear: () => set({ entries: [], currentIndex: null, serverId: null, panelMode: null }),
+  clear: () =>
+    set({
+      entries: [],
+      currentIndex: null,
+      serverId: null,
+      contextRemaining: null,
+      panelMode: null,
+    }),
   setPanelMode: (mode) => set({ panelMode: mode }),
 }));

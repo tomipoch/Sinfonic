@@ -38,7 +38,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use parking_lot::Mutex;
-use rodio::{OutputStream, OutputStreamHandle, Sink};
+use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
 use sinfonic_domain::{PlaybackState, TrackId};
 use thiserror::Error;
 
@@ -80,6 +80,17 @@ unsafe impl Sync for OutputStreamHolder {}
 /// or polled by the frontend via `get_playback_state`, so a slow
 /// WKWebView event channel can't stall the position counter.
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Crossfade configuration bounds. `seconds` is clamped to this
+/// range by `set_crossfade` so a hostile or buggy caller can't
+/// schedule hour-long fades.
+const CROSSFADE_SECONDS_MIN: u32 = 0;
+const CROSSFADE_SECONDS_MAX: u32 = 12;
+
+/// How often the fade thread updates `Sink::set_volume` while
+/// ramping between two sinks. 60 fps keeps the ramp audibly smooth
+/// without burning a CPU core.
+const FADE_TICK: Duration = Duration::from_millis(16);
 
 /// Events the AudioPlayer emits to the rest of the app. Wired to Tauri
 /// events in `lib.rs::run`.
@@ -142,6 +153,24 @@ struct Inner {
     /// runtime, so we can use `OnceLock` and pay zero synchronisation
     /// cost on every emit.
     on_event: OnceLock<PlayerEventCallback>,
+
+    // ─── Crossfade state ────────────────────────────────────
+    /// Master toggle. When `false`, `play()` does a dry cut and
+    /// `preload_next` is a no-op (no second sink is ever built).
+    crossfade_enabled: AtomicBool,
+    /// Crossfade duration in seconds (0..=12). The frontend slider
+    /// sends values inside this range; `set_crossfade` clamps.
+    crossfade_seconds: AtomicU32,
+    /// Pre-loaded sink for the next track. Built by `preload_next`
+    /// and consumed by the next `play()` call when crossfade is
+    /// enabled. Holding the rodio `Sink` here keeps the decoder
+    /// warm so the fade can start instantly.
+    next_sink: Mutex<Option<(TrackId, Sink)>>,
+    /// JoinHandle + stop flag for the active fade thread. A fade
+    /// in progress is cancelled by `play()` (when a new track
+    /// arrives mid-fade) and by `stop()`.
+    fade_thread: Mutex<Option<JoinHandle<()>>>,
+    fade_stop: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for AudioPlayer {
@@ -184,6 +213,11 @@ impl AudioPlayer {
             muted: Mutex::new(false),
             equalizer: Arc::new(Mutex::new(Equalizer::flat())),
             on_event: OnceLock::new(),
+            crossfade_enabled: AtomicBool::new(false),
+            crossfade_seconds: AtomicU32::new(6),
+            next_sink: Mutex::new(None),
+            fade_thread: Mutex::new(None),
+            fade_stop: Arc::new(AtomicBool::new(false)),
         };
         Self {
             output_stream: OutputStreamHolder(stream_opt),
@@ -246,16 +280,63 @@ where
             .with_eq(self.inner.equalizer.clone());
         let duration_seconds = decoded.duration_seconds.unwrap_or(0);
 
-        // Kill any existing poller + clear the previous sink before
-        // swapping in a new one. We do this BEFORE building the new
-        // sink so the old one is fully torn down.
+        // Crossfade path: if crossfade is on AND a preload exists
+        // for this exact track_id, ramp the current sink down and
+        // the preloaded one up over `crossfade_seconds`, then
+        // promote the new sink. Falls through to the dry-cut path
+        // when either condition fails (no preload, no device, or
+        // feature disabled).
+        if self.inner.crossfade_enabled.load(Ordering::Relaxed) {
+            if let Some((preload_id, next_sink)) = self.inner.next_sink.lock().take() {
+                if preload_id == track_id {
+                    if self.inner.stream_handle.lock().is_some() {
+                        self.start_crossfade(decoded.source, track_id.clone(), next_sink);
+                        self.inner.position_seconds.store(0, Ordering::Relaxed);
+                        self.inner.duration_seconds.store(duration_seconds, Ordering::Relaxed);
+                        self.inner.is_paused.store(false, Ordering::Relaxed);
+                        self.inner.ended_fired.store(false, Ordering::Relaxed);
+                        *self.inner.track_id.lock() = Some(track_id.clone());
+                        self.start_poller();
+                        self.emit_state(Some(track_id));
+                        return Ok(duration_seconds);
+                    }
+                    // No device — drop the new sink and fall through.
+                    next_sink.stop();
+                    drop(decoded);
+                    self.cancel_preload();
+                } else {
+                    // Stale preload for a different track — drop it
+                    // and fall through to dry cut.
+                    next_sink.stop();
+                    drop(decoded);
+                }
+            } else {
+                drop(decoded);
+            }
+        } else {
+            // Crossfade off: any stale preload is irrelevant.
+            self.cancel_preload();
+            drop(decoded);
+        }
+
+        // Dry-cut path (no fade). Kill any existing poller + clear
+        // the previous sink before swapping in a new one. We do
+        // this BEFORE building the new sink so the old one is fully
+        // torn down.
         self.stop_poller();
         {
             let mut sink_slot = self.inner.sink.lock();
             *sink_slot = None;
         }
 
-        // Build the new sink and append the source.
+        // Build the new sink and append the source. Re-decode here
+        // (the previous `stream::open` was dropped above) so the
+        // dry-cut path owns its own decoded source end-to-end.
+        let decoded = stream::open(stream_uri)
+            .await
+            .map_err(|e| PlayerError::Stream(e.to_string()))?
+            .with_eq(self.inner.equalizer.clone());
+
         let os_handle = self.inner.stream_handle.lock().clone();
         match os_handle {
             Some(os_handle) => {
@@ -288,6 +369,57 @@ where
         Ok(duration_seconds)
     }
 
+    /// Hand off control of the current sink to a fade thread and
+    /// install the preloaded sink as the active one. `decoded_source`
+    /// is the freshly decoded source for the new track — we wrap it
+    /// through the EQ, append it to `next_sink`, and start the fade.
+    fn start_crossfade(
+        &self,
+        decoded_source: Box<dyn Source<Item = f32> + Send>,
+        _track_id: TrackId,
+        next_sink: Sink,
+    ) {
+        // Append the freshly decoded source to the preloaded sink
+        // and unpause it. The fade thread will ramp `sink.set_volume`
+        // from 0 → master over the configured window.
+        next_sink.append(decoded_source);
+        next_sink.play();
+        let master = *self.inner.volume.lock();
+
+        // Cancel any in-flight fade (a second play call mid-fade
+        // should restart the ramp from the current gains, not
+        // stack two fade threads).
+        self.stop_fade();
+
+        // Take the current sink out for the fade thread to dispose
+        // of once the ramp completes, then install the new sink
+        // directly. `Sink` is not `Clone`, so the preloaded sink
+        // is moved into the main slot in one shot.
+        let old_sink = self.inner.sink.lock().take();
+        *self.inner.sink.lock() = Some(next_sink);
+
+        let inner = Arc::clone(&self.inner);
+        let stop_flag = Arc::clone(&self.inner.fade_stop);
+        stop_flag.store(false, Ordering::Relaxed);
+
+        let handle = std::thread::Builder::new()
+            .name("sinfonic-playback-fade".into())
+            .spawn(move || inner.run_fade_tick(old_sink, master, stop_flag))
+            .expect("spawn fade thread");
+        *self.inner.fade_thread.lock() = Some(handle);
+    }
+
+    fn stop_fade(&self) {
+        self.inner.fade_stop.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.inner.fade_thread.lock().take() {
+            // Detach: the fade thread checks the stop flag every
+            // FADE_TICK, so it will exit within ~16 ms of the
+            // signal. Joining here would risk blocking a command
+            // thread on a 60 fps audio thread.
+            drop(handle);
+        }
+    }
+
     /// Pause the current sink. Idempotent.
     pub fn pause(&self) {
         if let Some(sink) = self.inner.sink.lock().as_ref() {
@@ -311,6 +443,8 @@ where
     /// Stop playback entirely and clear the queue.
     pub fn stop(&self) {
         self.stop_poller();
+        self.stop_fade();
+        self.cancel_preload();
         {
             let mut sink_slot = self.inner.sink.lock();
             if let Some(sink) = sink_slot.as_ref() {
@@ -339,6 +473,12 @@ where
     }
 
     /// Set the master volume. `volume` is clamped to `[0.0, 1.0]`.
+    ///
+    /// If a fade is in progress the new master takes effect on the
+    /// next fade tick (the ramp recomputes `from_gain = master *
+    /// (1 - progress)` and `to_gain = master * progress` every
+    /// FADE_TICK). The fade itself keeps running — pausing the
+    /// ramp on a volume change would surprise the user mid-fade.
     pub fn set_volume(&self, volume: f32) {
         let clamped = volume.clamp(0.0, 1.0);
         *self.inner.volume.lock() = clamped;
@@ -370,6 +510,102 @@ where
     pub fn reset_eq(&self) {
         let mut eq = self.inner.equalizer.lock();
         *eq = Equalizer::flat();
+    }
+
+    // ─── Crossfade ──────────────────────────────────────────
+    //
+    // `set_crossfade` only stores the configuration; nothing is
+    // played or scheduled here. The actual fade kicks in the next
+    // time `play()` runs with a pre-loaded next sink.
+    //
+    // `preload_next` decodes the upcoming track and parks a ready-
+    // to-play `Sink` in `next_sink`. The next `play()` will pick
+    // it up and ramp both sinks for `crossfade_seconds` before
+    // promoting the new sink to the main one.
+    //
+    // When `crossfade_enabled` is `false` both `set_crossfade`
+    // and `preload_next` are essentially free: `set_crossfade`
+    // just records the values, and `preload_next` no-ops.
+
+    /// Configure crossfade. `seconds` is clamped to
+    /// `[CROSSFADE_SECONDS_MIN, CROSSFADE_SECONDS_MAX]`.
+    pub fn set_crossfade(&self, enabled: bool, seconds: u32) {
+        self.inner
+            .crossfade_enabled
+            .store(enabled, Ordering::Relaxed);
+        self.inner.crossfade_seconds.store(
+            seconds.clamp(CROSSFADE_SECONDS_MIN, CROSSFADE_SECONDS_MAX),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// Snapshot of the current crossfade configuration.
+    pub fn crossfade_config(&self) -> (bool, u32) {
+        (
+            self.inner.crossfade_enabled.load(Ordering::Relaxed),
+            self.inner.crossfade_seconds.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Build a rodio sink for `track_id` and park it as the
+    /// preloaded "next" sink. No audio is played yet; the next
+    /// `play(track_id, _)` call will detect the match and fade
+    /// from the current sink to this one.
+    ///
+    /// If crossfade is disabled this is a no-op (and the
+    /// returned duration comes straight from the decoder). The
+    /// frontend always calls it before `play`, so the cost when
+    /// the feature is off is just the extra decode — acceptable
+    /// because the sink is dropped immediately.
+    ///
+    /// Calling this while a previous preload is still cached
+    /// replaces it (the old sink drops and the decoder is freed).
+    pub async fn preload_next(
+        &self,
+        track_id: TrackId,
+        stream_uri: &str,
+    ) -> Result<u32, PlayerError> {
+        if !self.inner.crossfade_enabled.load(Ordering::Relaxed) {
+            // Even when crossfade is off, the caller asked for a
+            // preload. Decode + drop so the result of `play` (which
+            // always decodes again) stays the source of truth.
+            let _ = stream::open(stream_uri)
+                .await
+                .map_err(|e| PlayerError::Stream(e.to_string()))?;
+            return Ok(0);
+        }
+        let decoded = stream::open(stream_uri)
+            .await
+            .map_err(|e| PlayerError::Stream(e.to_string()))?
+            .with_eq(self.inner.equalizer.clone());
+        let duration_seconds = decoded.duration_seconds.unwrap_or(0);
+
+        let os_handle = self.inner.stream_handle.lock().clone();
+        let Some(os_handle) = os_handle else {
+            // Headless: drop the decoded source. The next `play`
+            // will detect the empty `next_sink` and fall back to
+            // the dry-cut path (which itself falls back to a
+            // TrackEnded fire — see `play`).
+            drop(decoded);
+            return Ok(duration_seconds);
+        };
+        let sink = Sink::try_new(&os_handle).map_err(|e| PlayerError::NoDevice(e.to_string()))?;
+        sink.set_volume(0.0); // silent until the fade thread takes over
+        sink.append(decoded.source);
+        sink.pause(); // do not play until the fade kicks in
+        let mut slot = self.inner.next_sink.lock();
+        *slot = Some((track_id, sink));
+        Ok(duration_seconds)
+    }
+
+    /// Drop any cached preloaded sink. Called automatically by
+    /// `play` and `stop` so a stale preload can never start
+    /// fading into the wrong track.
+    fn cancel_preload(&self) {
+        let mut slot = self.inner.next_sink.lock();
+        if let Some((_, sink)) = slot.take() {
+            sink.stop();
+        }
     }
 
     // ─── internals ────────────────────────────────────────────────
@@ -472,6 +708,65 @@ impl Inner {
             }
         }
         tracing::debug!(target: "sinfonic::playback::poller", "run_poller: thread exiting");
+    }
+
+    /// Ramp the previous sink to silence and the new (now installed)
+    /// sink from silence to `master` over `crossfade_seconds`, then
+    /// stop and drop the previous sink. `stop_flag` cancels the
+    /// ramp from outside (e.g. when `play` is called again before
+    /// the previous fade finished).
+    fn run_fade_tick(
+        self: Arc<Self>,
+        old_sink: Option<Sink>,
+        initial_master: f32,
+        stop_flag: Arc<AtomicBool>,
+    ) {
+        let total_seconds = self.crossfade_seconds.load(Ordering::Relaxed).max(1) as f32;
+        let start = std::time::Instant::now();
+        tracing::debug!(
+            target: "sinfonic::playback::fade",
+            seconds = total_seconds,
+            "run_fade_tick: started"
+        );
+
+        loop {
+            if stop_flag.load(Ordering::Relaxed) {
+                break;
+            }
+            let elapsed = start.elapsed().as_secs_f32();
+            let progress = (elapsed / total_seconds).clamp(0.0, 1.0);
+
+            // Re-read the master every tick so `set_volume` mid-fade
+            // takes effect on the next tick without restarting the
+            // ramp.
+            let master = *self.volume.lock();
+            let from_gain = master * (1.0 - progress);
+            let to_gain = master * progress;
+
+            // Apply to the new (currently installed) sink.
+            if let Some(new_sink) = self.sink.lock().as_ref() {
+                new_sink.set_volume(to_gain);
+            }
+            // Apply to the outgoing sink, if we still have one.
+            if let Some(ref old) = old_sink {
+                old.set_volume(from_gain);
+            }
+
+            if progress >= 1.0 {
+                break;
+            }
+            std::thread::sleep(FADE_TICK);
+        }
+
+        // Final state: outgoing sink at 0, incoming at master.
+        if let Some(ref old) = old_sink {
+            old.stop();
+        }
+        if let Some(new_sink) = self.sink.lock().as_ref() {
+            new_sink.set_volume(*self.volume.lock());
+        }
+        let _ = initial_master; // kept for parity / future per-fade overrides
+        tracing::debug!(target: "sinfonic::playback::fade", "run_fade_tick: done");
     }
 }
 
@@ -647,5 +942,79 @@ mod tests {
         let s = player.cached_state();
         assert!(s.volume.is_finite());
         assert!(s.volume >= 0.0 && s.volume <= 1.0);
+    }
+
+    // ─── Crossfade tests ──────────────────────────────────────
+
+    /// `set_crossfade` must clamp the seconds argument to the
+    /// documented `[0, 12]` range so a hostile or buggy caller
+    /// can't schedule a 10-minute fade.
+    #[test]
+    fn set_crossfade_clamps_seconds_to_max() {
+        let player = AudioPlayer::new();
+        player.set_crossfade(true, 100);
+        assert_eq!(player.crossfade_config(), (true, 12));
+    }
+
+    #[test]
+    fn set_crossfade_clamps_seconds_to_min() {
+        let player = AudioPlayer::new();
+        player.set_crossfade(true, 0);
+        assert_eq!(player.crossfade_config(), (true, 0));
+    }
+
+    /// Default config is `enabled = false`, `seconds = 6`.
+    #[test]
+    fn crossfade_default_is_disabled_with_six_seconds() {
+        let player = AudioPlayer::new();
+        assert_eq!(player.crossfade_config(), (false, 6));
+    }
+
+    /// When crossfade is disabled, `preload_next` must not allocate
+    /// a second sink (verified by the `next_sink` slot remaining
+    /// empty after the call). The decoded source is dropped
+    /// immediately so the only cost is the decode itself.
+    #[test]
+    fn preload_next_is_noop_when_disabled() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build runtime");
+        let player = AudioPlayer::new();
+        let path = tmp_wav(2);
+        let _ = runtime.block_on(player.preload_next(
+            TrackId::from("track-a"),
+            path.to_str().unwrap(),
+        ));
+        // next_sink slot should still be empty.
+        {
+            let slot = player.inner.next_sink.lock();
+            assert!(slot.is_none(), "next_sink should be empty when crossfade is disabled");
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// `stop` must cancel any in-flight fade and drop the preloaded
+    /// sink so a stale preload can't leak into the next session.
+    #[test]
+    fn stop_clears_fade_and_preload() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build runtime");
+        let player = AudioPlayer::new();
+        player.set_crossfade(true, 4);
+
+        let path_a = tmp_wav(2);
+        let _ = runtime.block_on(player.preload_next(
+            TrackId::from("track-a"),
+            path_a.to_str().unwrap(),
+        ));
+
+        player.stop();
+
+        let slot = player.inner.next_sink.lock();
+        assert!(slot.is_none(), "stop should drop the preload");
+        std::fs::remove_file(&path_a).ok();
     }
 }

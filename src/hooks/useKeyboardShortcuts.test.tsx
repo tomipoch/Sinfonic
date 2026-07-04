@@ -45,13 +45,19 @@ describe("useKeyboardShortcuts — ArrowUp volume", () => {
       { wrapper: Provider },
     );
 
-    // Wait one tick for the bootstrap effect to settle.
+    // Wait one tick for the bootstrap effects (playback + queue
+    // bridge) to settle.
     await act(async () => {
+      await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
     });
 
     const volumeBefore = result.current.snapshot.volume;
+
+    // Reset call history AFTER bootstrap so the assertion below only
+    // counts what the keyboard shortcut did.
+    invokeMock.mockClear();
 
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp" }));
@@ -77,6 +83,7 @@ describe("useKeyboardShortcuts — ArrowUp volume", () => {
     );
 
     await act(async () => {
+      await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
     });

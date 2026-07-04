@@ -496,6 +496,22 @@ pub struct Starred2Body {
 
 /// `/rest/getLyrics` — song lyrics. Optional in Subsonic, present
 /// in Navidrome with `openSubsonic=true`.
+///
+/// Wire shape per OpenSubsonic spec:
+/// ```json
+/// "lyrics": {
+///   "value": "Plain text fallback…",
+///   "struct": [
+///     { "lang": "en", "synced": true,
+///       "line": [ { "value": "L1", "start": 1000 }, … ] }
+///   ]
+/// }
+/// ```
+///
+/// `value` is the plain-text fallback. `struct` is an array of
+/// per-language entries; each entry groups its `line` array of
+/// timed lines. Servers that only ship unsynced lyrics omit
+/// `struct` entirely.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LyricsPayload {
@@ -506,17 +522,37 @@ pub struct LyricsPayload {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LyricsBody {
-    #[serde(default)]
-    pub r#struct: Vec<LyricsLineDto>,
+    /// Plain-text lyrics. Present on most providers, including the
+    /// legacy Subsonic flavour that doesn't ship `struct`.
     #[serde(default)]
     pub value: Option<String>,
+    /// Synced lyrics, one entry per language variant. Each entry
+    /// groups a flat `line` array of timed lines.
+    #[serde(default)]
+    pub r#struct: Vec<LyricsStructEntryDto>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LyricsStructEntryDto {
+    #[serde(default)]
+    pub lang: Option<String>,
+    /// `true` when this entry's lines carry timestamps. Servers
+    /// that only publish unsynced lyrics omit the flag — we treat
+    /// the absence as `false`.
+    #[serde(default)]
+    pub synced: Option<bool>,
+    #[serde(default)]
+    pub line: Vec<LyricsLineDto>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LyricsLineDto {
+    /// Plain text of this line.
     #[serde(default)]
     pub value: String,
+    /// Milliseconds from track start. `None` for unsynced lines.
     #[serde(default)]
     pub start: Option<u64>,
 }
