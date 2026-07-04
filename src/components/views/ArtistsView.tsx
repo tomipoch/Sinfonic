@@ -20,7 +20,7 @@ import { MarqueeText } from "@/components/ui/MarqueeText";
 import { useInfiniteScroll } from "@/hooks/useInfiniteScroll";
 import { extractError } from "@/lib/errors";
 import { compareString } from "@/lib/sort";
-import { getAlbumDetail, playAlbum } from "@/lib/tauri";
+import { playAlbum, providerAlbumDetail } from "@/lib/tauri";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useServerStore } from "@/stores/serverStore";
 import type { Artist } from "@/types/domain";
@@ -68,7 +68,7 @@ export function ArtistsView() {
         toast.error("No albums found for this artist");
         return;
       }
-      const details = await Promise.all(artistAlbums.map((a) => getAlbumDetail(a.id)));
+      const details = await Promise.all(artistAlbums.map((a) => providerAlbumDetail(a.id)));
       const allTracks = details.flatMap((d) => d?.tracks ?? []);
       if (allTracks.length === 0) {
         toast.error("No tracks found for this artist");

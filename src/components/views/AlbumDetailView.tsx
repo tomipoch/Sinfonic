@@ -20,7 +20,7 @@ import { MarqueeText } from "@/components/ui/MarqueeText";
 import { type TrackColumn, TrackTable } from "@/components/ui/TrackTable";
 import { extractError } from "@/lib/errors";
 import { formatDuration } from "@/lib/format";
-import { getAlbumDetail, playAlbumWithContext, playTrackWithContext } from "@/lib/tauri";
+import { playAlbumWithContext, playTrackWithContext, providerAlbumDetail } from "@/lib/tauri";
 import { useServerStore } from "@/stores/serverStore";
 import type { Album, Track } from "@/types/domain";
 
@@ -55,7 +55,7 @@ export function AlbumDetailView() {
     }
     setLoading(true);
     setNotFound(false);
-    void getAlbumDetail(id).then(
+    void providerAlbumDetail(id).then(
       (result) => {
         if (cancelled) return;
         if (result === null) {

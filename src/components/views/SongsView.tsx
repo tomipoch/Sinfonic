@@ -21,7 +21,7 @@ import { Pagination } from "@/components/ui/Pagination";
 import { PlayGlyph } from "@/components/ui/PlayGlyph";
 import { type TrackColumn, TrackTable } from "@/components/ui/TrackTable";
 import { extractError } from "@/lib/errors";
-import { getTracks, playAlbumWithContext, playTrackWithContext } from "@/lib/tauri";
+import { playAlbumWithContext, playTrackWithContext, providerListTracks } from "@/lib/tauri";
 import { useServerStore } from "@/stores/serverStore";
 import type { Track } from "@/types/domain";
 
@@ -72,7 +72,7 @@ export function SongsView() {
     if (!activeServerId) return;
     let cancelled = false;
     setLoading(true);
-    getTracks(page * PAGE_SIZE, PAGE_SIZE)
+    providerListTracks(page * PAGE_SIZE, PAGE_SIZE)
       .then((resp) => {
         if (cancelled) return;
         setItems(resp.items);

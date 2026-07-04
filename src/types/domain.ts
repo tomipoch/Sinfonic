@@ -55,6 +55,16 @@ export interface Artist {
   imageRef?: ImageRef | null;
 }
 
+/**
+ * Artist + the albums they appear on. Mirrors the Rust
+ * `sinfonic_domain::ArtistDetail`. Returned by `providerArtistDetail`
+ * so the artist view can render without a follow-up album fetch.
+ */
+export interface ArtistDetail {
+  artist: Artist;
+  albums: Album[];
+}
+
 export interface Genre {
   id: string;
   name: string;
