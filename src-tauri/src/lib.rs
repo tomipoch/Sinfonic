@@ -214,6 +214,15 @@ pub fn run() {
             commands::get_tracks,
             commands::get_album,
             commands::get_album_detail,
+            // Provider-direct reads (Phase 1 of feature/direct-fetch-providers).
+            // Bypass the SQLite cache and hit the upstream server so
+            // the UI doesn't wait for `provider_sync_library`.
+            commands::provider_list_albums,
+            commands::provider_list_artists,
+            commands::provider_list_tracks,
+            commands::provider_album_detail,
+            commands::provider_artist_detail,
+            commands::provider_playlist_detail,
             commands::play_album,
             commands::play_album_with_context,
             // Playback (Phase 1 + Phase 4 audio)

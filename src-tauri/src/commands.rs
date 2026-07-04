@@ -198,6 +198,22 @@ mod playback_helpers {
 mod provider_helpers {
     use super::*;
 
+    /// Borrow a clone of the active `Arc<dyn MusicProvider>` from the
+    /// app state without holding the AppState mutex across the
+    /// network call. Returns `None` when no provider is connected —
+    /// the caller surfaces that as an empty page or `null` so the
+    /// UI renders the "connect a server" hint instead of erroring.
+    ///
+    /// Centralised here so the provider-direct read commands
+    /// (`provider_list_albums` etc.) follow the same lock pattern.
+    pub(super) async fn current_provider(
+        state: &Arc<Mutex<AppState>>,
+    ) -> Option<Arc<dyn MusicProvider>> {
+        let guard = state.lock().await;
+        let provider = guard.provider.lock().await.as_ref().cloned();
+        provider
+    }
+
     /// Stop the rodio sink, clear the queue (track ids from the
     /// previous provider would never resolve against the next one),
     /// and notify the frontend so the PlayerBar / QueuePanel refresh
@@ -371,6 +387,121 @@ pub async fn get_album(
         .get_album(&server_id, &parsed)
         .map_err(|e| e.to_string())?;
     Ok(album)
+}
+
+// ─── Provider-direct reads (Phase 1 of feature/direct-fetch) ─────
+//
+// Each command resolves the active `Arc<dyn MusicProvider>` from the
+// app state and calls the matching trait method directly. The page
+// arrives from the upstream server, not from the SQLite cache — so
+// the UI is usable as soon as the first HTTP response lands and we
+// don't need the full `provider_sync_library` to finish.
+//
+// The existing `get_albums` / `get_artists` / `get_tracks` commands
+// stay in place as the offline / cached-reads path. The frontend
+// picks between them per-view (the new wrappers below).
+//
+// No provider is connected → return an empty page with total = 0
+// instead of erroring. The UI already surfaces a "connect a server"
+// hint in that state; raising a `Result::Err` would trigger a toast
+// on every cold start.
+
+#[tauri::command]
+pub async fn provider_list_albums(
+    offset: usize,
+    limit: usize,
+    state: SharedState<'_>,
+) -> Result<PagedResponse<Album>, String> {
+    let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
+        return Ok(PagedResponse::new(Vec::new(), 0));
+    };
+    let req = sinfonic_domain::PagedRequest::new(offset, limit);
+    provider.albums(req).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn provider_list_artists(
+    offset: usize,
+    limit: usize,
+    state: SharedState<'_>,
+) -> Result<PagedResponse<Artist>, String> {
+    let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
+        return Ok(PagedResponse::new(Vec::new(), 0));
+    };
+    let req = sinfonic_domain::PagedRequest::new(offset, limit);
+    provider.artists(req).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn provider_list_tracks(
+    offset: usize,
+    limit: usize,
+    state: SharedState<'_>,
+) -> Result<PagedResponse<Track>, String> {
+    let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
+        return Ok(PagedResponse::new(Vec::new(), 0));
+    };
+    let req = sinfonic_domain::PagedRequest::new(offset, limit);
+    provider.tracks(req).await.map_err(|e| e.to_string())
+}
+
+/// Album with its tracks resolved straight from the active provider.
+/// Returns `Ok(None)` when no provider is connected or the album id
+/// doesn't resolve to a row — same shape as `get_album_detail` so
+/// the view layer can swap the wrapper with no further changes.
+#[tauri::command]
+pub async fn provider_album_detail(
+    album_id: String,
+    state: SharedState<'_>,
+) -> Result<Option<AlbumDetail>, String> {
+    let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
+        return Ok(None);
+    };
+    let parsed = AlbumId::try_new(album_id).map_err(|e| e.to_string())?;
+    match provider.album_detail(&parsed).await {
+        Ok(resp) => Ok(Some(resp.detail)),
+        Err(sinfonic_source::ProviderError::NotFound) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Artist with their albums resolved from the active provider.
+/// Returns `Ok(None)` when no provider is connected or the artist id
+/// is unknown.
+#[tauri::command]
+pub async fn provider_artist_detail(
+    artist_id: String,
+    state: SharedState<'_>,
+) -> Result<Option<sinfonic_domain::ArtistDetail>, String> {
+    let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
+        return Ok(None);
+    };
+    let parsed = ArtistId::try_new(artist_id).map_err(|e| e.to_string())?;
+    match provider.artist_detail(&parsed).await {
+        Ok(resp) => Ok(Some(resp.detail)),
+        Err(sinfonic_source::ProviderError::NotFound) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Playlist with its tracks resolved from the active provider.
+/// Returns `Ok(None)` when no provider is connected, the provider
+/// doesn't support playlist reads, or the playlist id is unknown.
+#[tauri::command]
+pub async fn provider_playlist_detail(
+    playlist_id: String,
+    state: SharedState<'_>,
+) -> Result<Option<PlaylistDetail>, String> {
+    let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
+        return Ok(None);
+    };
+    let parsed: PlaylistId = playlist_id.into();
+    match provider.playlist_detail(&parsed).await {
+        Ok(detail) => Ok(Some(detail)),
+        Err(sinfonic_source::ProviderError::NotFound) => Ok(None),
+        Err(sinfonic_source::ProviderError::Unsupported(_)) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Replace the queue with `tracks` and start playing the first one
