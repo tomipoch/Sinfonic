@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type SettingsTab = "general" | "themes" | "about";
+export type SettingsTab = "general" | "playback" | "themes" | "about";
 
 export async function openSettingsWindow(tab?: SettingsTab): Promise<void> {
   await invoke("open_settings_window");

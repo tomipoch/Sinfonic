@@ -21,8 +21,7 @@ import { Pagination } from "@/components/ui/Pagination";
 import { PlayGlyph } from "@/components/ui/PlayGlyph";
 import { type TrackColumn, TrackTable } from "@/components/ui/TrackTable";
 import { extractError } from "@/lib/errors";
-import { getTracks, playAlbum, playTrack } from "@/lib/tauri";
-import { usePlaybackStore } from "@/stores/playbackStore";
+import { getTracks, playAlbumWithContext, playTrackWithContext } from "@/lib/tauri";
 import { useServerStore } from "@/stores/serverStore";
 import type { Track } from "@/types/domain";
 
@@ -49,7 +48,6 @@ export function SongsView() {
   const activeServerId = useServerStore((s) => s.activeServerId);
   const lastSync = useServerStore((s) => s.lastSync);
   const syncLibrary = useServerStore((s) => s.syncLibrary);
-  const setIsPlaying = usePlaybackStore((s) => s.setIsPlaying);
 
   const [page, setPage] = useState(0);
   const [items, setItems] = useState<Track[]>([]);
@@ -96,10 +94,19 @@ export function SongsView() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   const onPlay = async (track: Track) => {
+    if (!activeServerId) return;
     setBusy(true);
     try {
-      await playTrack(track);
-      setIsPlaying(true);
+      // Anchor the auto-fill to the entire library so the queue
+      // extends with the next 30 tracks after this one in the
+      // title-ascending order (the same order SongsView uses).
+      // The backend preserves the previous history — the track
+      // that was playing becomes part of History instead of being
+      // wiped.
+      await playTrackWithContext(track, {
+        kind: "all",
+        serverId: activeServerId,
+      });
     } catch (err) {
       toast.error(`Couldn't play track: ${extractError(err, "unknown error")}`);
     } finally {
@@ -108,11 +115,13 @@ export function SongsView() {
   };
 
   const onPlayAll = async () => {
-    if (busy || items.length === 0) return;
+    if (busy || items.length === 0 || !activeServerId) return;
     setBusy(true);
     try {
-      await playAlbum(items);
-      setIsPlaying(true);
+      await playAlbumWithContext(items, {
+        kind: "all",
+        serverId: activeServerId,
+      });
     } catch (err) {
       toast.error(`Couldn't play all: ${extractError(err, "unknown error")}`);
     } finally {

@@ -1,6 +1,7 @@
-// Album detail view — header (cover + title + artist + meta) and a
-// track table. The "Play album" button replaces the queue with the
-// album's tracks and starts playback from the first one.
+// Album detail view — header (cover + title + artist + meta + genre
+// chips) and a track table. The "Play album" button replaces the
+// queue with the album's tracks and starts playback from the first
+// one.
 //
 // Tracks come from the local SQLite cache (server-scoped) so the
 // view works offline after a sync. The `album_id` URL param is
@@ -9,15 +10,17 @@
 // React Router.
 
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { toast } from "sonner";
 
 import { AlbumCover } from "@/components/ui/AlbumCover";
 import { FavoriteButton } from "@/components/ui/FavoriteButton";
+import { GenreChip } from "@/components/ui/GenreChip";
+import { MarqueeText } from "@/components/ui/MarqueeText";
 import { type TrackColumn, TrackTable } from "@/components/ui/TrackTable";
 import { extractError } from "@/lib/errors";
 import { formatDuration } from "@/lib/format";
-import { getAlbumDetail, playAlbum, playTrack } from "@/lib/tauri";
+import { getAlbumDetail, playAlbumWithContext, playTrackWithContext } from "@/lib/tauri";
 import { useServerStore } from "@/stores/serverStore";
 import type { Album, Track } from "@/types/domain";
 
@@ -74,12 +77,12 @@ export function AlbumDetailView() {
   }, [id, activeServerId]);
 
   if (!id) {
-    return <p className="text-muted-foreground text-sm">Missing album id.</p>;
+    return <p className="p-6 text-muted-foreground text-sm">Missing album id.</p>;
   }
 
   if (loading) {
     return (
-      <p className="text-muted-foreground text-sm" role="status">
+      <p className="p-6 text-muted-foreground text-sm" role="status">
         Loading album…
       </p>
     );
@@ -87,7 +90,7 @@ export function AlbumDetailView() {
 
   if (notFound || !data) {
     return (
-      <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
+      <div className="m-6 flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
         <div className="text-base font-medium text-foreground">Album not found</div>
         <p className="text-sm text-muted-foreground">
           The library cache doesn't have this album. Try syncing your library.
@@ -102,7 +105,7 @@ export function AlbumDetailView() {
     if (busy || tracks.length === 0) return;
     setBusy(true);
     try {
-      await playAlbum(tracks);
+      await playAlbumWithContext(tracks, { kind: "album", albumId: album.id });
     } catch (err) {
       toast.error(`Couldn't play album: ${extractError(err, "unknown error")}`);
     } finally {
@@ -113,7 +116,7 @@ export function AlbumDetailView() {
   const onPlayTrack = async (track: Track) => {
     setBusy(true);
     try {
-      await playTrack(track);
+      await playTrackWithContext(track, { kind: "album", albumId: album.id });
     } catch (err) {
       toast.error(`Couldn't play track: ${extractError(err, "unknown error")}`);
     } finally {
@@ -122,14 +125,15 @@ export function AlbumDetailView() {
   };
 
   return (
-    <section className="flex flex-col gap-6">
+    <section className="flex flex-col gap-6 p-6">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end">
         <div className="w-48 shrink-0">
           <AlbumCover source={album} />
         </div>
         <div className="flex min-w-0 flex-col gap-1">
-          <div className="text-xs uppercase tracking-wide text-muted-foreground">Album</div>
-          <h1 className="truncate text-3xl font-semibold">{album.title}</h1>
+          <h1 className="text-3xl font-semibold">
+            <MarqueeText>{album.title}</MarqueeText>
+          </h1>
           <div className="text-base text-muted-foreground">
             {album.artist}
             {album.year ? ` · ${album.year}` : ""}
@@ -139,6 +143,15 @@ export function AlbumDetailView() {
             {" · "}
             {formatDuration(album.durationSeconds)}
           </div>
+          {album.genres.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {album.genres.map((genre) => (
+                <Link key={genre} to={`/genres/${encodeURIComponent(genre)}`}>
+                  <GenreChip label={genre} />
+                </Link>
+              ))}
+            </div>
+          )}
           <div className="mt-3 flex items-center gap-3">
             <button
               type="button"

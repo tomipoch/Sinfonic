@@ -1,306 +1,357 @@
-// QueuePanel — slide-in panel from the right showing the playback
-// queue. Opened via the queue button in PlayerBar. Overlaps the
-// content area without pushing it (unlike the sidebar).
+// QueuePanel — slide-in panel from the right.
 //
-// Mode toggles between `queue` and `lyrics` via a header segmented
-// control. Lyrics auto-scrolls following `positionSeconds` when the
-// provider returns LRC-shaped synced lines; falls back to a
-// vertically-scrollable plain-text view otherwise.
+// The panel itself owns no header / no title / no mode toggle:
+// the mode (queue vs lyrics) is controlled by the PanelToggles in
+// the PlayerBar so the header here would duplicate that choice
+// against the sidebar's NowPlaying.
+//
+// When mode === "queue" the panel shows:
+//   1. A row of two full-width buttons:
+//        - "Resume" (accent colour) calls resume() so a paused
+//          queue continues; disabled when already playing.
+//        - "Crossfade" opens the Settings window at the Playback
+//          tab (where the crossfade toggle + slider live).
+//   2. Three sections, each with a clear button next to the title:
+//        - "Now playing" — the entry at currentIndex (if any),
+//          highlighted with the primary colour and a "▶" indicator.
+//        - "History" — entries[0..currentIndex] (already played)
+//        - "Seguir reproduciendo" — entries[currentIndex+1..]
+//          (upcoming). Each section's clear button removes its
+//          entries via a Promise.all of queueRemove calls (no batch
+//          command exists in the backend yet).
+//
+// When mode === "lyrics" the panel shows the synced lyrics in an
+// Apple Music-ish layout: track title + artist at the top, the
+// current line large in primary colour, the rest dimmed, with
+// smooth auto-scroll keeping the active line centred.
+//
+// On either mode an empty state explains what would appear (now
+// playing / queue empty / no lyrics for this track).
 
-import { Delete03Icon, RepeatIcon, RepeatOne01Icon, ShuffleIcon } from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { MaterialSymbol } from "@/components/ui/MaterialSymbol";
 import { cn } from "@/lib/cn";
 import { extractError } from "@/lib/errors";
 import { formatDuration } from "@/lib/format";
-import { nextRepeat, repeatLabel } from "@/lib/repeat";
 import {
   getLyrics,
   type LyricsPayload,
-  queueClear,
-  queueJumpTo,
+  queueExtendMore,
   queueRemove,
-  setRepeat,
-  setShuffle,
+  resume,
+  stop,
 } from "@/lib/tauri";
-import { usePlaybackStore } from "@/stores/playbackStore";
+import { openSettingsWindow } from "@/modules/preferences/openSettingsWindow";
+import { usePlaybackContext } from "@/playback";
 import { useQueueStore } from "@/stores/queueStore";
+import { useServerStore } from "@/stores/serverStore";
 
 type Mode = "queue" | "lyrics";
 
 interface Props {
-  onClose: () => void;
-  initialMode?: Mode;
+  /** Optional — the panel can be closed via the queue/lyrics
+   *  toggles in the PlayerBar; an explicit `onClose` is kept for
+   *  future callers that want to drive the close from the panel. */
+  onClose?: () => void;
 }
 
-export function QueuePanel({ onClose, initialMode = "queue" }: Props) {
-  const [mode, setMode] = useState<Mode>(initialMode);
+export function QueuePanel(_: Props = {}) {
+  const storedMode = useQueueStore((s) => s.panelMode);
+  const activeServerId = useServerStore((s) => s.activeServerId);
+  const { snapshot } = usePlaybackContext();
+  const hasTrack = snapshot.currentTrack !== null;
 
-  useEffect(() => {
-    setMode(initialMode);
-  }, [initialMode]);
+  // Default to Up next when there's something to show; otherwise
+  // fall back to Lyrics, which has a more informative empty state
+  // ("Nothing playing") than two empty queue sections. The user's
+  // explicit toggle is preserved via `storedMode`.
+  const defaultMode: Mode = activeServerId !== null && hasTrack ? "queue" : "lyrics";
+  const mode = storedMode ?? defaultMode;
 
   return (
-    <div className="absolute inset-y-0 right-0 z-40 flex w-80 flex-col border-l border-border bg-card shadow-xl">
-      <PanelHeader mode={mode} onModeChange={setMode} onClose={onClose} />
-      {mode === "queue" ? <QueueList /> : <LyricsView />}
+    <div className="absolute inset-y-0 right-0 z-40 flex w-56 flex-col border-l border-border bg-card shadow-xl">
+      {mode === "queue" ? <QueueView /> : <LyricsView />}
     </div>
   );
 }
 
-interface PanelHeaderProps {
-  mode: Mode;
-  onModeChange: (next: Mode) => void;
-  onClose: () => void;
-}
+// ─── Queue view ─────────────────────────────────────────────────────
 
-function PanelHeader({ mode, onModeChange, onClose }: PanelHeaderProps) {
-  return (
-    <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
-      <div>
-        <h2 className="text-sm font-semibold text-foreground">
-          {mode === "queue" ? "Queue" : "Lyrics"}
-        </h2>
-        <ModeSubtitle mode={mode} />
-      </div>
-      <div className="flex items-center gap-1">
-        <SegmentedModeToggle mode={mode} onModeChange={onModeChange} />
-        {mode === "queue" ? <QueueActions /> : null}
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close panel"
-          className="ml-1 size-7 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          ✕
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function ModeSubtitle({ mode }: { mode: Mode }) {
-  // Hooks must run unconditionally — subscribe to the store here and
-  // render the right label based on `mode` afterwards.
-  const entries = useQueueStore((s) => s.entries);
-  if (mode === "queue") {
-    return (
-      <p className="text-xs text-muted-foreground">
-        {entries.length === 0 ? "Empty" : `${entries.length} tracks`}
-      </p>
-    );
-  }
-  return <p className="text-xs text-muted-foreground">Now playing</p>;
-}
-
-function SegmentedModeToggle({
-  mode,
-  onModeChange,
-}: {
-  mode: Mode;
-  onModeChange: (next: Mode) => void;
-}) {
-  return (
-    <div
-      role="tablist"
-      aria-label="Panel mode"
-      className="mr-1 inline-flex h-7 items-center rounded-md bg-muted/60 p-0.5 text-[11px]"
-    >
-      <button
-        type="button"
-        role="tab"
-        aria-selected={mode === "queue"}
-        onClick={() => onModeChange("queue")}
-        className={cn(
-          "inline-flex h-6 items-center gap-1 rounded px-2 transition-colors",
-          mode === "queue"
-            ? "bg-card text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-        )}
-      >
-        <MaterialSymbol name="queue_music" size={14} />
-        Queue
-      </button>
-      <button
-        type="button"
-        role="tab"
-        aria-selected={mode === "lyrics"}
-        onClick={() => onModeChange("lyrics")}
-        className={cn(
-          "inline-flex h-6 items-center gap-1 rounded px-2 transition-colors",
-          mode === "lyrics"
-            ? "bg-card text-foreground shadow-sm"
-            : "text-muted-foreground hover:text-foreground",
-        )}
-      >
-        <MaterialSymbol name="lyrics" size={14} />
-        Lyrics
-      </button>
-    </div>
-  );
-}
-
-function QueueActions() {
-  const entries = useQueueStore((s) => s.entries);
-  const repeat = useQueueStore((s) => s.repeat);
-  const shuffle = useQueueStore((s) => s.shuffle);
-  const [busy, setBusy] = useState(false);
-
-  const run = async (fn: () => Promise<unknown>, label: string) => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      await fn();
-    } catch (err) {
-      toast.error(`${label}: ${extractError(err, "unknown error")}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onToggleRepeat = () =>
-    run(async () => {
-      await setRepeat(nextRepeat(repeat));
-    }, "Repeat");
-
-  const onToggleShuffle = () =>
-    run(async () => {
-      await setShuffle(!shuffle);
-    }, "Shuffle");
-
-  const onClear = () => run(() => queueClear(), "Clear");
-
-  return (
-    <>
-      <button
-        type="button"
-        onClick={onToggleShuffle}
-        disabled={busy}
-        aria-pressed={shuffle}
-        aria-label="Toggle shuffle"
-        className={cn(
-          "size-7 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
-          shuffle && "bg-primary/20 text-primary",
-        )}
-      >
-        <HugeiconsIcon icon={ShuffleIcon} size={16} strokeWidth={1.75} />
-      </button>
-      <button
-        type="button"
-        onClick={onToggleRepeat}
-        disabled={busy}
-        aria-label={`Repeat: ${repeatLabel(repeat, "short")}`}
-        className={cn(
-          "size-7 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
-          repeat !== "off" && "bg-primary/20 text-primary",
-        )}
-      >
-        <HugeiconsIcon
-          icon={repeat === "one" ? RepeatOne01Icon : RepeatIcon}
-          size={16}
-          strokeWidth={1.75}
-        />
-      </button>
-      <button
-        type="button"
-        onClick={onClear}
-        disabled={busy || entries.length === 0}
-        aria-label="Clear queue"
-        className="size-7 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30"
-      >
-        <HugeiconsIcon icon={Delete03Icon} size={16} strokeWidth={1.75} />
-      </button>
-    </>
-  );
-}
-
-function QueueList() {
+function QueueView() {
   const entries = useQueueStore((s) => s.entries);
   const currentIndex = useQueueStore((s) => s.currentIndex);
+  const contextRemaining = useQueueStore((s) => s.contextRemaining);
+  const { snapshot } = usePlaybackContext();
+  const isPlaying = snapshot.isPlaying;
   const [busy, setBusy] = useState(false);
+  // Tracks whether the user has scrolled the panel up — when
+  // `true`, the "History" section above the visible viewport is
+  // partially in view and we draw a subtle top shadow so they know
+  // they can keep scrolling. Apple Music does the same.
+  const [canScrollUp, setCanScrollUp] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const upNextRef = useRef<HTMLDivElement>(null);
 
-  const run = async (fn: () => Promise<unknown>, label: string) => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      await fn();
-    } catch (err) {
-      toast.error(`${label}: ${extractError(err, "unknown error")}`);
-    } finally {
-      setBusy(false);
-    }
-  };
+  // Pin the scroll position to the start of the Up next
+  // container on mount so the first row of Up next is visible at
+  // the top of the viewport. History (which sits above Up next in
+  // the DOM) is scrolled out of view. Both sections have sticky
+  // headers, so scrolling up reveals the History header pinned at
+  // top; scrolling back down past Up next lets the Up next header
+  // take over.
+  useEffect(() => {
+    const el = scrollRef.current;
+    const upNext = upNextRef.current;
+    if (!el || !upNext) return;
+    el.scrollTop = upNext.offsetTop;
+    setCanScrollUp(el.scrollTop > 4);
+    // intentionally empty deps: run once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const onJumpTo = (entryId: string) => void run(() => queueJumpTo(entryId), "Jump");
-  const onRemove = (entryId: string) =>
-    void run(async () => {
-      const removed = await queueRemove(entryId);
-      if (!removed) toast("Entry not found");
-    }, "Remove");
+  const historyEntries = useMemo(
+    () => (currentIndex === null ? [] : entries.slice(0, Math.min(currentIndex, entries.length))),
+    [entries, currentIndex],
+  );
+  // Up next = current track (if any) + remaining entries. When
+  // currentIndex is null the whole queue is "next" but no row is
+  // highlighted as current. The current track (when there is one)
+  // is always the first row, with the ▶ indicator + accent
+  // colour from QueueRow's `isCurrent` prop.
+  const nextEntries = useMemo(
+    () => (currentIndex === null ? entries : entries.slice(currentIndex)),
+    [entries, currentIndex],
+  );
 
-  if (entries.length === 0) {
-    return (
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="flex flex-col items-center justify-center p-6 text-center">
-          <p className="text-sm text-muted-foreground">Nothing in queue</p>
-          <p className="mt-1 text-xs text-muted-foreground">Play a track to add it here</p>
-        </div>
-      </div>
-    );
-  }
+  const run = useCallback(
+    async (fn: () => Promise<unknown>, label: string) => {
+      if (busy) return;
+      setBusy(true);
+      try {
+        await fn();
+      } catch (err) {
+        toast.error(`${label}: ${extractError(err, "unknown error")}`);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy],
+  );
+
+  const onResume = () => run(() => resume(), "Resume");
+  const onClearHistory = () =>
+    run(async () => {
+      if (historyEntries.length === 0) return;
+      await Promise.all(historyEntries.map((entry) => queueRemove(entry.id)));
+    }, "Clear history");
+  // Apple Music-style "Clear" for Up Next: stops playback, then
+  // removes every entry from the END so the engine's current_index
+  // stays valid until we reach it. After the last removal the
+  // engine clamps current_index to the new last entry (or null),
+  // which preserves history (entries before the old current).
+  const onClearUpNext = () =>
+    run(async () => {
+      if (nextEntries.length === 0) return;
+      await stop();
+      for (const id of nextEntries.map((e) => e.id).reverse()) {
+        await queueRemove(id);
+      }
+    }, "Clear up next");
+  const onExtendMore = (n: number) =>
+    run(async () => {
+      if (n <= 0) return;
+      const added = await queueExtendMore(n);
+      if (added > 0) {
+        toast.success(`Added ${added} more ${added === 1 ? "track" : "tracks"}`);
+      } else {
+        toast.info("No more tracks available from this source");
+      }
+    }, "Load more");
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
-      <ol className="divide-y divide-border">
-        {entries.map((entry, index) => {
-          const isCurrent = index === currentIndex;
-          return (
-            <li
-              key={entry.id}
-              className={cn(
-                "flex items-center gap-2 px-3 py-2 text-sm",
-                isCurrent ? "bg-muted" : "hover:bg-muted/50",
-              )}
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* Two full-width action buttons */}
+      <div className="flex shrink-0 flex-col gap-1.5 border-b border-border p-2">
+        <button
+          type="button"
+          onClick={onResume}
+          disabled={busy || isPlaying || entries.length === 0}
+          aria-label="Resume playback"
+          className="flex h-9 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-40"
+        >
+          <MaterialSymbol name="play_arrow" size={18} weight={700} fill />
+          Resume
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            void openSettingsWindow("playback");
+          }}
+          className="flex h-8 w-full items-center justify-center gap-2 rounded-md border border-border text-sm font-medium bg-background text-foreground transition-colors hover:bg-muted"
+        >
+          <MaterialSymbol name="graphic_eq" size={16} />
+          Crossfade
+        </button>
+      </div>
+
+      {/* Scrollable sections — DOM order is History (hidden above
+          the viewport by the bottom-pin scroll), then Up next.
+          Pinning to scrollHeight on mount puts the user at the
+          bottom; scrolling up reveals History. */}
+      <div
+        ref={scrollRef}
+        onScroll={() => {
+          const el = scrollRef.current;
+          if (!el) return;
+          setCanScrollUp(el.scrollTop > 4);
+        }}
+        className="relative min-h-0 flex-1 overflow-y-auto"
+      >
+        {/* Top shadow hints that there's hidden content above when
+            the user has scrolled into the History section. */}
+        <div
+          aria-hidden
+          className={cn(
+            "pointer-events-none sticky top-0 z-10 h-3 -mb-3 bg-gradient-to-b from-card to-transparent transition-opacity duration-200",
+            canScrollUp ? "opacity-100" : "opacity-0",
+          )}
+        />
+
+        <div>
+          <header className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-card/95 px-3 py-2 backdrop-blur-sm">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              History
+              {historyEntries.length > 0 ? (
+                <span className="ml-1 text-muted-foreground/60">· {historyEntries.length}</span>
+              ) : null}
+            </h3>
+            <button
+              type="button"
+              onClick={onClearHistory}
+              disabled={busy || historyEntries.length === 0}
+              aria-label="Clear History"
+              className="size-6 rounded p-0.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-30"
             >
-              <span className="w-6 shrink-0 text-right font-mono text-xs text-muted-foreground">
-                {isCurrent ? "▶" : index + 1}
-              </span>
-              <button
-                type="button"
-                onClick={() => void onJumpTo(entry.id)}
-                className="min-w-0 flex-1 text-left"
-              >
-                <div
-                  className={cn(
-                    "truncate font-medium",
-                    isCurrent ? "text-primary" : "text-foreground",
-                  )}
-                >
-                  {entry.title}
-                </div>
-                <div className="truncate text-xs text-muted-foreground">{entry.artist}</div>
-              </button>
-              <span className="shrink-0 font-mono text-xs text-muted">
-                {formatDuration(entry.durationSeconds)}
-              </span>
-              <button
-                type="button"
-                onClick={() => void onRemove(entry.id)}
-                disabled={busy}
-                aria-label={`Remove ${entry.title}`}
-                className="size-5 rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30"
-              >
-                ✕
-              </button>
-            </li>
-          );
-        })}
-      </ol>
+              <MaterialSymbol name="delete" size={14} />
+            </button>
+          </header>
+
+          {historyEntries.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-muted-foreground">
+              Nothing played yet in this session.
+            </p>
+          ) : (
+            <ol className="divide-y divide-border">
+              {historyEntries.map((entry) => (
+                <QueueRow
+                  key={entry.id}
+                  title={entry.title}
+                  artist={entry.artist}
+                  duration={formatDuration(entry.durationSeconds)}
+                />
+              ))}
+            </ol>
+          )}
+        </div>
+
+        <div ref={upNextRef}>
+          <header className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-card/95 px-3 py-2 backdrop-blur-sm">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Up next
+              {nextEntries.length > 0 ? (
+                <span className="ml-1 text-muted-foreground/60">· {nextEntries.length}</span>
+              ) : null}
+            </h3>
+            <button
+              type="button"
+              onClick={onClearUpNext}
+              disabled={busy || nextEntries.length === 0}
+              aria-label="Clear Up next"
+              className="size-6 rounded p-0.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-30"
+            >
+              <MaterialSymbol name="delete" size={14} />
+            </button>
+          </header>
+
+          {nextEntries.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-muted-foreground">
+              Queue is empty — the next track will start when the current one ends.
+            </p>
+          ) : (
+            <ol className="divide-y divide-border">
+              {nextEntries.map((entry, index) => {
+                // The first row is the current track when there is
+                // a current track. The accent colour, background
+                // tint, and left border on QueueRow's `isCurrent`
+                // styling make it obvious without a position
+                // indicator.
+                const isCurrent = currentIndex !== null && index === 0;
+                return (
+                  <QueueRow
+                    key={entry.id}
+                    title={entry.title}
+                    artist={entry.artist}
+                    duration={formatDuration(entry.durationSeconds)}
+                    isCurrent={isCurrent}
+                  />
+                );
+              })}
+            </ol>
+          )}
+          {contextRemaining !== null && contextRemaining > 0 ? (
+            <button
+              type="button"
+              onClick={() => onExtendMore(contextRemaining)}
+              disabled={busy}
+              aria-label={`Load ${contextRemaining} more tracks from this source`}
+              className="mx-3 mb-2 mt-1 inline-flex items-center justify-center gap-1.5 rounded-md border border-border bg-muted/40 px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted hover:text-primary disabled:opacity-40"
+            >
+              <MaterialSymbol name="add" size={14} weight={700} />
+              {contextRemaining} more from this source
+            </button>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }
+
+interface QueueRowProps {
+  title: string;
+  artist: string;
+  duration: string;
+  /** When true, renders the row with the primary colour, a tinted
+   *  background, and a left accent border — the visual cue that
+   *  this is the currently-playing track (Apple Music style). */
+  isCurrent?: boolean;
+}
+
+function QueueRow({ title, artist, duration, isCurrent = false }: QueueRowProps) {
+  return (
+    <li
+      className={cn(
+        "flex items-center gap-2 px-3 py-2 text-sm",
+        isCurrent && "bg-primary/10 border-l-2 border-primary",
+      )}
+    >
+      <div className="min-w-0 flex-1">
+        <div
+          className={cn(
+            "truncate text-sm",
+            isCurrent ? "font-semibold text-primary" : "text-foreground",
+          )}
+        >
+          {title}
+        </div>
+        <div className="truncate text-[11px] text-muted-foreground">{artist}</div>
+      </div>
+      <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{duration}</span>
+    </li>
+  );
+}
+
+// ─── Lyrics view ────────────────────────────────────────────────────
 
 interface SyncedLine {
   timeMs: number;
@@ -339,8 +390,8 @@ function parseLrc(input: string): SyncedLine[] | null {
 }
 
 function LyricsView() {
-  const currentTrack = usePlaybackStore((s) => s.currentTrack);
-  const positionSeconds = usePlaybackStore((s) => s.positionSeconds);
+  const { snapshot } = usePlaybackContext();
+  const { currentTrack, positionSeconds } = snapshot;
   const trackId = currentTrack?.trackId ?? null;
 
   const [state, setState] = useState<
@@ -380,10 +431,10 @@ function LyricsView() {
 
   if (!currentTrack) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center p-6 text-center">
-        <MaterialSymbol name="music_off" size={28} className="text-muted-foreground/70" />
-        <p className="mt-2 text-sm text-muted-foreground">Nothing playing</p>
-      </div>
+      <LyricsEmpty
+        icon={<MaterialSymbol name="music_off" size={28} className="text-muted-foreground/70" />}
+        title="Nothing playing"
+      />
     );
   }
 
@@ -397,43 +448,65 @@ function LyricsView() {
 
   if (state.kind === "empty") {
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 p-6 text-center">
-        <MaterialSymbol name="lyrics" size={28} className="text-muted-foreground/70" />
-        <p className="text-sm text-muted-foreground">No lyrics for this track</p>
-        <p className="text-xs text-muted-foreground">
-          {currentTrack.title} — {currentTrack.artist}
-        </p>
-      </div>
+      <LyricsEmpty
+        icon={<MaterialSymbol name="lyrics" size={28} className="text-muted-foreground/70" />}
+        title="No lyrics for this track"
+        subtitle={`${currentTrack.title} — ${currentTrack.artist}`}
+      />
     );
   }
 
   if (state.kind === "error") {
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 p-6 text-center">
-        <MaterialSymbol name="error" size={28} className="text-destructive" />
-        <p className="text-sm text-foreground">Couldn't load lyrics</p>
-        <p className="text-xs text-muted-foreground">{state.message}</p>
-      </div>
+      <LyricsEmpty
+        icon={<MaterialSymbol name="error" size={28} className="text-destructive" />}
+        title="Couldn't load lyrics"
+        subtitle={state.message}
+      />
     );
   }
 
-  return <LyricsBody lyrics={state.lyrics} positionSeconds={positionSeconds} />;
+  return (
+    <LyricsBody
+      lyrics={state.lyrics}
+      positionSeconds={positionSeconds}
+      title={currentTrack.title}
+      artist={currentTrack.artist}
+    />
+  );
 }
 
-function LyricsBody({
-  lyrics,
-  positionSeconds,
-}: {
+interface LyricsEmptyProps {
+  icon: React.ReactNode;
+  title: string;
+  subtitle?: string;
+}
+
+function LyricsEmpty({ icon, title, subtitle }: LyricsEmptyProps) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 p-6 text-center">
+      {icon}
+      <p className="mt-2 text-sm text-foreground">{title}</p>
+      {subtitle ? <p className="text-xs text-muted-foreground">{subtitle}</p> : null}
+    </div>
+  );
+}
+
+interface LyricsBodyProps {
   lyrics: LyricsPayload;
   positionSeconds: number;
-}) {
+  title: string;
+  artist: string;
+}
+
+function LyricsBody({ lyrics, positionSeconds, title, artist }: LyricsBodyProps) {
   const syncedLines = useMemo(
     () => (lyrics.synced ? parseLrc(lyrics.synced) : null),
     [lyrics.synced],
   );
   const containerRef = useRef<HTMLDivElement>(null);
   const activeIndex = useMemo(() => {
-    if (!syncedLines) return -1;
+    if (!syncedLines || syncedLines.length === 0) return -1;
     const ms = positionSeconds * 1000;
     let lo = 0;
     let hi = syncedLines.length - 1;
@@ -452,31 +525,31 @@ function LyricsBody({
 
   useEffect(() => {
     if (!containerRef.current || activeIndex < 0) return;
-    const child = containerRef.current.children[activeIndex] as HTMLElement | undefined;
+    const child = containerRef.current.children.item(activeIndex + 2) as HTMLElement | undefined;
     child?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [activeIndex]);
 
   if (syncedLines && syncedLines.length > 0) {
     return (
-      <div
-        ref={containerRef}
-        className="min-h-0 flex-1 overflow-y-auto px-6 py-10 text-center text-base leading-relaxed"
-      >
-        {syncedLines.map((line, idx) => (
-          <p
-            key={`${line.timeMs}-${idx}`}
-            className={cn(
-              "transition-colors duration-300",
-              idx === activeIndex
-                ? "text-foreground"
-                : idx < activeIndex
-                  ? "text-muted-foreground/60"
-                  : "text-muted-foreground/80",
-            )}
-          >
-            {line.text || "♪"}
-          </p>
-        ))}
+      <div className="flex min-h-0 flex-1 flex-col">
+        <LyricsHeader title={title} artist={artist} />
+        <div ref={containerRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-6 text-center">
+          {syncedLines.map((line, idx) => (
+            <p
+              key={`${line.timeMs}-${idx}`}
+              className={cn(
+                "py-1.5 transition-colors duration-300",
+                idx === activeIndex
+                  ? "text-base font-semibold text-primary"
+                  : idx < activeIndex
+                    ? "text-sm text-muted-foreground/50"
+                    : "text-sm text-muted-foreground",
+              )}
+            >
+              {line.text || "♪"}
+            </p>
+          ))}
+        </div>
       </div>
     );
   }
@@ -488,19 +561,35 @@ function LyricsBody({
     .filter((p) => p.length > 0);
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-8 text-center">
-      {paragraphs.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No lyrics available.</p>
-      ) : (
-        paragraphs.map((p, idx) => (
-          <p
-            key={idx}
-            className="mb-4 whitespace-pre-line text-sm leading-relaxed text-foreground/90"
-          >
-            {p}
-          </p>
-        ))
-      )}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <LyricsHeader title={title} artist={artist} />
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 text-center">
+        {paragraphs.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No lyrics available.</p>
+        ) : (
+          paragraphs.map((p, idx) => (
+            <p
+              key={idx}
+              className="mb-3 whitespace-pre-line text-sm leading-relaxed text-foreground/90"
+            >
+              {p}
+            </p>
+          ))
+        )}
+      </div>
     </div>
+  );
+}
+
+function LyricsHeader({ title, artist }: { title: string; artist: string }) {
+  return (
+    <header className="shrink-0 border-b border-border px-3 py-2">
+      <p className="truncate text-sm font-semibold text-foreground" title={title}>
+        {title}
+      </p>
+      <p className="truncate text-[11px] text-muted-foreground" title={artist}>
+        {artist}
+      </p>
+    </header>
   );
 }

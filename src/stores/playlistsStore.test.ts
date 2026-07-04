@@ -174,11 +174,19 @@ describe("playlistsStore — playback", () => {
     await usePlaylistsStore.getState().playPlaylist("p-1");
 
     expect(invokeMock).toHaveBeenCalledTimes(1);
-    expect(invokeMock).toHaveBeenCalledWith("play_album", {
+    // After the queue-persistence work, `playPlaylist` anchors the
+    // auto-fill to the playlist so the queue extends with the
+    // remaining entries of the same playlist.
+    expect(invokeMock).toHaveBeenCalledWith("play_album_with_context", {
       tracks: [
         expect.objectContaining({ id: "t-0" }),
         expect.objectContaining({ id: "t-1" }),
       ],
+      context: {
+        kind: "playlist",
+        playlistId: "p-1",
+        serverId: "server-test",
+      },
     });
   });
 

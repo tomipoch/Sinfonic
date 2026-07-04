@@ -8,9 +8,10 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use sinfonic_domain::{PlaybackState, QueueEngine, ServerId};
+use sinfonic_domain::{QueueEngine, ServerId};
 use sinfonic_lastfm::LastFmClient;
 use sinfonic_library::{AlbumArtCache, Store};
+use sinfonic_lyrics::LrclibClient;
 use sinfonic_playback::AudioPlayer;
 use sinfonic_secrets::KeyringStore;
 use sinfonic_source::MusicProvider;
@@ -19,26 +20,23 @@ use tokio::sync::Mutex;
 /// The single bag of state shared across all Tauri commands.
 ///
 /// `QueueEngine` owns *what plays next* (entries, order, repeat,
-/// shuffle). `PlaybackState` owns *what's playing right now* (is it
-/// playing, where the playhead is, volume). `AudioPlayer` owns the
-/// rodio audio engine — its cached state shadows `PlaybackState` but
-/// it's the source of truth for `position_seconds`. `Store` owns the
-/// on-disk SQLite cache of the library. `provider` holds the
-/// optional active music provider (Jellyfin, Subsonic, …) — set by
-/// the corresponding login command, cleared by `provider_logout`.
-/// Keeping them separate follows the layering: queue is a content
-/// concern, playback is a runtime concern, library is a persistence
-/// concern, provider is an external-service concern.
+/// shuffle). `AudioPlayer` owns the rodio audio engine and is the
+/// single source of truth for runtime playback state (position,
+/// volume, mute, is-playing). `Store` owns the on-disk SQLite cache
+/// of the library. `provider` holds the optional active music
+/// provider (Jellyfin, Subsonic, …) — set by the corresponding login
+/// command, cleared by `provider_logout`. Keeping them separate
+/// follows the layering: queue is a content concern, playback is a
+/// runtime concern, library is a persistence concern, provider is an
+/// external-service concern.
 #[derive(Clone)]
 pub struct AppState {
     /// The current playback queue.
     pub queue: QueueEngine,
-    /// The current playback state (playhead, volume, mute). Mirrors
-    /// the AudioPlayer's cached state — kept here so the domain type
-    /// stays self-contained for tests and queue logic.
-    pub playback: PlaybackState,
     /// Rodio-backed audio engine. Owns the actual sink that produces
-    /// sound. Cheap to clone (just an Arc bump).
+    /// sound and is the single source of truth for runtime playback
+    /// state (`cached_state()` reflects the rodio sink). Cheap to
+    /// clone (just an Arc bump).
     pub player: Arc<AudioPlayer>,
     /// The SQLite library cache. Shared by clone, so cloning the
     /// handle is cheap (just a pool clone).
@@ -65,11 +63,24 @@ pub struct AppState {
     /// succeeds; the session key is persisted in the OS keyring so
     /// the next launch can `resume` it without re-prompting.
     pub lastfm: Arc<Mutex<Option<LastFmClient>>>,
+    /// LRCLIB lyrics lookup client. Always present — it has no
+    /// state and is safe to share globally. `commands::get_lyrics`
+    /// uses it as the fallback when no music provider (Subsonic,
+    /// Jellyfin, local) ships lyrics for the current track.
+    pub lyrics_client: Arc<LrclibClient>,
     /// Set to `true` once the `try_restore_provider` background task
     /// finishes. The frontend polls `bootstrap_state` until this flips
     /// so the route guard can decide between the main UI and the
     /// setup view with the latest snapshot of the saved servers.
     pub bootstrap_complete: Arc<AtomicBool>,
+    /// Pause-switch for the queue-snapshot persist path. Set to
+    /// `true` around server-switch / logout teardowns so the
+    /// `queue.clear()` in `teardown_active_provider` doesn't
+    /// overwrite the previous server's persisted snapshot with the
+    /// now-empty queue. The flag is shared via `Arc` so the
+    /// commands that hold a clone of the state see the same value
+    /// the teardown helper set.
+    pub persist_guard: Arc<AtomicBool>,
 }
 
 impl Default for AppState {
@@ -77,9 +88,9 @@ impl Default for AppState {
         // Default uses an in-memory store, which is what tests and
         // the dev environment (no real cache file) want.
         let secrets = KeyringStore::new("sinfonic");
+        let lyrics_client = Arc::new(build_lrclib_client());
         Self {
             queue: QueueEngine::default(),
-            playback: PlaybackState::default(),
             player: Arc::new(AudioPlayer::new()),
             library: Store::open_memory().expect("open_memory never fails"),
             provider: Arc::new(Mutex::new(None)),
@@ -87,7 +98,9 @@ impl Default for AppState {
             device_id: default_device_id(),
             album_art: None,
             lastfm: Arc::new(Mutex::new(None)),
+            lyrics_client,
             bootstrap_complete: Arc::new(AtomicBool::new(false)),
+            persist_guard: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -103,7 +116,6 @@ impl AppState {
         let library = Store::open(path).map_err(|e| e.to_string())?;
         Ok(Self {
             queue: QueueEngine::default(),
-            playback: PlaybackState::default(),
             player: Arc::new(AudioPlayer::new()),
             library,
             provider: Arc::new(Mutex::new(None)),
@@ -111,7 +123,9 @@ impl AppState {
             device_id: default_device_id(),
             album_art: None,
             lastfm: Arc::new(Mutex::new(None)),
+            lyrics_client: Arc::new(build_lrclib_client()),
             bootstrap_complete: Arc::new(AtomicBool::new(false)),
+            persist_guard: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -127,7 +141,6 @@ impl AppState {
             AlbumArtCache::open(album_art_dir.as_ref()).map_err(|e| e.to_string())?;
         Ok(Self {
             queue: QueueEngine::default(),
-            playback: PlaybackState::default(),
             player: Arc::new(AudioPlayer::new()),
             library,
             provider: Arc::new(Mutex::new(None)),
@@ -135,7 +148,9 @@ impl AppState {
             device_id: default_device_id(),
             album_art: Some(Arc::new(album_art)),
             lastfm: Arc::new(Mutex::new(None)),
+            lyrics_client: Arc::new(build_lrclib_client()),
             bootstrap_complete: Arc::new(AtomicBool::new(false)),
+            persist_guard: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -147,6 +162,18 @@ impl AppState {
             ..Self::default()
         }
     }
+}
+
+/// Default LRCLIB client pointing at the public service. Tests that
+/// want to mock the upstream should build their own client (see
+/// `src-tauri/tests/lyrics_fallback.rs`) and override the field — we
+/// can't change `base_url` post-construction.
+fn build_lrclib_client() -> LrclibClient {
+    let base_url: url::Url = "https://lrclib.net"
+        .parse()
+        .expect("lrclib.net is a valid URL");
+    LrclibClient::new(base_url, env!("CARGO_PKG_VERSION").to_string())
+        .expect("LRCLIB client with sensible defaults always builds")
 }
 
 /// Stable per-process device id. We deliberately keep it stable for

@@ -95,7 +95,7 @@ fn migrations_replay_on_reopen() {
             .unwrap()
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
     }
     {
         let store2 = Store::open(&path).unwrap();
@@ -104,8 +104,8 @@ fn migrations_replay_on_reopen() {
             .unwrap()
             .query_row("SELECT MAX(version) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        // Still 5 — migrations are not re-applied on reopen.
-        assert_eq!(version, 5);
+        // Still 6 — migrations are not re-applied on reopen.
+        assert_eq!(version, 6);
     }
 }
 

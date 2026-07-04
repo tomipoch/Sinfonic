@@ -64,7 +64,8 @@ const LIBRARY_ITEMS: NavItem[] = [
 ];
 
 const PLAYLISTS_STATIC_ITEMS: NavItem[] = [
-  { to: "/playlists", label: "All Playlists", icon: Album01Icon },
+  // `end` ensures /playlists/:id doesn't keep "All Playlists" highlighted.
+  { to: "/playlists", label: "All Playlists", end: true, icon: Album01Icon },
   { to: "/favorites", label: "Favorite Songs", icon: StarIcon },
   { to: "/smart-playlists", label: "Smart Playlists", icon: SparklesIcon },
 ];

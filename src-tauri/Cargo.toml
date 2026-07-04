@@ -72,6 +72,7 @@ sinfonic-playback = { path = "crates/playback" }
 sinfonic-library = { path = "crates/library" }
 sinfonic-secrets = { path = "crates/secrets" }
 sinfonic-lastfm = { path = "crates/lastfm" }
+sinfonic-lyrics = { path = "crates/lyrics" }
 
 # ─────────────────────────────────────────────────────────────
 # Tauri app package (root)
@@ -99,6 +100,11 @@ path = "src/main.rs"
 [build-dependencies]
 tauri-build = { workspace = true }
 
+[dev-dependencies]
+wiremock = "0.6"
+reqwest = { workspace = true }
+serde_json = { workspace = true }
+
 [dependencies]
 tauri = { workspace = true }
 tauri-plugin-opener = { workspace = true }
@@ -115,6 +121,7 @@ async-trait = { workspace = true }
 md5 = { workspace = true }
 hex = { workspace = true }
 parking_lot = { workspace = true }
+url = { workspace = true }
 
 # Local workspace members
 sinfonic-domain = { workspace = true }
@@ -126,6 +133,7 @@ sinfonic-playback = { workspace = true }
 sinfonic-library = { workspace = true }
 sinfonic-secrets = { workspace = true }
 sinfonic-lastfm = { workspace = true }
+sinfonic-lyrics = { workspace = true }
 
 # UUIDs for collision-free IDs (smart playlists, etc.)
 uuid = { workspace = true }

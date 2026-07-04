@@ -5,12 +5,13 @@ import { extractError } from "@/lib/errors";
 import {
   createPlaylist,
   deletePlaylist,
-  playAlbum,
+  playAlbumWithContext,
   playlistDetail,
   playlistsGet,
   removePlaylistEntries,
   renamePlaylist,
 } from "@/lib/tauri";
+import { useServerStore } from "@/stores/serverStore";
 import type { Playlist, Track } from "@/types/domain";
 
 export interface PlaylistWithTracks {
@@ -97,7 +98,23 @@ export const usePlaylistsStore = create<PlaylistsStore>((set, get) => ({
     }
     const d = get().detail;
     if (d && d.tracks.length > 0) {
-      await playAlbum(d.tracks);
+      // Anchor the auto-fill to this playlist so the queue extends
+      // with the remaining tracks of the same playlist rather than
+      // restarting from the top.
+      const serverId = useServerStore.getState().activeServerId;
+      if (serverId) {
+        await playAlbumWithContext(d.tracks, {
+          kind: "playlist",
+          playlistId,
+          serverId,
+        });
+      } else {
+        // No active server (shouldn't happen in practice) — fall
+        // back to the context-less play so the user still hears
+        // something.
+        const { playAlbum } = await import("@/lib/tauri");
+        await playAlbum(d.tracks);
+      }
     }
   },
 

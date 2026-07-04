@@ -19,7 +19,7 @@
 //!   `playback-state-changed` every 250ms and `track-changed` on end.
 
 use std::sync::Arc;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 use tokio::sync::Mutex;
 
 mod commands;
@@ -33,10 +33,15 @@ pub use events::{
     SyncProgressPayload, TrackChangedPayload,
 };
 pub use state::AppState;
+pub use sinfonic_domain::RepeatMode;
 
 /// Re-exported so integration tests can drive the sync pipeline
 /// without going through Tauri.
 pub use commands::sync_library_data;
+
+/// Re-exported so integration tests can exercise the lyrics
+/// orchestration without going through Tauri.
+pub use commands::lookup_lyrics;
 
 /// Entrypoint invoked by `main.rs` (and the mobile target on iOS/Android).
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -88,10 +93,10 @@ pub fn run() {
             };
 
             // Wrap the state in Arc<Mutex<>> first so the player's
-            // event callback can reach the queue + provider for
-            // auto-advance. The callback is Fn + Send + Sync + 'static
-            // so it must own its handles outright — we clone Arc handles
-            // and the AppHandle before handing the closure off.
+            // event callback can reach the queue for auto-advance.
+            // The callback is Fn + Send + Sync + 'static so it must
+            // own its handles outright — we clone Arc handles and the
+            // AppHandle before handing the closure off.
             //
             // The Tauri setup closure is `Fn` (not async) so we cannot
             // `await` the outer Mutex here. The AudioPlayer reference
@@ -108,51 +113,27 @@ pub fn run() {
             // can co-exist.
             let setup_app_handle = app_handle.clone();
 
-            // Wire the AudioPlayer's events to Tauri. The player emits
-            // PlayerEvent::StateChanged on every position poll (forwarded
-            // to the webview as `playback-state-changed`) and
-            // PlayerEvent::TrackEnded when the rodio sink runs dry.
-            // TrackEnded advances the queue according to the repeat mode
-            // — repeat-one re-plays the current track, repeat-all wraps,
-            // repeat-off either advances or stops at the end of the queue.
+            // Wire the AudioPlayer's events to Tauri. The player
+            // only fires `PlayerEvent::TrackEnded` from the poller
+            // thread now — every other state change (play / pause /
+            // resume / stop / seek / set_volume / set_muted) emits
+            // `playback-state-changed` synchronously from the
+            // command that triggered it via `emit_playback_state`.
+            //
+            // The hot path is therefore free of `app.emit` and
+            // unaffected by WKWebView's event-channel quirks on
+            // macOS, which were the root cause of the position bar
+            // freezing after the first snapshot. The frontend polls
+            // `get_playback_state` every 250 ms to redraw the seek
+            // bar; that's an IPC round-trip, not an event push.
+            let advance_handle = callback_handle.clone();
             player.set_event_callback(move |event| {
-                match event {
-                    sinfonic_playback::PlayerEvent::StateChanged {
-                        track_id,
-                        position_seconds,
-                        is_playing,
-                        volume,
-                        muted,
-                        duration_seconds,
-                    } => {
-                        let payload = PlaybackStatePayload {
-                            is_playing,
-                            position_seconds,
-                            duration_seconds,
-                            volume,
-                            muted,
-                            ..Default::default()
-                        };
-                            let _ = app_handle.emit(
-                                EventName::PlaybackStateChanged.as_str(),
-                                &payload,
-                            );
-                            // `track-position` was a no-listener zombie:
-                            // the frontend reads position from the
-                            // `playback-state-changed` payload above,
-                            // so emitting a separate event four times a
-                            // second was pure overhead.
-                            let _ = track_id;
-                        }
-                    sinfonic_playback::PlayerEvent::TrackEnded { track_id: _ } => {
-                        // Hop into the tokio runtime for the queue
-                        // mutation + provider stream resolution.
-                        let handle = callback_handle.clone();
-                        let app = app_handle.clone();
-                        tauri::async_runtime::spawn(async move {
-                            commands::advance_queue_on_end(&handle, &app).await;
-                        });
-                    }
+                if let sinfonic_playback::PlayerEvent::TrackEnded { .. } = event {
+                    let handle = advance_handle.clone();
+                    let app = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        commands::advance_queue_on_end(&handle, &app).await;
+                    });
                 }
             });
 
@@ -174,6 +155,37 @@ pub fn run() {
                 {
                     let state_ref = setup_handle.lock().await;
                     commands::try_resume_lastfm(&state_ref).await;
+                }
+                // 1b) Restore persisted playback configuration
+                //     (crossfade on/off + duration). Done here so
+                //     the first track the user plays already honours
+                //     the saved preference. Both prefs are
+                //     best-effort: a missing or unparseable value
+                //     falls back to the AudioPlayer defaults
+                //     (off, 6 s).
+                {
+                    let state_ref = setup_handle.lock().await;
+                    let enabled = state_ref
+                        .library
+                        .get_preference("playback.crossfade_enabled")
+                        .ok()
+                        .flatten()
+                        .map(|v| v == "true")
+                        .unwrap_or(false);
+                    let seconds = state_ref
+                        .library
+                        .get_preference("playback.crossfade_seconds")
+                        .ok()
+                        .flatten()
+                        .and_then(|v| v.parse::<u32>().ok())
+                        .unwrap_or(6);
+                    state_ref.player.set_crossfade(enabled, seconds);
+                    tracing::debug!(
+                        target: "sinfonic::app",
+                        enabled,
+                        seconds,
+                        "restored crossfade config"
+                    );
                 }
                 // 2) Take clones of the bits the watcher needs, then
                 //    hand them off. This keeps the watcher's mutex
@@ -197,14 +209,18 @@ pub fn run() {
             commands::get_albums,
             commands::get_artists,
             commands::get_genres,
+            commands::get_albums_by_genre,
+            commands::get_tracks_by_genre,
             commands::get_tracks,
             commands::get_album,
             commands::get_album_detail,
             commands::play_album,
+            commands::play_album_with_context,
             // Playback (Phase 1 + Phase 4 audio)
             commands::get_playback_state,
             commands::get_queue,
             commands::play_track,
+            commands::play_track_with_context,
             commands::queue_play_now,
             commands::queue_play_next,
             commands::queue_add,
@@ -212,6 +228,7 @@ pub fn run() {
             commands::queue_jump_to,
             commands::queue_move,
             commands::queue_clear,
+            commands::queue_extend_more,
             // Queue bulk + Playlist CRUD (Phase 9)
             commands::queue_add_many,
             commands::queue_play_next_many,
@@ -246,6 +263,9 @@ pub fn run() {
             commands::set_eq_band,
             commands::reset_eq,
             commands::get_eq_bands,
+            // Crossfade (Phase 3)
+            commands::set_crossfade,
+            commands::get_crossfade_config,
             // Search (Phase 2)
             commands::search,
             // Provider (Phase 3 + Phase 5)

@@ -39,7 +39,8 @@ pub use ids::{
 };
 pub use playback::PlaybackState;
 pub use queue::{
-    QueueEngine, QueueEntry, QueueEntryOrigin, QueueReplacement, QueueSnapshot, RepeatMode,
+    PlayContext, QueueEngine, QueueEntry, QueueEntryOrigin, QueueReplacement, QueueSnapshot,
+    RepeatMode,
 };
 pub use route::Route;
 pub use settings::AppSettings;

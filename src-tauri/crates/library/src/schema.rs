@@ -59,6 +59,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "playlists_cover",
         sql: MIGRATION_V5,
     },
+    Migration {
+        version: 6,
+        name: "queue_snapshots",
+        sql: MIGRATION_V6,
+    },
 ];
 
 const INITIAL_SCHEMA: &str = r#"
@@ -329,6 +334,29 @@ ALTER TABLE playlists ADD COLUMN image_kind TEXT;
 ALTER TABLE playlists ADD COLUMN image_tag  TEXT;
 "#;
 
+/// V6: persist the playback queue snapshot per server.
+///
+/// One row per active `server_id`; the row stores a JSON-encoded
+/// `sinfonic_domain::queue::QueueSnapshot` so the queue's history
+/// (and, briefly, its upcoming + current pointer) survives an app
+/// restart. The FK on `server_id` keeps the row alive only while the
+/// server row exists, so `delete_server` automatically drops the
+/// snapshot via `ON DELETE CASCADE`.
+///
+/// Read path: `Store::load_queue_snapshot`. Write path:
+/// `Store::save_queue_snapshot` (called from every queue-mutating
+/// Tauri command). Both live next to the existing `library_meta`
+/// key/value helpers but use a dedicated table so a JSON snapshot
+/// never collides with a preference key.
+const MIGRATION_V6: &str = r#"
+CREATE TABLE queue_snapshots (
+    server_id  TEXT PRIMARY KEY,
+    snapshot   TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY (server_id) REFERENCES servers(server_id) ON DELETE CASCADE
+);
+"#;
+
 /// Apply every migration in `MIGRATIONS` that has not been applied
 /// yet, recording each in `schema_migrations` inside a single
 /// transaction. Idempotent: running twice does nothing on the second
@@ -415,7 +443,7 @@ mod tests {
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(count, 5);
+        assert_eq!(count, 6);
     }
 
     #[test]
@@ -433,6 +461,7 @@ mod tests {
             "genres",
             "library_fts",
             "smart_playlists",
+            "queue_snapshots",
         ] {
             let exists: i64 = conn
                 .query_row(

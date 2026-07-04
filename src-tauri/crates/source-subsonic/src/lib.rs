@@ -30,6 +30,8 @@ pub mod mapping;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use tokio::sync::Mutex as AsyncMutex;
+
 use async_trait::async_trait;
 use futures::stream::{StreamExt, TryStreamExt};
 use sinfonic_domain::{
@@ -96,6 +98,13 @@ pub struct SubsonicProvider {
     /// the UI can show a progress bar. When `None` (tests, library
     /// users) sync still works but no events fire.
     app_handle: Option<tauri::AppHandle>,
+    /// Cache of `(album_id, song_count)` pairs pulled from
+    /// `getAlbumList2` during the first `tracks()` call. Subsequent
+    /// page requests reuse the cached hints instead of refetching the
+    /// whole album list — `getAlbumList2` paginates up to the server
+    /// cap (500 by default), so 5000 albums = 10+ HTTP round-trips we
+    /// otherwise repeat on every page request.
+    album_hints_cache: Arc<AsyncMutex<Option<Vec<AlbumHint>>>>,
 }
 
 impl SubsonicProvider {
@@ -120,6 +129,7 @@ impl SubsonicProvider {
             identity,
             capabilities,
             app_handle: None,
+            album_hints_cache: Arc::new(AsyncMutex::new(None)),
         })
     }
 
@@ -307,7 +317,7 @@ impl SubsonicProvider {
 /// strictly optional.
 fn subsonic_capabilities() -> ProviderCapabilities {
     ProviderCapabilities {
-        lyrics: false,
+        lyrics: true,
         playback_reporting: true,
         playlist_mutations: true,
         playlist_delete: true,
@@ -385,12 +395,23 @@ impl MusicProvider for SubsonicProvider {
         //    Emit `sync-progress` after each album completes.
         // 3. Concatenate and slice exactly to the requested window.
         //
-        // Step 1 is repeated for every page request — there is no
-        // per-`SubsonicProvider` cache because the trait can't expose
-        // one. The cost is acceptable: a 5000-track library fetches
-        // ~10 album-list pages of 500 albums each, ~50 KB total, in a
-        // fraction of a second.
-        let album_hints = self.collect_all_album_hints().await?;
+        // Step 1 is cached at the provider level — the trait can't
+        // expose a cache but `SubsonicProvider` is shared by reference
+        // (it's wrapped in `Arc<dyn MusicProvider>`), so subsequent
+        // page requests hit the in-memory hints instead of repeating
+        // 10 HTTP round-trips per call. The cache lives for the
+        // lifetime of the provider; it is cleared when the user
+        // logs out and a new instance is built.
+        let album_hints: Vec<AlbumHint> = {
+            let mut cache = self.album_hints_cache.lock().await;
+            if let Some(hints) = cache.as_ref() {
+                hints.clone()
+            } else {
+                let fresh = self.collect_all_album_hints().await?;
+                *cache = Some(fresh.clone());
+                fresh
+            }
+        };
         let total_tracks: usize = album_hints.iter().map(|a| a.song_count as usize).sum();
 
         if album_hints.is_empty() || request.offset >= total_tracks {
@@ -971,22 +992,11 @@ impl MusicProvider for SubsonicProvider {
             .value
             .as_deref()
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
-        if plain.is_none() && resp.lyrics.r#struct.is_empty() {
+            .map(str::to_string);
+        let synced = synced_lines_to_lrc(&resp.lyrics.r#struct);
+        if plain.is_none() && synced.is_none() {
             return Ok(None);
         }
-        let synced = if resp.lyrics.r#struct.is_empty() {
-            None
-        } else {
-            Some(
-                resp.lyrics
-                    .r#struct
-                    .iter()
-                    .map(|l| l.value.clone())
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            )
-        };
         Ok(Some(Lyrics {
             plain,
             synced,
@@ -1017,6 +1027,65 @@ impl MusicProvider for SubsonicProvider {
             .await?;
         Ok(())
     }
+}
+
+/// Render a `lyrics.struct[]` payload as the LRC-flavoured string
+/// the frontend expects (`[mm:ss.xx]line\n[mm:ss.xx]line…`).
+///
+/// Picks the synced entries when the server flags them with
+/// `synced: true`; falls back to every entry when the flag is
+/// absent (some servers omit it). Lines from multiple language
+/// entries are flattened and sorted by their millisecond `start`
+/// so multi-language servers don't shuffle playback order. Lines
+/// without a `start` (rare for synced entries, but defensible for
+/// unsynced fallbacks) are emitted with no timestamp prefix so the
+/// frontend still sees the text. Returns `None` when no usable
+/// lines exist.
+fn synced_lines_to_lrc(entries: &[dto::LyricsStructEntryDto]) -> Option<String> {
+    if entries.is_empty() {
+        return None;
+    }
+    let has_synced_flag = entries.iter().any(|e| e.synced.is_some());
+    let keep: Vec<&dto::LyricsStructEntryDto> = if has_synced_flag {
+        entries.iter().filter(|e| e.synced.unwrap_or(false)).collect()
+    } else {
+        entries.iter().collect()
+    };
+    let mut lines: Vec<(&Option<u64>, &str)> = keep
+        .iter()
+        .flat_map(|e| e.line.iter())
+        .map(|l| (&l.start, l.value.as_str()))
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    // Sort by `start` (None last so unsynced trailing lines don't
+    // jump to the top after a synced block).
+    lines.sort_by_key(|(start, _)| start.unwrap_or(u64::MAX));
+    let body = lines
+        .into_iter()
+        .map(|(start, text)| match start {
+            Some(ms) => format!("[{}]{}", format_lrc_timestamp(*ms), text),
+            None => text.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(body)
+}
+
+/// Format a millisecond offset as the LRC canonical `[mm:ss.xx]`.
+/// Two-digit centisecond precision matches what the frontend's
+/// `parseLrc` accepts (alongside `mm:ss` and `mm:ss.xxx`). The
+/// caller guarantees `ms` is the line's `start`; no clamping for
+/// tracks longer than 99 minutes (the LRC spec only allocates two
+/// digits to minutes and overflow is the same edge case all LRC
+/// parsers ignore).
+fn format_lrc_timestamp(ms: u64) -> String {
+    let total_seconds = ms / 1000;
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    let centiseconds = (ms % 1000) / 10;
+    format!("{:02}:{:02}.{:02}", minutes, seconds, centiseconds)
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────

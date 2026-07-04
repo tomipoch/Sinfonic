@@ -7,6 +7,7 @@ import { useEffect } from "react";
 import { Link } from "react-router-dom";
 
 import { EmptyState } from "@/components/ui/EmptyState";
+import { MarqueeText } from "@/components/ui/MarqueeText";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useServerStore } from "@/stores/serverStore";
 
@@ -73,7 +74,9 @@ export function GenresView() {
               aria-label={`${genre.name} — ${genre.albumCount} albums, ${genre.trackCount} tracks`}
             >
               <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-foreground">{genre.name}</div>
+                <div className="text-sm font-medium text-foreground">
+                  <MarqueeText>{genre.name}</MarqueeText>
+                </div>
                 <div className="truncate text-xs text-muted-foreground">
                   {genre.albumCount} {genre.albumCount === 1 ? "album" : "albums"}
                   {" · "}

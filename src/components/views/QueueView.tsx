@@ -5,15 +5,17 @@
 //   - click row → jump_to (skip playback to that entry)
 //   - remove button → queue_remove
 //
-// Header actions: shuffle + repeat toggles (write-through to backend
-// + store), clear-queue.
+// Header actions: clear-queue. Shuffle + repeat toggles live in the
+// PlayerBar's TransportControls (canonical source of truth via
+// `usePlayback().snapshot.repeat/shuffle`); this view just shows
+// their state in the header subtitle.
 
 import { useState } from "react";
 import { toast } from "sonner";
 import { extractError } from "@/lib/errors";
 import { formatDuration } from "@/lib/format";
-import { nextRepeat, repeatLabel } from "@/lib/repeat";
-import { queueClear, queueJumpTo, queueRemove, setRepeat, setShuffle } from "@/lib/tauri";
+import { repeatLabel } from "@/lib/repeat";
+import { queueClear, queueJumpTo, queueRemove } from "@/lib/tauri";
 import { useQueueStore } from "@/stores/queueStore";
 
 export function QueueView() {
@@ -46,47 +48,22 @@ export function QueueView() {
 
   const onClear = () => void run(() => queueClear(), "Clear queue");
 
-  const onToggleRepeat = () =>
-    void run(async () => {
-      await setRepeat(nextRepeat(repeat));
-    }, "Repeat");
+  const subtitle =
+    entries.length === 0
+      ? "Empty — play a track or album to start."
+      : `${entries.length} ${entries.length === 1 ? "track" : "tracks"}`;
 
-  const onToggleShuffle = () =>
-    void run(async () => {
-      await setShuffle(!shuffle);
-    }, "Shuffle");
+  const modeLine = `${repeatLabel(repeat, "short")} · shuffle ${shuffle ? "on" : "off"}`;
 
   return (
     <section className="flex flex-col gap-4 p-6">
       <header className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-2xl font-semibold">Queue</h1>
-          <p className="text-sm text-muted-foreground">
-            {entries.length === 0
-              ? "Empty — play a track or album to start."
-              : `${entries.length} ${entries.length === 1 ? "track" : "tracks"}`}
-          </p>
+          <p className="text-sm text-muted-foreground">{subtitle}</p>
+          <p className="text-xs text-muted-foreground/70">{modeLine}</p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onToggleShuffle}
-            disabled={busy}
-            aria-pressed={shuffle}
-            aria-label={shuffle ? "Disable shuffle" : "Enable shuffle"}
-            className={`btn-ghost text-sm ${shuffle ? "bg-primary/20 text-primary" : ""}`}
-          >
-            Shuffle {shuffle ? "on" : "off"}
-          </button>
-          <button
-            type="button"
-            onClick={onToggleRepeat}
-            disabled={busy}
-            aria-label={`Cycle repeat mode (currently ${repeatLabel(repeat)})`}
-            className={`btn-ghost text-sm ${repeat !== "off" ? "bg-primary/20 text-primary" : ""}`}
-          >
-            {repeatLabel(repeat)}
-          </button>
           <button
             type="button"
             onClick={onClear}

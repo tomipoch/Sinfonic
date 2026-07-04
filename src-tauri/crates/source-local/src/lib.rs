@@ -72,7 +72,7 @@ fn local_capabilities() -> ProviderCapabilities {
         genres: false,
         playlists: false,
         favorites: false,
-        lyrics: false,
+        lyrics: true,
         playback_reporting: false,
         playlist_mutations: false,
         playlist_delete: false,
@@ -547,10 +547,31 @@ impl MusicProvider for LocalProvider {
 
     async fn lyrics(
         &self,
-        _id: &TrackId,
+        id: &TrackId,
         _allow_remote: bool,
     ) -> ProviderResult<Option<Lyrics>> {
-        Err(ProviderError::Unsupported("lyrics (local)"))
+        let Some(audio_path) = self.path_for_track(id) else {
+            return Ok(None);
+        };
+        // Candidate 1: `<stem>.lrc` — universal LRC sidecar
+        // convention (foobar2000, VLC, the LRCLIB downloader, etc.).
+        let stem_lrc = audio_path.with_extension("lrc");
+        // Candidate 2: `<audio_filename>.lrc` — covers files like
+        // `song.flac` becoming `song.flac.lrc`, used by some
+        // MusicBrainz Picard setups.
+        let sibling_lrc = audio_path.with_file_name(sibling_lrc_name(&audio_path));
+        let Some(content) = read_first_existing(&[&stem_lrc, &sibling_lrc]) else {
+            return Ok(None);
+        };
+        let (plain, synced) = split_lrc_or_plain(&content);
+        if plain.is_none() && synced.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(Lyrics {
+            plain,
+            synced,
+            source: Some("local-lrc".to_string()),
+        }))
     }
 
     async fn report_playback(&self, _report: PlaybackReport) -> ProviderResult<()> {
@@ -560,6 +581,94 @@ impl MusicProvider for LocalProvider {
 
 fn paginate<T: Clone>(items: &[T], offset: usize, limit: usize) -> Vec<T> {
     items.iter().skip(offset).take(limit).cloned().collect()
+}
+
+/// Hard cap on a sidecar file we'll read into memory. Defends
+/// against a runaway LRC file (some tools dump full discographies
+/// into one sidecar by mistake).
+const MAX_SIDECAR_BYTES: u64 = 512 * 1024;
+
+/// Read the first path in `candidates` that exists and is smaller
+/// than `MAX_SIDECAR_BYTES`. Returns `None` when none of them
+/// exists or all are oversized.
+fn read_first_existing(candidates: &[&Path]) -> Option<String> {
+    for path in candidates {
+        let metadata = match std::fs::metadata(path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => continue,
+        };
+        if metadata.len() > MAX_SIDECAR_BYTES {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(path) {
+            return Some(content);
+        }
+    }
+    None
+}
+
+/// Build the "`<audio_filename>.lrc`" sibling name. For
+/// `/a/b/song.flac` returns `song.flac.lrc`.
+fn sibling_lrc_name(audio_path: &Path) -> std::ffi::OsString {
+    let file_name = audio_path
+        .file_name()
+        .map(|n| n.to_owned())
+        .unwrap_or_default();
+    let mut s = file_name;
+    s.push(".lrc");
+    s
+}
+
+/// Detect whether the file content looks like LRC. We treat it as
+/// LRC if **any** non-blank line begins with an `[mm:ss]` (with or
+/// without fractional digits) timestamp — that's the canonical
+/// LRC syncing marker. Lines that look like `[ar: Artist]` or
+/// `[ti: Title]` (metadata tags) have non-digit prefixes so they
+/// don't trip the matcher.
+///
+/// Returns `(plain, synced)`: when both fields are `None` the file
+/// was empty.
+fn split_lrc_or_plain(content: &str) -> (Option<String>, Option<String>) {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return (None, None);
+    }
+    let has_lrc_timestamps = trimmed.lines().any(lrc_line_is_timestamp);
+    if has_lrc_timestamps {
+        (None, Some(trimmed.to_string()))
+    } else {
+        (Some(trimmed.to_string()), None)
+    }
+}
+
+/// Returns `true` when the trimmed line begins with
+/// `[<digits>:<digits>(.<digits>)?]`. Other `[…]`-prefixed
+/// constructs (like `[ar: Artist]` metadata tags) are ignored
+/// because their prefix isn't all digits.
+fn lrc_line_is_timestamp(line: &str) -> bool {
+    let line = line.trim_start();
+    let bytes = line.as_bytes();
+    if bytes.first() != Some(&b'[') {
+        return false;
+    }
+    let close = match line.find(']') {
+        Some(i) => i,
+        None => return false,
+    };
+    let inside = &line[1..close];
+    let (min_part, rest) = match inside.split_once(':') {
+        Some(p) => p,
+        None => return false,
+    };
+    if min_part.is_empty() || !min_part.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let (sec_part, _) = match rest.split_once('.') {
+        Some(p) => p,
+        None => (rest, ""),
+    };
+    !sec_part.is_empty() && sec_part.chars().all(|c| c.is_ascii_digit())
 }
 
 /// Mirror of the scanner's percent-encoding so `path_for_track` can

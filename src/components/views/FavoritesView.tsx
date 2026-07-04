@@ -1,27 +1,27 @@
-// FavoritesView — tabbed view of favorited tracks / albums / artists.
+// FavoritesView — stacked sections of favorited tracks, albums and
+// artists. The track table mirrors `PlaylistDetailView` exactly
+// (cover | song | album | time | favorite | menu) so the two lists
+// feel like the same component.
 
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
-import { AlbumCover } from "@/components/ui/AlbumCover";
-import { FavoriteButton } from "@/components/ui/FavoriteButton";
+import { AlbumCard } from "@/components/ui/AlbumCard";
+import { ArtistCard } from "@/components/ui/ArtistCard";
 import { type TrackColumn, TrackTable } from "@/components/ui/TrackTable";
 import { extractError } from "@/lib/errors";
-import { formatDuration } from "@/lib/format";
-import { getFavorites, playTrack } from "@/lib/tauri";
+import { getFavorites, playTrackWithContext } from "@/lib/tauri";
 import { useServerStore } from "@/stores/serverStore";
 import type { Album, Artist, Track } from "@/types/domain";
 
 const COLUMNS: TrackColumn[] = [
   { kind: "cover" },
   { kind: "song" },
+  { kind: "album" },
   { kind: "time" },
   { kind: "favorite" },
   { kind: "menu" },
 ];
-
-type FavoritesTab = "tracks" | "albums" | "artists";
 
 interface FavoritesData {
   tracks: Track[];
@@ -34,7 +34,6 @@ export function FavoritesView() {
   const [data, setData] = useState<FavoritesData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<FavoritesTab>("tracks");
 
   const load = async () => {
     setLoading(true);
@@ -55,7 +54,7 @@ export function FavoritesView() {
 
   if (!activeServerId) {
     return (
-      <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
+      <div className="m-6 flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
         <div className="text-base font-medium text-foreground">No server connected</div>
         <p className="text-sm text-muted-foreground">
           Connect a server in Settings to see favorites.
@@ -66,7 +65,7 @@ export function FavoritesView() {
 
   if (loading) {
     return (
-      <p className="text-muted-foreground text-sm" role="status">
+      <p className="p-6 text-sm text-muted-foreground" role="status">
         Loading favorites…
       </p>
     );
@@ -74,7 +73,7 @@ export function FavoritesView() {
 
   if (error) {
     return (
-      <div className="flex flex-col items-start gap-3 rounded-md border border-red-900 bg-red-950 p-6">
+      <div className="m-6 flex flex-col items-start gap-3 rounded-md border border-red-900 bg-red-950 p-6">
         <div className="text-base font-medium text-red-400">Failed to load favorites</div>
         <p className="text-sm text-red-300">{error}</p>
         <button type="button" onClick={() => void load()} className="btn-ghost text-sm">
@@ -86,116 +85,96 @@ export function FavoritesView() {
 
   if (!data) return null;
 
-  const tabs: { key: FavoritesTab; label: string; count: number }[] = [
-    { key: "tracks", label: "Tracks", count: data.tracks.length },
-    { key: "albums", label: "Albums", count: data.albums.length },
-    { key: "artists", label: "Artists", count: data.artists.length },
-  ];
-
   const onPlayTrack = async (track: Track) => {
     try {
-      await playTrack(track);
+      // Anchor the auto-fill to favourites so the queue extends with
+      // the remaining favourited tracks instead of restarting.
+      await playTrackWithContext(track, {
+        kind: "favorites",
+        serverId: activeServerId,
+      });
     } catch (e) {
       toast.error(`Couldn't play: ${extractError(e, "unknown error")}`);
     }
   };
 
+  const totalCount = data.tracks.length + data.albums.length + data.artists.length;
+
   return (
-    <section className="flex flex-col gap-4 p-6">
-      <header className="flex flex-wrap items-center justify-between gap-2">
+    <section className="flex flex-col gap-8 p-6">
+      <header className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold">Favorites</h1>
-        <div className="flex gap-1 rounded-md border border-border bg-muted p-1">
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => setTab(t.key)}
-              className={`rounded px-3 py-1 text-sm transition-colors ${
-                tab === t.key
-                  ? "bg-card text-foreground"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {t.label} <span className="ml-1 text-muted-foreground">({t.count})</span>
-            </button>
-          ))}
-        </div>
+        <p className="text-sm text-muted-foreground">{totalCount} items across your library</p>
       </header>
 
-      {tab === "tracks" &&
-        (data.tracks.length === 0 ? (
-          <EmptyState message="No favorited tracks yet." />
-        ) : (
+      {/* Tracks */}
+      {data.tracks.length > 0 && (
+        <section className="flex flex-col gap-3">
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Tracks
+            </h2>
+            <span className="text-xs text-muted-foreground">{data.tracks.length}</span>
+          </div>
           <TrackTable
             tracks={data.tracks}
             columns={COLUMNS}
             onPlayTrack={onPlayTrack}
-            dragSource="favorites"
+            dragSource="favorites-tracks"
           />
-        ))}
+        </section>
+      )}
 
-      {tab === "albums" &&
-        (data.albums.length === 0 ? (
-          <EmptyState message="No favorited albums yet." />
-        ) : (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-4">
+      {/* Albums */}
+      {data.albums.length > 0 && (
+        <section className="flex flex-col gap-3">
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Albums
+            </h2>
+            <span className="text-xs text-muted-foreground">{data.albums.length}</span>
+          </div>
+          <ul
+            className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"
+            aria-label="Favorite albums"
+          >
             {data.albums.map((album) => (
-              <Link
-                key={album.id}
-                to={`/albums/${encodeURIComponent(album.id)}`}
-                className="flex flex-col gap-2 rounded-md border border-border bg-muted p-4 transition-colors hover:border-primary/50 hover:bg-card"
-              >
-                <AlbumCover source={album} />
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium text-foreground">{album.title}</div>
-                  <div className="truncate text-xs text-muted-foreground">{album.artist}</div>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">
-                    {album.trackCount} tracks · {formatDuration(album.durationSeconds)}
-                  </span>
-                  <FavoriteButton kind="album" itemId={album.id} initialFavorite={album.favorite} />
-                </div>
-              </Link>
+              <li key={album.id}>
+                <AlbumCard album={album} />
+              </li>
             ))}
-          </div>
-        ))}
+          </ul>
+        </section>
+      )}
 
-      {tab === "artists" &&
-        (data.artists.length === 0 ? (
-          <EmptyState message="No favorited artists yet." />
-        ) : (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-4">
+      {/* Artists */}
+      {data.artists.length > 0 && (
+        <section className="flex flex-col gap-3">
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Artists
+            </h2>
+            <span className="text-xs text-muted-foreground">{data.artists.length}</span>
+          </div>
+          <ul
+            className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"
+            aria-label="Favorite artists"
+          >
             {data.artists.map((artist) => (
-              <Link
-                key={artist.id}
-                to={`/artists/${encodeURIComponent(artist.id)}`}
-                className="flex flex-col items-center gap-2 rounded-md border border-border bg-muted p-4 transition-colors hover:border-primary/50 hover:bg-card"
-              >
-                <div className="flex h-24 w-24 items-center justify-center rounded-full bg-card text-3xl font-bold text-white/40">
-                  {artist.name.charAt(0).toUpperCase()}
-                </div>
-                <div className="text-center text-sm font-medium text-foreground">{artist.name}</div>
-                <div className="text-xs text-muted-foreground">
-                  {artist.albumCount} albums · {artist.trackCount} tracks
-                </div>
-                <FavoriteButton
-                  kind="artist"
-                  itemId={artist.id}
-                  initialFavorite={artist.favorite}
-                />
-              </Link>
+              <li key={artist.id}>
+                <ArtistCard artist={artist} />
+              </li>
             ))}
-          </div>
-        ))}
-    </section>
-  );
-}
+          </ul>
+        </section>
+      )}
 
-function EmptyState({ message }: { message: string }) {
-  return (
-    <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
-      <div className="text-base font-medium text-foreground">{message}</div>
-    </div>
+      {totalCount === 0 && (
+        <p className="text-sm text-muted-foreground">
+          You haven't favorited anything yet. Tap the heart icon on any track, album, or artist to
+          start.
+        </p>
+      )}
+    </section>
   );
 }

@@ -307,3 +307,132 @@ fn lazy_scan_makes_artists_tracks_music_folders_and_search_work() {
     assert_eq!(folders.len(), 1);
     assert!(!search.tracks.is_empty());
 }
+
+// ─── Lyrics sidecar discovery ───────────────────────────────────────
+//
+// `LocalProvider::lyrics` reads an LRC or plain-text sidecar file
+// next to the audio. Two naming conventions are supported:
+//   * `<stem>.lrc`           — universal (LRCLIB downloader, VLC, etc.)
+//   * `<audio_filename>.lrc` — Picard / foobar2000 (e.g. song.flac.lrc)
+// File format detection is by the first non-blank line:
+//   * `[mm:ss(.xx)?]`        → synced, served in `Lyrics.synced`
+//   * anything else         → plain, served in `Lyrics.plain`
+
+fn write_lrc(path: &Path, content: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("mkdir -p");
+    }
+    fs::write(path, content).expect("write lrc");
+}
+
+#[tokio::test]
+async fn lyrics_reads_lrc_sidecar_next_to_audio() {
+    let root = tempfile::tempdir().unwrap();
+    let root_path = root.path();
+    let audio = root_path.join("Album/01 song.wav");
+    write_wav(&audio);
+    write_lrc(
+        &root_path.join("Album/01 song.lrc"),
+        "[00:12.00] On a dark desert highway\n[00:16.00] cool wind in my hair",
+    );
+
+    let provider = LocalProvider::new(root_path);
+    // First call — trigger the scan.
+    let tracks = futures::executor::block_on(provider.tracks(PagedRequest::new(0, 10)))
+        .expect("tracks");
+    assert_eq!(tracks.items.len(), 1);
+    let lyrics = provider
+        .lyrics(&tracks.items[0].id, false)
+        .await
+        .expect("lyrics ok")
+        .expect("some lyrics");
+    assert_eq!(
+        lyrics.synced.as_deref(),
+        Some("[00:12.00] On a dark desert highway\n[00:16.00] cool wind in my hair"),
+    );
+    assert_eq!(lyrics.plain, None);
+    assert_eq!(lyrics.source.as_deref(), Some("local-lrc"));
+}
+
+#[tokio::test]
+async fn lyrics_reads_foobar_style_sidecar() {
+    let root = tempfile::tempdir().unwrap();
+    let root_path = root.path();
+    let audio = root_path.join("Album/song.flac");
+    write_wav(&audio);
+    write_lrc(
+        &root_path.join("Album/song.flac.lrc"),
+        "[00:00.50] line one\n[00:02.00] line two",
+    );
+
+    let provider = LocalProvider::new(root_path);
+    let tracks = futures::executor::block_on(provider.tracks(PagedRequest::new(0, 10)))
+        .expect("tracks");
+    let lyrics = provider
+        .lyrics(&tracks.items[0].id, false)
+        .await
+        .expect("lyrics ok")
+        .expect("some lyrics");
+    assert!(lyrics.synced.unwrap().starts_with("[00:00.50]"));
+}
+
+#[tokio::test]
+async fn lyrics_detects_synced_format() {
+    let root = tempfile::tempdir().unwrap();
+    let root_path = root.path();
+    write_wav(&root_path.join("Album/song.wav"));
+    write_lrc(
+        &root_path.join("Album/song.lrc"),
+        "[ar: Artist]\n[00:00.00] first\n[00:05.00] second\n",
+    );
+
+    let provider = LocalProvider::new(root_path);
+    let tracks = futures::executor::block_on(provider.tracks(PagedRequest::new(0, 10)))
+        .expect("tracks");
+    let lyrics = provider
+        .lyrics(&tracks.items[0].id, false)
+        .await
+        .expect("lyrics ok")
+        .expect("some lyrics");
+    assert!(lyrics.synced.is_some());
+    assert!(lyrics.plain.is_none());
+}
+
+#[tokio::test]
+async fn lyrics_returns_plain_when_no_timestamps() {
+    let root = tempfile::tempdir().unwrap();
+    let root_path = root.path();
+    write_wav(&root_path.join("Album/song.wav"));
+    write_lrc(
+        &root_path.join("Album/song.lrc"),
+        "Verse 1\nLine two\nVerse 2\n",
+    );
+
+    let provider = LocalProvider::new(root_path);
+    let tracks = futures::executor::block_on(provider.tracks(PagedRequest::new(0, 10)))
+        .expect("tracks");
+    let lyrics = provider
+        .lyrics(&tracks.items[0].id, false)
+        .await
+        .expect("lyrics ok")
+        .expect("some lyrics");
+    assert_eq!(lyrics.plain.as_deref(), Some("Verse 1\nLine two\nVerse 2"));
+    assert_eq!(lyrics.synced, None);
+    assert_eq!(lyrics.source.as_deref(), Some("local-lrc"));
+}
+
+#[tokio::test]
+async fn lyrics_returns_none_when_no_sidecar() {
+    let root = tempfile::tempdir().unwrap();
+    let root_path = root.path();
+    write_wav(&root_path.join("Album/song.wav"));
+
+    let provider = LocalProvider::new(root_path);
+    let tracks = futures::executor::block_on(provider.tracks(PagedRequest::new(0, 10)))
+        .expect("tracks");
+    let lyrics = provider
+        .lyrics(&tracks.items[0].id, false)
+        .await
+        .expect("lyrics ok");
+    assert!(lyrics.is_none());
+}

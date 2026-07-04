@@ -2,12 +2,17 @@
 //
 // Layout:
 //   ┌─ Header (native traffic lights + centered tabs) ────────┐
-//   ├─ Content ──────────────────────────────────────────────┤
+//   ├─ Content ──────────────────────────────────────────────┐
 //   │  SettingsTitle                                          │
 //   │  SettingsSection(s) → Cards                             │
 //   └────────────────────────────────────────────────────────┘
 
-import { InformationCircleIcon, PaintBoardIcon, Settings01Icon } from "@hugeicons/core-free-icons";
+import {
+  InformationCircleIcon,
+  MusicNoteSquare01Icon,
+  PaintBoardIcon,
+  Settings01Icon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type JSX, useEffect, useState } from "react";
@@ -16,6 +21,7 @@ import type { SettingsTab } from "@/modules/preferences/openSettingsWindow";
 import { usePreferencesStore } from "@/modules/preferences/preferences";
 import { AboutSection } from "./sections/AboutSection";
 import { GeneralSection } from "./sections/GeneralSection";
+import { PlaybackSection } from "./sections/PlaybackSection";
 import { ThemesSection } from "./sections/ThemesSection";
 
 const TABS: {
@@ -25,11 +31,12 @@ const TABS: {
   component: () => JSX.Element;
 }[] = [
   { id: "general", label: "General", icon: Settings01Icon, component: GeneralSection },
+  { id: "playback", label: "Playback", icon: MusicNoteSquare01Icon, component: PlaybackSection },
   { id: "themes", label: "Themes", icon: PaintBoardIcon, component: ThemesSection },
   { id: "about", label: "About", icon: InformationCircleIcon, component: AboutSection },
 ];
 
-const VALID_TABS: SettingsTab[] = ["general", "themes", "about"];
+const VALID_TABS: SettingsTab[] = ["general", "playback", "themes", "about"];
 
 function readInitialTab(): SettingsTab {
   if (typeof window === "undefined") return "general";

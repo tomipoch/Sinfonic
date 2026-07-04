@@ -16,14 +16,15 @@ describe("FavoriteButton", () => {
     render(<FavoriteButton kind="track" itemId="t-1" initialFavorite={false} />);
     const button = screen.getByRole("button", { name: "Add to favorites" });
     expect(button.getAttribute("aria-pressed")).toBe("false");
-    expect(button.textContent).toBe("♡");
+    // The MaterialSymbol span carries the ligature as its text content.
+    expect(button.textContent).toBe("favorite_border");
   });
 
   it("renders the filled heart when initialFavorite is true", () => {
     render(<FavoriteButton kind="track" itemId="t-1" initialFavorite />);
     const button = screen.getByRole("button", { name: "Remove from favorites" });
     expect(button.getAttribute("aria-pressed")).toBe("true");
-    expect(button.textContent).toBe("♥");
+    expect(button.textContent).toBe("favorite");
   });
 
   it("flips the heart optimistically and calls the IPC", async () => {

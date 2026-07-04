@@ -1,11 +1,11 @@
 // App — single source of routing. Nested routes use the Layout's
 // <Outlet /> so Sidebar + PlayerBar persist across navigation.
 //
-// `PlaybackEventsBridge` mounts the global Tauri event listeners
-// once at the root so playback state stays in sync with the
-// backend regardless of which view is active. `AlbumArtPrewarm`
-// fires `provider_image_bytes` for the first 24 albums after the
-// library loads so the visible grid paints without per-cell lag.
+// `PlaybackProvider` owns the global playback state (current track,
+// transport controls, repeat/shuffle). Components consume it via
+// `usePlaybackContext()`. `AlbumArtPrewarm` fires
+// `provider_image_bytes` for the first 24 albums after the library
+// loads so the visible grid paints without per-cell lag.
 // `ServerGate` hydrates the server store and routes the user
 // between `/setup` and the rest of the app based on whether a
 // server is connected.
@@ -33,14 +33,9 @@ import { SmartPlaylistDetailView } from "@/components/views/SmartPlaylistDetailV
 import { SmartPlaylistsView } from "@/components/views/SmartPlaylistsView";
 import { SongsView } from "@/components/views/SongsView";
 import { useAlbumArtPrewarm } from "@/hooks/useAlbumArtPrewarm";
-import { usePlaybackEvents } from "@/hooks/usePlaybackEvents";
 import { revokeAll } from "@/lib/albumArtCache";
+import { PlaybackProvider } from "@/playback";
 import { useServerStore } from "@/stores/serverStore";
-
-function PlaybackEventsBridge(): null {
-  usePlaybackEvents();
-  return null;
-}
 
 function AlbumArtPrewarm(): null {
   useAlbumArtPrewarm();
@@ -60,8 +55,7 @@ function AlbumArtCacheReset(): null {
 
 export default function App() {
   return (
-    <>
-      <PlaybackEventsBridge />
+    <PlaybackProvider>
       <AlbumArtPrewarm />
       <AlbumArtCacheReset />
       <ServerGate>
@@ -91,6 +85,6 @@ export default function App() {
           </Route>
         </Routes>
       </ServerGate>
-    </>
+    </PlaybackProvider>
   );
 }

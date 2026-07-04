@@ -6,6 +6,6 @@
 //! frontend listens for, without depending on the app crate.
 
 pub use sinfonic_domain::events::{
-    EventName, LibrarySyncStatusPayload, PlaybackStatePayload, QueueEntryView,
-    QueueSnapshotPayload, SyncProgressPayload, TrackChangedPayload,
+    EventName, LibrarySyncStatusPayload, PlaybackConfigPayload, PlaybackStatePayload,
+    QueueEntryView, QueueSnapshotPayload, SyncProgressPayload, TrackChangedPayload,
 };

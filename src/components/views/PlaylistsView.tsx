@@ -1,23 +1,20 @@
 // PlaylistsView — grid of user playlists + "New playlist" CTA.
+// Layout mirrors AlbumsView (no sort pills, no Play all).
 
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { useShallow } from "zustand/react/shallow";
 
-import { AlbumCover } from "@/components/ui/AlbumCover";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { PlaylistCard } from "@/components/ui/PlaylistCard";
 import { extractError } from "@/lib/errors";
-import { formatDuration } from "@/lib/format";
 import { usePlaylistsStore } from "@/stores/playlistsStore";
 import { useServerStore } from "@/stores/serverStore";
 
 export function PlaylistsView() {
   const navigate = useNavigate();
   const activeServerId = useServerStore((s) => s.activeServerId);
-  // `useShallow` keeps the selector reference stable when the picked
-  // fields are reference-equal, so the view only re-renders on
-  // meaningful changes (e.g. a new playlist) instead of every store
-  // update (e.g. detail error flips).
   const { playlists, loading, error, loadPlaylists, createPlaylist } = usePlaylistsStore(
     useShallow((s) => ({
       playlists: s.playlists,
@@ -27,6 +24,8 @@ export function PlaylistsView() {
       createPlaylist: s.createPlaylist,
     })),
   );
+  const lastSync = useServerStore((s) => s.lastSync);
+  const syncLibrary = useServerStore((s) => s.syncLibrary);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
 
@@ -51,7 +50,7 @@ export function PlaylistsView() {
 
   if (!activeServerId) {
     return (
-      <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
+      <div className="m-6 flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
         <div className="text-base font-medium text-foreground">No server connected</div>
         <p className="text-sm text-muted-foreground">
           Connect a server in Settings to see playlists.
@@ -62,7 +61,7 @@ export function PlaylistsView() {
 
   if (loading && playlists.length === 0) {
     return (
-      <p className="text-muted-foreground text-sm" role="status">
+      <p className="p-6 text-sm text-muted-foreground" role="status">
         Loading playlists…
       </p>
     );
@@ -70,7 +69,7 @@ export function PlaylistsView() {
 
   if (error) {
     return (
-      <div className="flex flex-col items-start gap-3 rounded-md border border-red-900 bg-red-950 p-6">
+      <div className="m-6 flex flex-col items-start gap-3 rounded-md border border-red-900 bg-red-950 p-6">
         <div className="text-base font-medium text-red-400">Failed to load playlists</div>
         <p className="text-sm text-red-300">{error}</p>
         <button type="button" onClick={() => void loadPlaylists()} className="btn-ghost text-sm">
@@ -104,7 +103,8 @@ export function PlaylistsView() {
                   }
                 }}
                 placeholder="Playlist name"
-                className="rounded-md border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted focus:border-primary focus:outline-none"
+                className="input max-w-xs"
+                autoFocus
               />
               <button type="button" onClick={() => void onCreate()} className="btn-primary text-sm">
                 Create
@@ -129,42 +129,24 @@ export function PlaylistsView() {
       </header>
 
       {playlists.length === 0 && !creating ? (
-        <div className="flex flex-col items-start gap-3 rounded-md border border-border bg-muted p-6">
-          <div className="text-base font-medium text-foreground">No playlists yet</div>
-          <p className="text-sm text-muted-foreground">Create a playlist to organize your music.</p>
-          <button type="button" onClick={() => setCreating(true)} className="btn-primary text-sm">
-            Create playlist
-          </button>
-        </div>
+        <EmptyState
+          title="No playlists yet"
+          description="Create a playlist to organize your music."
+          syncLabel="Sync library"
+          syncing={lastSync === "syncing"}
+          onSync={() => syncLibrary()}
+        />
       ) : (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(16rem,1fr))] gap-4">
+        <ul
+          className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"
+          aria-label="Playlists"
+        >
           {playlists.map((pl) => (
-            <Link
-              key={pl.id}
-              to={`/playlists/${encodeURIComponent(pl.id)}`}
-              className="flex flex-col gap-2 rounded-md border border-border bg-muted p-4 transition-colors hover:border-primary/50 hover:bg-card"
-            >
-              {pl.imageRef ? (
-                <AlbumCover
-                  source={{ id: pl.id, title: pl.name, imageRef: pl.imageRef }}
-                  className="aspect-square w-full rounded-md"
-                  ariaLabel={`Cover art for playlist ${pl.name}`}
-                />
-              ) : (
-                <div className="flex aspect-square w-full items-center justify-center rounded-md bg-card text-5xl text-white/30">
-                  🎵
-                </div>
-              )}
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-foreground">{pl.name}</div>
-                <div className="truncate text-xs text-muted-foreground">
-                  {pl.trackCount} {pl.trackCount === 1 ? "track" : "tracks"} ·{" "}
-                  {formatDuration(pl.durationSeconds)}
-                </div>
-              </div>
-            </Link>
+            <li key={pl.id}>
+              <PlaylistCard playlist={pl} />
+            </li>
           ))}
-        </div>
+        </ul>
       )}
     </section>
   );

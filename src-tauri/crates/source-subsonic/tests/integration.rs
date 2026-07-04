@@ -3,7 +3,7 @@
 //! Spins up a `wiremock` server that returns canned Subsonic JSON,
 //! then runs the full provider flow against it. Covers auth,
 //! albums/artists/tracks paging, search, image fetch, scrobble,
-//! favourites and playlist mutation.
+//! favourites, playlist mutation and `/rest/getLyrics`.
 
 use serde_json::json;
 use sinfonic_domain::{PagedRequest, ServerId, TrackId};
@@ -43,6 +43,19 @@ fn envelope_failed(code: u16, message: &str) -> serde_json::Value {
             "error": { "code": code, "message": message }
         }
     })
+}
+
+/// Build a `/rest/getLyrics` payload that ships only `value`
+/// (plain-text fallback, no synced lines).
+fn lyrics_plain_payload(text: &str) -> serde_json::Value {
+    json!({ "lyrics": { "value": text } })
+}
+
+/// Build a `/rest/getLyrics` payload that ships only `struct`
+/// (synced lines; `value` omitted). `entries` must be a JSON
+/// value shaped like `[ { lang, synced, line: [...] }, … ]`.
+fn lyrics_struct_payload(entries: serde_json::Value) -> serde_json::Value {
+    json!({ "lyrics": { "struct": entries } })
 }
 
 fn album_dto(id: &str, name: &str, artist: &str) -> serde_json::Value {
@@ -552,7 +565,7 @@ async fn capabilities_advertise_what_subsonic_supports() {
     assert!(caps.playback_reporting);
     assert!(caps.random_tracks);
     assert!(caps.music_folders);
-    assert!(!caps.lyrics);
+    assert!(caps.lyrics);
     assert!(!caps.folder_browsing);
 }
 
@@ -734,4 +747,163 @@ async fn create_playlist_posts_with_song_ids() {
         .await
         .expect("create ok");
     assert_eq!(playlist_id.as_str(), "playlist-pl-1");
+}
+
+// ─── /rest/getLyrics ────────────────────────────────────────────────
+//
+// Wire format per OpenSubsonic spec: the `struct` array holds
+// per-language entries with `{ lang, synced, line: [{value, start}] }`.
+// `value` is the plain-text fallback. These tests pin the
+// conversion to LRC (`[mm:ss.xx]line`) and the empty /
+// plain-text / multi-lang branches so future refactors can't
+// regress the lyrics panel.
+
+#[tokio::test]
+async fn lyrics_returns_plain_only() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/getLyrics"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope_ok(lyrics_plain_payload(
+            "On a dark desert highway",
+        ))))
+        .mount(&server)
+        .await;
+
+    let provider = SubsonicProvider::new(session_for(&server)).unwrap();
+    let result = provider
+        .lyrics(&TrackId::new("track-42"), false)
+        .await
+        .expect("lyrics ok");
+    let lyrics = result.expect("some lyrics");
+    assert_eq!(lyrics.plain.as_deref(), Some("On a dark desert highway"));
+    assert_eq!(lyrics.synced, None);
+    assert_eq!(lyrics.source.as_deref(), Some("subsonic"));
+}
+
+#[tokio::test]
+async fn lyrics_returns_synced_lines_as_lrc() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/getLyrics"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope_ok(lyrics_struct_payload(
+            json!([
+                {
+                    "lang": "en",
+                    "synced": true,
+                    "line": [
+                        { "value": "On a dark desert highway", "start": 1000 },
+                        { "value": "cool wind in my hair",     "start": 5000 },
+                    ]
+                }
+            ])
+        ))))
+        .mount(&server)
+        .await;
+
+    let provider = SubsonicProvider::new(session_for(&server)).unwrap();
+    let result = provider
+        .lyrics(&TrackId::new("track-42"), false)
+        .await
+        .expect("lyrics ok");
+    let lyrics = result.expect("some lyrics");
+    assert_eq!(lyrics.plain, None);
+    assert_eq!(
+        lyrics.synced.as_deref(),
+        Some("[00:01.00]On a dark desert highway\n[00:05.00]cool wind in my hair"),
+    );
+    assert_eq!(lyrics.source.as_deref(), Some("subsonic"));
+}
+
+#[tokio::test]
+async fn lyrics_prefers_synced_when_both_present() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/getLyrics"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope_ok(json!({
+            "lyrics": {
+                "value": "Plain fallback",
+                "struct": [{
+                    "lang": "en",
+                    "synced": true,
+                    "line": [{ "value": "L1", "start": 2000 }]
+                }]
+            }
+        }))))
+        .mount(&server)
+        .await;
+
+    let provider = SubsonicProvider::new(session_for(&server)).unwrap();
+    let lyrics = provider
+        .lyrics(&TrackId::new("track-42"), false)
+        .await
+        .expect("lyrics ok")
+        .expect("some lyrics");
+    assert_eq!(lyrics.plain.as_deref(), Some("Plain fallback"));
+    assert_eq!(lyrics.synced.as_deref(), Some("[00:02.00]L1"));
+}
+
+#[tokio::test]
+async fn lyrics_returns_none_when_lyrics_missing() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/rest/getLyrics"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope_ok(json!({
+            "lyrics": { "value": "", "struct": [] }
+        }))))
+        .mount(&server)
+        .await;
+
+    let provider = SubsonicProvider::new(session_for(&server)).unwrap();
+    let result = provider
+        .lyrics(&TrackId::new("track-42"), false)
+        .await
+        .expect("lyrics ok");
+    assert!(result.is_none(), "expected None when lyrics payload is empty");
+}
+
+#[tokio::test]
+async fn lyrics_orders_lines_by_start_when_multiple_languages() {
+    let server = MockServer::start().await;
+    // Two synced entries (English + Spanish) interleaved by start
+    // timestamp; expect the LRC output sorted ascending.
+    Mock::given(method("GET"))
+        .and(path("/rest/getLyrics"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope_ok(lyrics_struct_payload(
+            json!([
+                {
+                    "lang": "en",
+                    "synced": true,
+                    "line": [
+                        { "value": "EN-B", "start": 5000 },
+                        { "value": "EN-A", "start": 1000 }
+                    ]
+                },
+                {
+                    "lang": "es",
+                    "synced": true,
+                    "line": [
+                        { "value": "ES-C", "start": 8000 },
+                        { "value": "ES-A", "start": 1000 }
+                    ]
+                }
+            ])
+        ))))
+        .mount(&server)
+        .await;
+
+    let provider = SubsonicProvider::new(session_for(&server)).unwrap();
+    let lyrics = provider
+        .lyrics(&TrackId::new("track-42"), false)
+        .await
+        .expect("lyrics ok")
+        .expect("some lyrics");
+    let synced = lyrics.synced.expect("synced populated");
+    // Two distinct lines share the 1000 ms start (English + Spanish)
+    // — sort is stable and the interleave order within equal keys is
+    // deterministic, but we don't pin that detail; only the ascending
+    // timestamps and the four expected lines.
+    assert!(synced.starts_with("[00:01.00]EN-A"));
+    assert!(synced.contains("[00:05.00]EN-B"));
+    assert!(synced.contains("[00:08.00]ES-C"));
+    assert!(synced.ends_with("[00:08.00]ES-C"));
 }

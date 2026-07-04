@@ -36,8 +36,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::events::{
-    EventName, LibrarySyncStatusPayload, PlaybackStatePayload, QueueSnapshotPayload,
-    TrackChangedPayload,
+    EventName, LibrarySyncStatusPayload, PlaybackConfigPayload, PlaybackStatePayload,
+    QueueSnapshotPayload, TrackChangedPayload,
 };
 use crate::lastfm;
 use crate::state::AppState;
@@ -77,6 +77,159 @@ async fn active_server_id(state: &SharedState<'_>) -> ServerId {
         .unwrap_or_else(default_server_id);
     drop(provider_guard);
     server_id
+}
+
+// ─── Private playback helpers ───────────────────────────────────
+//
+// Centralises the "switch the rodio sink to a new track" pipeline
+// that was previously duplicated across `play_track`, `play_album`,
+// `next`, `previous` and `advance_queue_on_end`. Adding a new event
+// or a new source-resolution step now touches one function instead
+// of four.
+//
+// Centralises the "tear down the active provider" pipeline that was
+// previously duplicated across `provider_logout`,
+// `provider_set_active`, and `provider_delete`. The three call sites
+// must stop playback, clear the queue (track ids from the previous
+// provider would never resolve against the next one), and notify the
+// frontend so the PlayerBar / QueuePanel refresh without waiting for
+// the next user action.
+
+mod playback_helpers {
+    use super::*;
+
+    /// Resolve a `Track`'s stream URI through the active provider and
+    /// start playing it. Returns `None` if no provider is connected
+    /// (offline browsing + tests); callers handle that by skipping
+    /// the audio path and emitting the state event anyway.
+    async fn resolve_track_uri_by_id(
+        state: &Arc<Mutex<AppState>>,
+        track_id: &TrackId,
+    ) -> Option<String> {
+        let guard = state.lock().await;
+        let provider_guard = guard.provider.lock().await;
+        let provider = provider_guard.as_ref()?;
+        let descriptor = provider.stream(track_id).await.ok()?;
+        Some(descriptor.uri().to_string())
+    }
+
+    /// Common body shared by `play_track`, `play_album`, `next`,
+    /// `previous`, and `advance_queue_on_end`. Resolves the stream
+    /// URI, hands it to `AudioPlayer::play`, then emits
+    /// `queue-changed` + `track-changed` + `playback-state-changed`
+    /// so every listener sees the same snapshot. Failures degrade
+    /// gracefully: a missing URI or a `player.play` error still
+    /// emits the events with the cached duration so the seekbar
+    /// stays in sync.
+    ///
+    /// When crossfade is enabled in `AudioPlayer`, we call
+    /// `preload_next` first so the fade can start the moment
+    /// `play` consumes the preloaded sink. When crossfade is
+    /// disabled `preload_next` is a no-op (it decodes and drops
+    /// the source), so the only added cost is the extra decode.
+    pub(super) async fn play_entry_from_queue_entry(
+        app: &tauri::AppHandle,
+        state: &Arc<Mutex<AppState>>,
+        entry: sinfonic_domain::QueueEntry,
+    ) {
+        let stream_uri = resolve_track_uri_by_id(state, &entry.track_id).await;
+        let _ = match stream_uri.as_deref() {
+            Some(uri) => {
+                // Preload for the upcoming fade (no-op when off).
+                let _ = {
+                    let guard = state.lock().await;
+                    guard.player.preload_next(entry.track_id.clone(), uri).await
+                };
+                let guard = state.lock().await;
+                match guard.player.play(entry.track_id.clone(), uri).await {
+                    Ok(duration) => duration,
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "sinfonic::playback",
+                            error = %e,
+                            "play_entry_from_queue_entry: player.play failed"
+                        );
+                        entry.duration_seconds
+                    }
+                }
+            }
+            None => entry.duration_seconds,
+        };
+        emit_queue_changed(app, state).await;
+        emit_track_changed_from_entry(app, &entry);
+        emit_playback_state(app, state).await;
+    }
+
+    /// Same as `play_entry_from_queue_entry` but starts from a `Track`
+    /// (used by `play_track` and `play_album`, where the queue entry
+    /// hasn't been created yet at the call site). Keeps a single
+    /// emission pipeline so adding a new event touches one helper.
+    pub(super) async fn play_track_and_emit(
+        app: &tauri::AppHandle,
+        state: &Arc<Mutex<AppState>>,
+        track: &Track,
+    ) {
+        let stream_uri = resolve_track_uri_by_id(state, &track.id).await;
+        let _ = match stream_uri.as_deref() {
+            Some(uri) => {
+                let _ = {
+                    let guard = state.lock().await;
+                    guard.player.preload_next(track.id.clone(), uri).await
+                };
+                let guard = state.lock().await;
+                match guard.player.play(track.id.clone(), uri).await {
+                    Ok(duration) => duration,
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "sinfonic::playback",
+                            error = %e,
+                            "play_track_and_emit: player.play failed"
+                        );
+                        track.duration_seconds
+                    }
+                }
+            }
+            None => track.duration_seconds,
+        };
+        emit_playback_state(app, state).await;
+    }
+}
+
+mod provider_helpers {
+    use super::*;
+
+    /// Stop the rodio sink, clear the queue (track ids from the
+    /// previous provider would never resolve against the next one),
+    /// and notify the frontend so the PlayerBar / QueuePanel refresh
+    /// without waiting for the next user action. Used by
+    /// `provider_logout`, `provider_set_active` and
+    /// `provider_delete` (when the deleted server was active).
+    pub(super) async fn teardown_active_provider(
+        app: &tauri::AppHandle,
+        state: &Arc<Mutex<AppState>>,
+    ) {
+        // Pause the queue-snapshot persist path so the upcoming
+        // `queue.clear()` doesn't overwrite the previous server's
+        // persisted snapshot with an empty queue. The next
+        // user-driven mutation (play, add, jump, …) will re-enable
+        // persistence via `persist_queue`'s guard check.
+        {
+            let guard = state.lock().await;
+            guard.persist_guard.store(true, std::sync::atomic::Ordering::Release);
+        }
+        {
+            let mut guard = state.lock().await;
+            guard.player.stop();
+            guard.queue.clear();
+            guard.queue.clear_server_id();
+        }
+        emit_queue_changed(app, state).await;
+        emit_playback_state(app, state).await;
+        {
+            let guard = state.lock().await;
+            guard.persist_guard.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
 }
 
 // ─── Library queries (Phase 2) ──────────────────────────────────
@@ -121,6 +274,42 @@ pub async fn get_genres(
     guard
         .library
         .list_genres(&server_id)
+        .map_err(|e| e.to_string())
+}
+
+/// Paged list of albums carrying the given genre tag. Used by the
+/// genre detail view. `genre` is the raw genre string (the cache
+/// stores genres as plain text, case-insensitive match).
+#[tauri::command]
+pub async fn get_albums_by_genre(
+    genre: String,
+    offset: usize,
+    limit: usize,
+    state: SharedState<'_>,
+) -> Result<PagedResponse<Album>, String> {
+    let server_id = active_server_id(&state).await;
+    let guard = state.lock().await;
+    guard
+        .library
+        .list_albums_by_genre(&server_id, &genre, offset, limit)
+        .map_err(|e| e.to_string())
+}
+
+/// Paged list of tracks under the given genre. Joins through
+/// `album_genres` (per-track genres are not stored in the schema
+/// today). Used by the genre detail view's tracks section.
+#[tauri::command]
+pub async fn get_tracks_by_genre(
+    genre: String,
+    offset: usize,
+    limit: usize,
+    state: SharedState<'_>,
+) -> Result<PagedResponse<Track>, String> {
+    let server_id = active_server_id(&state).await;
+    let guard = state.lock().await;
+    guard
+        .library
+        .list_tracks_by_genre(&server_id, &genre, offset, limit)
         .map_err(|e| e.to_string())
 }
 
@@ -200,35 +389,21 @@ pub async fn play_album(
     }
     let first = tracks[0].clone();
 
+    // 1) Queue + emit early so the UI updates immediately. Streaming
+    //    can take several seconds on Subsonic, and the user shouldn't
+    //    stare at a stale UI while we wait for the network.
     {
         let mut guard = state.lock().await;
         guard.queue.play_now(&tracks);
     }
-
-    let stream_uri = resolve_stream_uri(&state, &first).await;
-    let fallback_duration = first.duration_seconds;
-    let actual_duration = match stream_uri.as_deref() {
-        Some(uri) => {
-            let guard = state.lock().await;
-            match guard.player.play(first.id.clone(), uri).await {
-                Ok(duration) => duration,
-                Err(e) => {
-                    tracing::warn!(target: "sinfonic::playback", error = %e, "player.play failed");
-                    fallback_duration
-                }
-            }
-        }
-        None => fallback_duration,
-    };
-
-    {
-        let mut guard = state.lock().await;
-        guard.playback.start(actual_duration);
-    }
-
     emit_queue_changed(&app, state.inner()).await;
     emit_track_changed(&app, state.inner(), &first).await;
-    emit_playback_state(&app, state.inner()).await;
+
+    // 2) Resolve and start playback on the rodio sink for the first
+    //    track. Subsequent tracks in the album stay in the queue;
+    //    pressing next/previous will route through the shared
+    //    helper so the sink swaps too.
+    playback_helpers::play_track_and_emit(&app, state.inner(), &first).await;
     Ok(())
 }
 
@@ -268,6 +443,11 @@ pub async fn play_track(
     app: tauri::AppHandle,
     state: SharedState<'_>,
 ) -> Result<QueueEntryId, String> {
+    // 1) Register the track in the queue *and* emit `queue-changed` +
+    //    `track-changed` immediately. Resolving the stream URI can
+    //    take a while on slow Subsonic servers (up to the HTTP
+    //    timeout), so the UI should reflect the user's click before
+    //    we go off and block on the network.
     let id = {
         let mut guard = state.lock().await;
         let ids = guard.queue.play_now(std::slice::from_ref(&track));
@@ -275,51 +455,307 @@ pub async fn play_track(
             .next()
             .ok_or_else(|| "play_track: empty track list".to_string())?
     };
-
-    // Resolve the stream URI from the active Jellyfin provider and
-    // hand it to the rodio-backed AudioPlayer. If no provider is
-    // connected we still register the track in the queue (so the UI
-    // shows it as "next") but skip the actual audio — useful for
-    // offline browsing and tests.
-    let stream_uri = resolve_stream_uri(&state, &track).await;
-    let track_id = track.id.clone();
-    let duration_seconds = match stream_uri.as_deref() {
-        Some(uri) => {
-            let guard = state.lock().await;
-            match guard.player.play(track_id.clone(), uri).await {
-                Ok(duration) => duration,
-                Err(e) => {
-                    tracing::warn!(target: "sinfonic::playback", error = %e, "player.play failed");
-                    track.duration_seconds
-                }
-            }
-        }
-        None => 0,
-    };
-
-    // Sync the in-memory PlaybackState mirror so commands that read
-    // it (without going through the player) stay consistent.
-    {
-        let mut guard = state.lock().await;
-        guard.playback.start(duration_seconds);
-    }
-
     emit_queue_changed(&app, state.inner()).await;
     emit_track_changed(&app, state.inner(), &track).await;
-    emit_playback_state(&app, state.inner()).await;
+
+    // 2) Resolve the stream URI from the active provider. If no
+    //    provider is connected we still register the track in the
+    //    queue (so the UI shows it as "next") but skip the actual
+    //    audio — useful for offline browsing and tests.
+    playback_helpers::play_track_and_emit(&app, state.inner(), &track).await;
     Ok(id)
 }
 
-/// Ask the active Jellyfin provider for the track's stream URI.
-/// Returns `None` if no provider is connected (the UI will show
-/// "no source connected") or if the provider fails to resolve the URI.
-async fn resolve_stream_uri(state: &SharedState<'_>, track: &Track) -> Option<String> {
-    let guard = state.lock().await;
-    let provider_guard = guard.provider.lock().await;
-    let provider = provider_guard.as_ref()?;
-    let track_id = track.id.clone();
-    let descriptor = provider.stream(&track_id).await.ok()?;
-    Some(descriptor.uri().to_string())
+/// Like [`play_track`] but accepts a `PlayContext` so the backend
+/// can auto-fill the upcoming portion of the queue with the rest of
+/// the album / playlist / favourites the user just clicked into.
+///
+/// **Preserves history**: the new track is appended to the queue
+/// (or jumped to if it's already there) rather than replacing the
+/// queue. The previously-current track becomes part of the
+/// history instead of being wiped.
+///
+/// Without a context, behaves like `play_track` minus the wipe.
+#[tauri::command]
+pub async fn play_track_with_context(
+    track: Track,
+    context: Option<sinfonic_domain::PlayContext>,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<QueueEntryId, String> {
+    let id = {
+        let mut guard = state.lock().await;
+        guard.queue.set_last_context(context.clone());
+        // If the track is already in the queue (rare, but possible
+        // if the user clicked a track shown in History), jump to the
+        // existing entry instead of adding a duplicate.
+        let id = guard
+            .queue
+            .find_by_track_id(&track.id)
+            .map(|e| e.id.clone())
+            .unwrap_or_else(|| guard.queue.add_to_queue(&track));
+        let _ = guard.queue.jump_to(&id);
+        id
+    };
+    emit_queue_changed(&app, state.inner()).await;
+    emit_track_changed(&app, state.inner(), &track).await;
+
+    // Auto-extend the queue with the next ~30 tracks from the
+    // context, if any. The cap is large enough that a typical album
+    // fits entirely; the "+N más" button is only meaningful for
+    // long playlists / favourites collections.
+    auto_extend_from_context(&app, &state, DEFAULT_AUTO_EXTEND_LIMIT).await;
+
+    playback_helpers::play_track_and_emit(&app, state.inner(), &track).await;
+    Ok(id)
+}
+
+/// Like [`play_album`] but accepts a `PlayContext` so the queue can
+/// be filled with the remaining tracks of the source.
+///
+/// **Preserves history**: tracks are appended (not replaced) and
+/// the first one becomes the new current. The previously-current
+/// track, if any, slides into the history section.
+#[tauri::command]
+pub async fn play_album_with_context(
+    tracks: Vec<Track>,
+    context: Option<sinfonic_domain::PlayContext>,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    if tracks.is_empty() {
+        return Err("play_album_with_context: track list is empty".into());
+    }
+    let first = tracks[0].clone();
+
+    let first_id = {
+        let mut guard = state.lock().await;
+        guard.queue.set_last_context(context);
+        let mut ids = Vec::with_capacity(tracks.len());
+        for track in &tracks {
+            let id = guard
+                .queue
+                .find_by_track_id(&track.id)
+                .map(|e| e.id.clone())
+                .unwrap_or_else(|| guard.queue.add_to_queue(track));
+            ids.push(id);
+        }
+        // Jump to the first track (preserving history of everything
+        // before it). De-dup is handled per-track above so this
+        // entry always exists.
+        if let Some(first_id) = ids.first() {
+            let _ = guard.queue.jump_to(first_id);
+            Some(first_id.clone())
+        } else {
+            None
+        }
+    };
+
+    if first_id.is_none() {
+        return Err("play_album_with_context: failed to enqueue any track".into());
+    }
+
+    emit_queue_changed(&app, state.inner()).await;
+    emit_track_changed(&app, state.inner(), &first).await;
+
+    // Auto-extend from the context so a partial page in SongsView
+    // still gets the next N library tracks appended.
+    auto_extend_from_context(&app, &state, DEFAULT_AUTO_EXTEND_LIMIT).await;
+
+    playback_helpers::play_track_and_emit(&app, state.inner(), &first).await;
+    Ok(())
+}
+
+/// Append `n` more tracks from the active `PlayContext` to the
+/// end of the queue. No-op if no context is set, the context has
+/// been fully consumed, or the library cache doesn't know about it.
+/// Returns the number of tracks actually added.
+#[tauri::command]
+pub async fn queue_extend_more(
+    n: u32,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<u32, String> {
+    if n == 0 {
+        return Ok(0);
+    }
+    Ok(auto_extend_from_context(&app, &state, n as usize).await)
+}
+
+/// How many tracks `play_track_with_context` / `play_album_with_context`
+/// auto-append on the first call. Larger queues (1000-track playlists)
+/// are still loaded fully via successive `queue_extend_more` calls
+/// driven by the QueuePanel's "+N más" button.
+const DEFAULT_AUTO_EXTEND_LIMIT: usize = 30;
+
+/// Resolves the active `PlayContext` (if any) and appends up to
+/// `limit` tracks from that source to the end of the queue. Tracks
+/// already in the queue (whether from the context itself or added
+/// manually) are skipped to avoid duplicates. Emits `queue-changed`
+/// only if at least one track was added. Returns the count added.
+async fn auto_extend_from_context(
+    app: &tauri::AppHandle,
+    state: &SharedState<'_>,
+    limit: usize,
+) -> u32 {
+    let to_add = {
+        let guard = state.lock().await;
+        let snapshot = guard.queue.snapshot();
+        let Some(context) = snapshot.last_context.clone() else {
+            return 0;
+        };
+        let Some(server_id) = context.server_id().cloned().or(snapshot.server_id.clone())
+        else {
+            return 0;
+        };
+        resolve_next_from_context(&guard.library, &snapshot, &context, &server_id, limit)
+    };
+    let Some(to_add) = to_add else { return 0 };
+    if to_add.is_empty() {
+        return 0;
+    }
+    let added = to_add.len() as u32;
+    {
+        let mut guard = state.lock().await;
+        guard.queue.add_many(&to_add);
+    }
+    emit_queue_changed(app, state.inner()).await;
+    added
+}
+
+/// Pure helper: given the current queue snapshot and the active
+/// play context, resolve up to `limit` tracks that come AFTER the
+/// current entry in the context's natural order and that aren't
+/// already in the queue. Returns `None` if the context can't be
+/// resolved (e.g. unknown album).
+fn resolve_next_from_context(
+    library: &sinfonic_library::Store,
+    snapshot: &sinfonic_domain::QueueSnapshot,
+    context: &sinfonic_domain::PlayContext,
+    server_id: &ServerId,
+    limit: usize,
+) -> Option<Vec<Track>> {
+    let already: std::collections::HashSet<&str> = snapshot
+        .entries
+        .iter()
+        .map(|e| e.track_id.as_str())
+        .collect();
+    let current_id = snapshot
+        .entries
+        .get(snapshot.current_index?)
+        .map(|e| e.track_id.as_str());
+    let slice = |all: &[Track]| -> Vec<Track> {
+        // Drop everything up to and including the current track, then
+        // skip duplicates already in the queue, then take `limit`.
+        let after = if let Some(curr) = current_id {
+            all.iter()
+                .skip_while(|t| t.id.as_str() != curr)
+                .skip(1)
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            all.to_vec()
+        };
+        after
+            .into_iter()
+            .filter(|t| !already.contains(t.id.as_str()))
+            .take(limit)
+            .collect()
+    };
+    match context {
+        sinfonic_domain::PlayContext::Album { album_id } => {
+            let tracks = library.list_album_tracks(server_id, album_id).ok()?;
+            Some(slice(&tracks))
+        }
+        sinfonic_domain::PlayContext::Playlist { playlist_id, .. } => {
+            // Resolve track metadata from the library cache so the
+            // returned Vec<Track> has everything `add_many` needs.
+            let track_ids = library.list_playlist_tracks(server_id, playlist_id).ok()?;
+            let all: Vec<Track> = track_ids
+                .iter()
+                .filter_map(|tid| library.get_track(server_id, tid).ok().flatten())
+                .collect();
+            Some(slice(&all))
+        }
+        sinfonic_domain::PlayContext::Favorites { .. } => {
+            let (tracks, _, _) = library.get_favorites(server_id).ok()?;
+            Some(slice(&tracks))
+        }
+        sinfonic_domain::PlayContext::All { .. } => {
+            // Paginate `list_tracks` (which is sorted by title
+            // ascending) until we find the current track, then
+            // return the next N tracks skipping duplicates already
+            // in the queue. We bound the loop at 50 pages (≈10k
+            // tracks) — the safety cap matters when the current
+            // track is somewhere near the end of a huge library;
+            // 50 pages is enough for any realistic catalog.
+            resolve_all_next_via_pagination(library, server_id, current_id, &already, limit)
+        }
+    }
+}
+
+/// Pagination helper for the `All` context. Pages through
+/// `list_tracks` (title-ascending) until it finds `current_id`, then
+/// keeps reading until it has collected `limit` tracks that are
+/// not already in the queue. Returns `None` if the library query
+/// fails.
+fn resolve_all_next_via_pagination(
+    library: &sinfonic_library::Store,
+    server_id: &ServerId,
+    current_id: Option<&str>,
+    already: &std::collections::HashSet<&str>,
+    limit: usize,
+) -> Option<Vec<Track>> {
+    // Edge case: no current track (queue not started). Just return
+    // the first `limit` library tracks that aren't already queued.
+    if current_id.is_none() {
+        let page = library.list_tracks(server_id, 0, limit.max(1)).ok()?;
+        return Some(
+            page
+                .items
+                .into_iter()
+                .filter(|t| !already.contains(t.id.as_str()))
+                .take(limit)
+                .collect(),
+        );
+    }
+
+    const PAGE_SIZE: usize = 200;
+    const MAX_PAGES: usize = 50;
+    let mut offset: usize = 0;
+    let mut found_current = false;
+    let mut out: Vec<Track> = Vec::with_capacity(limit);
+    let mut pages_read: usize = 0;
+
+    while pages_read < MAX_PAGES {
+        pages_read += 1;
+        let page = library.list_tracks(server_id, offset, PAGE_SIZE).ok()?;
+        let page_len = page.items.len();
+        if page_len == 0 {
+            break;
+        }
+        for track in page.items {
+            if !found_current {
+                if track.id.as_str() == current_id.unwrap_or("") {
+                    found_current = true;
+                }
+            } else if !already.contains(track.id.as_str()) {
+                out.push(track);
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+        if out.len() >= limit {
+            break;
+        }
+        if page_len < PAGE_SIZE {
+            // Last page; no point in continuing.
+            break;
+        }
+        offset += page_len;
+    }
+    Some(out)
 }
 
 #[tauri::command]
@@ -404,12 +840,16 @@ pub async fn queue_jump_to(
         guard.queue.jump_to(&parsed)
     };
     if found {
-        emit_queue_changed(&app, state.inner()).await;
-        if let Some(entry) = {
+        let entry = {
             let guard = state.lock().await;
             guard.queue.current().cloned()
-        } {
-            emit_track_changed_from_entry(&app, &entry);
+        };
+        if let Some(entry) = entry {
+            // Mirror what `next` does: route through the playback
+            // helper so the rodio sink actually switches to the new
+            // entry. Without this, the highlight moves in the UI but
+            // audio keeps playing the previous track.
+            playback_helpers::play_entry_from_queue_entry(&app, state.inner(), entry).await;
         }
     }
     Ok(found)
@@ -440,7 +880,6 @@ pub async fn queue_clear(app: tauri::AppHandle, state: SharedState<'_>) -> Resul
         let mut guard = state.lock().await;
         guard.queue.clear();
         guard.player.stop();
-        guard.playback.stop();
     }
     emit_queue_changed(&app, state.inner()).await;
     emit_playback_state(&app, state.inner()).await;
@@ -457,6 +896,11 @@ pub async fn set_repeat(
         let mut guard = state.lock().await;
         guard.queue.set_repeat(repeat);
     }
+    // `repeat` is part of the queue snapshot; downstream consumers
+    // reading `useQueueStore.repeat` (e.g. the QueueView subtitle)
+    // only see updates via this event, not via the playback-state
+    // poll.
+    emit_queue_changed(&app, state.inner()).await;
     emit_playback_state(&app, state.inner()).await;
     Ok(())
 }
@@ -479,9 +923,8 @@ pub async fn set_shuffle(
 #[tauri::command]
 pub async fn pause(app: tauri::AppHandle, state: SharedState<'_>) -> Result<(), String> {
     {
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         guard.player.pause();
-        guard.playback.pause();
     }
     emit_playback_state(&app, state.inner()).await;
     Ok(())
@@ -490,9 +933,8 @@ pub async fn pause(app: tauri::AppHandle, state: SharedState<'_>) -> Result<(), 
 #[tauri::command]
 pub async fn resume(app: tauri::AppHandle, state: SharedState<'_>) -> Result<(), String> {
     {
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         guard.player.resume();
-        guard.playback.resume();
     }
     emit_playback_state(&app, state.inner()).await;
     Ok(())
@@ -504,9 +946,8 @@ pub async fn stop(
     state: SharedState<'_>,
 ) -> Result<(), String> {
     {
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         guard.player.stop();
-        guard.playback.stop();
     }
     emit_playback_state(&app, state.inner()).await;
     Ok(())
@@ -521,47 +962,64 @@ pub async fn next(
         let mut guard = state.lock().await;
         guard.queue.next_track().cloned()
     };
-    if let Some(entry) = next_entry {
-        let duration = entry.duration_seconds;
-        {
-            let mut guard = state.lock().await;
-            guard.playback.start(duration);
+    match next_entry {
+        Some(entry) => {
+            playback_helpers::play_entry_from_queue_entry(&app, state.inner(), entry).await;
+            Ok(())
         }
-        emit_track_changed_from_entry(&app, &entry);
-        emit_queue_changed(&app, state.inner()).await;
-        emit_playback_state(&app, state.inner()).await;
-    } else {
-        // Queue ended — stop the playhead and the rodio sink.
-        {
-            let mut guard = state.lock().await;
-            guard.player.stop();
-            guard.playback.stop();
+        None => {
+            // Queue ended — stop the rodio sink.
+            {
+                let guard = state.lock().await;
+                guard.player.stop();
+            }
+            emit_playback_state(&app, state.inner()).await;
+            Ok(())
         }
-        emit_playback_state(&app, state.inner()).await;
     }
-    Ok(())
 }
+
+/// Threshold below which `previous` restarts the current track
+/// instead of stepping back. Mirrors the "press prev in the first
+/// few seconds to restart" behaviour of most desktop players.
+const PREV_RESTART_THRESHOLD_SECONDS: u32 = 3;
 
 #[tauri::command]
 pub async fn previous(
     app: tauri::AppHandle,
     state: SharedState<'_>,
 ) -> Result<(), String> {
+    // Fast path: if the current track has only been playing for a
+    // short while, "previous" should restart it rather than step
+    // back. The queue engine deliberately leaves this responsibility
+    // to the player (see `queue.rs::previous_track`).
+    let (has_current, position_seconds) = {
+        let guard = state.lock().await;
+        (
+            guard.queue.current().is_some(),
+            guard.player.cached_state().position_seconds,
+        )
+    };
+    if has_current && position_seconds < PREV_RESTART_THRESHOLD_SECONDS {
+        {
+            let guard = state.lock().await;
+            guard.player.seek(0);
+        }
+        emit_playback_state(&app, state.inner()).await;
+        return Ok(());
+    }
+
     let prev_entry = {
         let mut guard = state.lock().await;
         guard.queue.previous_track().cloned()
     };
-    if let Some(entry) = prev_entry {
-        let duration = entry.duration_seconds;
-        {
-            let mut guard = state.lock().await;
-            guard.playback.start(duration);
+    match prev_entry {
+        Some(entry) => {
+            playback_helpers::play_entry_from_queue_entry(&app, state.inner(), entry).await;
+            Ok(())
         }
-        emit_track_changed_from_entry(&app, &entry);
-        emit_queue_changed(&app, state.inner()).await;
-        emit_playback_state(&app, state.inner()).await;
+        None => Ok(()),
     }
-    Ok(())
 }
 
 #[tauri::command]
@@ -571,9 +1029,8 @@ pub async fn seek(
     state: SharedState<'_>,
 ) -> Result<(), String> {
     {
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         guard.player.seek(position_seconds);
-        guard.playback.seek(position_seconds);
     }
     emit_playback_state(&app, state.inner()).await;
     Ok(())
@@ -586,9 +1043,8 @@ pub async fn set_volume(
     state: SharedState<'_>,
 ) -> Result<(), String> {
     {
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         guard.player.set_volume(volume);
-        guard.playback.set_volume(volume);
     }
     emit_playback_state(&app, state.inner()).await;
     Ok(())
@@ -601,9 +1057,8 @@ pub async fn set_muted(
     state: SharedState<'_>,
 ) -> Result<(), String> {
     {
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         guard.player.set_muted(muted);
-        guard.playback.set_muted(muted);
     }
     emit_playback_state(&app, state.inner()).await;
     Ok(())
@@ -666,6 +1121,64 @@ pub async fn get_eq_bands(
             gain_db: b.gain_db,
         })
         .collect())
+}
+
+// ─── Crossfade (Phase 3) ──────────────────────────────────────
+
+/// Configure the crossfade. `seconds` is clamped on the Rust side
+/// to `[0, 12]` so a hostile or buggy caller can't schedule
+/// hour-long fades. The configuration is persisted via
+/// `library.set_preference` so the next launch restores it before
+/// the first track plays.
+#[tauri::command]
+pub async fn set_crossfade(
+    enabled: bool,
+    seconds: u32,
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    {
+        let guard = state.lock().await;
+        guard.player.set_crossfade(enabled, seconds);
+        guard
+            .library
+            .set_preference("playback.crossfade_enabled", if_enabled_str(enabled).as_deref())
+            .map_err(|e| format!("save crossfade_enabled: {e}"))?;
+        guard
+            .library
+            .set_preference("playback.crossfade_seconds", Some(&seconds.to_string()))
+            .map_err(|e| format!("save crossfade_seconds: {e}"))?;
+    }
+    let payload = {
+        let guard = state.lock().await;
+        let (e, s) = guard.player.crossfade_config();
+        PlaybackConfigPayload {
+            crossfade_enabled: e,
+            crossfade_seconds: s,
+        }
+    };
+    let _ = app.emit(EventName::PlaybackConfigChanged.as_str(), payload);
+    Ok(())
+}
+
+/// Snapshot the current crossfade configuration so the settings UI
+/// can hydrate its slider on mount. After this call returns the
+/// frontend can also subscribe to `playback-config-changed` for
+/// subsequent updates.
+#[tauri::command]
+pub async fn get_crossfade_config(
+    state: SharedState<'_>,
+) -> Result<PlaybackConfigPayload, String> {
+    let guard = state.lock().await;
+    let (enabled, seconds) = guard.player.crossfade_config();
+    Ok(PlaybackConfigPayload {
+        crossfade_enabled: enabled,
+        crossfade_seconds: seconds,
+    })
+}
+
+fn if_enabled_str(enabled: bool) -> Option<String> {
+    Some(if enabled { "true".to_string() } else { "false".to_string() })
 }
 
 // ─── Queue bulk mutations (Phase 9) ─────────────────────────────
@@ -1072,6 +1585,7 @@ pub async fn jellyfin_login(
         let provider: Arc<dyn MusicProvider> = Arc::new(provider);
         *guard.provider.lock().await = Some(provider);
     }
+    queue_anchor::anchor_to_server_after_unlock(&state, &success.server_id).await;
 
     Ok(ConnectedServer {
         server_id: success.server_id.to_string(),
@@ -1139,6 +1653,7 @@ pub async fn subsonic_login(
         let provider: Arc<dyn MusicProvider> = Arc::new(provider);
         *guard.provider.lock().await = Some(provider);
     }
+    queue_anchor::anchor_to_server_after_unlock(&state, &success.server_id).await;
 
     Ok(ConnectedServer {
         server_id: success.server_id.to_string(),
@@ -1200,9 +1715,8 @@ pub async fn local_login(
     // Stop any currently-playing audio — the stream URI of the old
     // provider will stop resolving after we swap providers.
     {
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         guard.player.stop();
-        guard.playback.stop();
     }
 
     // Phase 2: walk the directory tree and read metadata tags. This
@@ -1265,6 +1779,13 @@ pub async fn local_login(
             .library
             .replace_tracks(&server_id, &snapshot.tracks)
             .map_err(|e| format!("upsert tracks: {e}"))?;
+        // Jellyfin doesn't expose a per-artist track count; rebuild it
+        // from the freshly-cached tracks so the Artists view shows a
+        // real number instead of `0`.
+        guard
+            .library
+            .recompute_artist_track_counts(&server_id)
+            .map_err(|e| format!("recompute artist track counts: {e}"))?;
 
         // Persist the embedded album art to the filesystem cache so it
         // survives app restarts and can be served without re-reading
@@ -1305,6 +1826,7 @@ pub async fn local_login(
         let provider: Arc<dyn MusicProvider> = Arc::new(provider);
         *guard.provider.lock().await = Some(provider);
     }
+    queue_anchor::anchor_to_server_after_unlock(&state, &server_id).await;
 
     // Phase 4: hand off to the same `provider_sync_library` flow the
     // remote providers use so the UI sees a single "complete" event
@@ -1383,12 +1905,6 @@ pub async fn provider_logout(
             .as_ref()
             .map(|p| p.identity().server_id.clone());
         *guard.provider.lock().await = None;
-        guard.player.stop();
-        guard.playback.stop();
-        // The queue tracks from the previous provider would never
-        // resolve against the next one — clear it so the UI doesn't
-        // show ghost entries from a session that just ended.
-        guard.queue.clear();
         (server_id, guard.secrets.clone())
     };
     if let Some(server_id) = server_id_opt {
@@ -1401,7 +1917,7 @@ pub async fn provider_logout(
     }
     // Notify the frontend so the QueuePanel / PlayerBar clear out
     // without waiting for the next user action.
-    emit_queue_changed(&app, state.inner()).await;
+    provider_helpers::teardown_active_provider(&app, state.inner()).await;
     Ok(())
 }
 
@@ -1558,15 +2074,13 @@ pub async fn provider_set_active(
 
     // Stop any audio currently being decoded under the previous
     // provider — its stream URL will stop resolving after the swap.
-    // The queue is cleared too: track ids from the previous provider
-    // would never resolve against the next one, and the UI should
-    // not keep showing ghost entries from a session that's gone.
+    // The queue is cleared by `teardown_active_provider` below (so
+    // the `persist_guard` can also block the empty snapshot from
+    // clobbering the previous server's persisted history).
     {
         tracing::debug!(target: "sinfonic::commands", "stopping playback and swapping provider");
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         guard.player.stop();
-        guard.playback.stop();
-        guard.queue.clear();
         *guard.provider.lock().await = Some(provider.clone());
         tracing::debug!(target: "sinfonic::commands", "provider swapped; persisting last_active_server_id");
         // Persist the pointer so the next launch can restore us.
@@ -1579,8 +2093,12 @@ pub async fn provider_set_active(
     // Tell the frontend about the cleared queue / playback state so
     // the QueuePanel and PlayerBar update immediately rather than
     // waiting for the next user action.
-    emit_queue_changed(&app, state.inner()).await;
-    emit_playback_state(&app, state.inner()).await;
+    provider_helpers::teardown_active_provider(&app, state.inner()).await;
+
+    // Anchor the queue to the newly active server. This loads the
+    // target server's persisted history (if any); if none exists the
+    // queue stays empty until the user plays something.
+    queue_anchor::anchor_to_server_after_unlock(&state, &parsed).await;
 
     tracing::debug!(target: "sinfonic::commands", "provider_set_active succeeded");
     Ok(ConnectedServer {
@@ -1711,7 +2229,13 @@ pub async fn sync_library_data(
     library
         .replace_tracks(server_id, &tracks)
         .map_err(|e| format!("upsert tracks: {e}"))?;
-    tracing::debug!(target: "sinfonic::sync", "tracks written");
+    // Jellyfin's `MusicArtist` DTO doesn't include a per-artist track
+    // count, so its mapper hardcodes 0. Rebuild from the cached
+    // tracks table so the Artists view shows the real number.
+    library
+        .recompute_artist_track_counts(server_id)
+        .map_err(|e| format!("recompute artist track counts: {e}"))?;
+    tracing::debug!(target: "sinfonic::sync", "tracks written; artist counts recomputed");
 
     tracing::info!(target: "sinfonic::sync", "fetching playlists");
     let playlists = fetch_all_pages(PAGE_SIZE, |offset| async move {
@@ -1850,11 +2374,6 @@ pub async fn provider_delete(
         tracing::debug!(target: "sinfonic::commands", "deleted server was active; clearing provider");
         let mut guard = state.lock().await;
         *guard.provider.lock().await = None;
-        guard.player.stop();
-        guard.playback.stop();
-        // Drop the queue too — same rationale as `provider_set_active`:
-        // ghost entries from a session that's gone shouldn't linger.
-        guard.queue.clear();
         let _ = guard.library.set_preference("last_active_server_id", None);
     }
 
@@ -1873,10 +2392,11 @@ pub async fn provider_delete(
     }
 
     // Mirror the in-memory clearing to the frontend so the QueuePanel
-    // and PlayerBar update immediately.
+    // and PlayerBar update immediately. Same teardown pipeline as
+    // provider_logout / provider_set_active — track ids from the
+    // previous provider would never resolve against the next one.
     if was_active {
-        emit_queue_changed(&app, state.inner()).await;
-        emit_playback_state(&app, state.inner()).await;
+        provider_helpers::teardown_active_provider(&app, state.inner()).await;
     }
 
     tracing::debug!(target: "sinfonic::commands", "provider_delete done");
@@ -2215,16 +2735,22 @@ fn guess_image_content_type(bytes: &[u8]) -> &'static str {
 
 // ─── Lyrics ──────────────────────────────────────────────────────
 
-/// Fetch lyrics for a track through the active provider.
+/// Fetch lyrics for a track, with provider-first / LRCLIB-fallback
+/// orchestration.
 ///
-/// Only Subsonic / Navidrome currently implement this — every other
-/// provider returns `ProviderError::Unsupported`, which surfaces as
-/// `None` to the frontend so the lyrics panel can render a "no
-/// lyrics" placeholder instead of an error toast.
+/// Lookup order:
+/// 1. The active music provider (Subsonic / Navidrome /
+///    Jellyfin / Local). Providers return `None` when they have no
+///    lyrics for the track; they return `Err(Unsupported)` when the
+///    provider doesn't ship lyrics at all (today that's Jellyfin —
+///    `/Audio/{Id}/Lyrics` is a separate phase).
+/// 2. **LRCLIB**, only when `allow_remote` is true. We look up the
+///    track in the local SQLite library cache, build a
+///    `(artist, title, album, duration)` query and ask LRCLIB.
 ///
-/// `allow_remote` is plumbed through for providers that offer a
-/// `&synced=maybe` option (Subsonic doesn't today, but the parameter
-/// keeps the door open without another IPC change later).
+/// Both layers swallow non-critical errors and return `Ok(None)`
+/// so the lyrics panel can render the "no lyrics" empty state
+/// instead of surfacing toasts every time the user skips a track.
 #[tauri::command]
 pub async fn get_lyrics(
     track_id: String,
@@ -2233,17 +2759,99 @@ pub async fn get_lyrics(
 ) -> Result<Option<Lyrics>, String> {
     let parsed = TrackId::from(track_id.as_str());
     let allow_remote = allow_remote.unwrap_or(true);
-
-    let guard = state.lock().await;
-    let provider_guard = guard.provider.lock().await;
-    let provider = match provider_guard.as_ref() {
-        Some(p) => p,
-        None => return Ok(None),
+    let (provider, lyrics_client, library, server_id) = {
+        let guard = state.lock().await;
+        let server_id = active_server_id(&state).await;
+        let provider = guard.provider.lock().await.clone();
+        // Drop the outer mutex guard and the inner provider guard
+        // explicitly so the locks are released before the LRCLIB
+        // round-trip — we don't want to wedge every other Tauri
+        // command on a 5 s network call.
+        (
+            provider,
+            guard.lyrics_client.clone(),
+            guard.library.clone(),
+            server_id,
+        )
     };
-    provider
-        .lyrics(&parsed, allow_remote)
-        .await
-        .map_err(|e| format!("lyrics: {e}"))
+    lookup_lyrics(
+        provider,
+        lyrics_client,
+        &library,
+        server_id,
+        &parsed,
+        allow_remote,
+    )
+    .await
+}
+
+/// Pure orchestration step that the `get_lyrics` Tauri command
+/// delegates to. Lives as a free function so integration tests can
+/// exercise it without spinning up a Tauri runtime.
+pub async fn lookup_lyrics(
+    provider: Option<Arc<dyn MusicProvider>>,
+    lyrics_client: Arc<sinfonic_lyrics::LrclibClient>,
+    library: &sinfonic_library::Store,
+    server_id: ServerId,
+    track_id: &TrackId,
+    allow_remote: bool,
+) -> Result<Option<Lyrics>, String> {
+    // Layer 1 — active provider.
+    if let Some(provider) = provider {
+        match provider.lyrics(track_id, allow_remote).await {
+            Ok(Some(lyrics)) => return Ok(Some(lyrics)),
+            Ok(None) => {}
+            // Providers that don't ship lyrics treat the question
+            // as out-of-scope, not an error — fall through to
+            // LRCLIB instead of bubbling a toast.
+            Err(sinfonic_source::ProviderError::Unsupported(_)) => {}
+            Err(e) => return Err(format!("lyrics: {e}")),
+        }
+    }
+
+    if !allow_remote {
+        return Ok(None);
+    }
+
+    // Layer 2 — LRCLIB. Need (artist, title, album, duration), so
+    // look the track up in the local SQLite cache first.
+    let track = match library.get_track(&server_id, track_id) {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            tracing::trace!(track_id = %track_id, "lrclib: track not in library");
+            return Ok(None);
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "lrclib: library lookup failed");
+            return Ok(None);
+        }
+    };
+    let query = sinfonic_lyrics::LyricsQuery {
+        artist: &track.artist,
+        title: &track.title,
+        album: Some(&track.album),
+        duration_seconds: Some(track.duration_seconds),
+    };
+    match lyrics_client.fetch(&query).await {
+        Ok(Some(hit)) if hit.instrumental => Ok(Some(Lyrics {
+            plain: None,
+            synced: None,
+            source: Some("lrclib-instrumental".to_string()),
+        })),
+        Ok(Some(hit)) => Ok(Some(Lyrics {
+            plain: hit.plain,
+            synced: hit.synced,
+            source: Some("lrclib".to_string()),
+        })),
+        Ok(None) => Ok(None),
+        Err(e) => {
+            // Network down or LRCLIB returned a malformed body —
+            // either way the user deserves the "no lyrics" empty
+            // state, not an error toast.
+            tracing::warn!(error = %e, track_id = %track_id, "lrclib fetch failed");
+            Ok(None)
+        }
+    }
 }
 
 // ─── Last.fm (Phase 7) ─────────────────────────────────────────
@@ -2330,14 +2938,78 @@ pub async fn try_resume_lastfm(state: &AppState) {
     let _ = lastfm::try_resume(secrets.as_ref(), slot.as_ref()).await;
 }
 
-/// Restore the provider that was active when the app last shut down.
-/// Reads the `last_active_server_id` preference and rebuilds the
-/// matching provider from the keyring / SQLite root path.
-///
-/// Failures are logged and dropped: a stale pointer (server deleted,
-/// keyring entry gone, root directory moved) should land the user on
-/// the setup view, not on a crash screen.
-pub async fn try_restore_provider(state: &Arc<Mutex<AppState>>, app: &tauri::AppHandle) {
+/// Anchor + restore helper. Centralises the "set queue.server_id
+    /// and apply the persisted snapshot" dance so every login path
+    /// (startup restore, manual login, switch server) behaves the
+    /// same way.
+    mod queue_anchor {
+        use super::*;
+
+        /// Anchors the in-memory queue to `server_id` and, if a
+        /// persisted snapshot exists for that server, rebuilds the
+        /// queue from it (history only — the upcoming portion is
+        /// truncated per product decision). The audio player is NOT
+        /// auto-started; the user has to press Play. Takes an
+        /// already-locked guard so it composes with
+        /// `try_restore_provider` (which is already holding the
+        /// lock at the call site).
+        pub(super) async fn anchor_to_server(
+            state_ref: &mut tokio::sync::MutexGuard<'_, AppState>,
+            server_id: &ServerId,
+        ) {
+            state_ref.queue.set_server_id(server_id.clone());
+            let snapshot = state_ref
+                .library
+                .load_queue_snapshot(server_id)
+                .ok()
+                .flatten();
+            match snapshot {
+                Some(snap) => {
+                    let mut restored = sinfonic_domain::queue::QueueEngine::from_snapshot(snap);
+                    let keep_until = restored.current_index().map(|i| i + 1).unwrap_or(0);
+                    restored.truncate_after(keep_until);
+                    restored.set_server_id(server_id.clone());
+                    tracing::info!(
+                        target: "sinfonic::commands",
+                        server_id = %server_id,
+                        history_entries = restored.len(),
+                        current_index = ?restored.current_index(),
+                        "restored queue history from disk"
+                    );
+                    state_ref.queue = restored;
+                }
+                None => {
+                    tracing::debug!(
+                        target: "sinfonic::commands",
+                        server_id = %server_id,
+                        "no persisted queue snapshot; starting fresh"
+                    );
+                }
+            }
+        }
+
+        /// Same as [`anchor_to_server`] but takes the `Arc<Mutex<…>>`
+        /// directly and acquires the lock internally. Used by the
+        /// login commands which release the lock between the
+        /// provider install and the queue anchor step (so the
+        /// `anchor_to_server` borrow doesn't fight a held lock).
+        pub(super) async fn anchor_to_server_after_unlock(
+            state: &Arc<Mutex<AppState>>,
+            server_id: &ServerId,
+        ) {
+            let mut guard = state.lock().await;
+            anchor_to_server(&mut guard, server_id).await;
+        }
+    }
+
+    /// Restore the provider that was active when the app last shut down.
+    /// Reads the `last_active_server_id` preference and rebuilds the
+    /// matching provider from the keyring / SQLite root path.
+    ///
+    /// Failures are logged and dropped: a stale pointer (server deleted,
+    /// keyring entry gone, root directory moved) should land the user on
+    /// the setup view, not on a crash screen.
+    pub async fn try_restore_provider(state: &Arc<Mutex<AppState>>, app: &tauri::AppHandle) {
     use std::sync::atomic::Ordering;
 
     tracing::debug!(target: "sinfonic::commands", "try_restore_provider starting");
@@ -2452,8 +3124,12 @@ pub async fn try_restore_provider(state: &Arc<Mutex<AppState>>, app: &tauri::App
             return Ok(());
         };
         tracing::debug!(target: "sinfonic::commands", "provider built; installing as active");
-        let state_ref = state.lock().await;
+        let mut state_ref = state.lock().await;
         *state_ref.provider.lock().await = Some(provider);
+        // Re-anchor the queue to the restored server and load the
+        // persisted snapshot (history only — the upcoming portion is
+        // truncated on restore per product decision).
+        queue_anchor::anchor_to_server(&mut state_ref, &parsed).await;
         tracing::info!(target: "sinfonic::commands", "try_restore_provider succeeded");
         Ok(())
     }
@@ -2597,49 +3273,12 @@ pub async fn advance_queue_on_end(state: &Arc<Mutex<AppState>>, app: &tauri::App
 
     match action {
         AdvanceAction::Play(entry) => {
-            let stream_uri = {
-                let guard = state.lock().await;
-                let provider_guard = guard.provider.lock().await;
-                let provider = provider_guard.as_ref();
-                match provider {
-                    Some(provider) => provider
-                        .stream(&entry.track_id)
-                        .await
-                        .ok()
-                        .map(|d| d.uri().to_string()),
-                    None => None,
-                }
-            };
-            let duration_seconds = match stream_uri.as_deref() {
-                Some(uri) => {
-                    let guard = state.lock().await;
-                    match guard.player.play(entry.track_id.clone(), uri).await {
-                        Ok(d) => d,
-                        Err(e) => {
-                            tracing::warn!(
-                                target: "sinfonic::playback",
-                                error = %e,
-                                "auto-advance player.play failed"
-                            );
-                            entry.duration_seconds
-                        }
-                    }
-                }
-                None => entry.duration_seconds,
-            };
-            {
-                let mut guard = state.lock().await;
-                guard.playback.start(duration_seconds);
-            }
-            emit_queue_changed(app, state).await;
-            emit_track_changed_from_entry(app, &entry);
-            emit_playback_state(app, state).await;
+            playback_helpers::play_entry_from_queue_entry(app, state, entry).await;
         }
         AdvanceAction::Stop => {
             {
-                let mut guard = state.lock().await;
+                let guard = state.lock().await;
                 guard.player.stop();
-                guard.playback.stop();
             }
             emit_queue_changed(app, state).await;
             emit_playback_state(app, state).await;
@@ -2650,16 +3289,23 @@ pub async fn advance_queue_on_end(state: &Arc<Mutex<AppState>>, app: &tauri::App
 async fn emit_playback_state(app: &tauri::AppHandle, state: &Arc<Mutex<AppState>>) {
     let payload = {
         let guard = state.lock().await;
-        PlaybackStatePayload::from_state(&guard.playback, &guard.queue)
+        PlaybackStatePayload::from_state(&guard.player.cached_state(), &guard.queue)
     };
     let _ = app.emit(EventName::PlaybackStateChanged.as_str(), payload);
 }
 
 async fn emit_queue_changed(app: &tauri::AppHandle, state: &Arc<Mutex<AppState>>) {
-    let payload = {
+    // Build the payload AND compute the play-context "remaining"
+    // counter inside the same lock so the snapshot we persist
+    // matches the snapshot we emit. The library handle is borrowed
+    // from inside the guard; persisting happens after the lock is
+    // released (rusqlite is sync and may block on the pool).
+    let (payload, snap_to_persist) = {
         let guard = state.lock().await;
         let snap = guard.queue.snapshot();
-        QueueSnapshotPayload {
+        let remaining = persist_helpers::context_remaining(&guard.library, &snap);
+        let payload = QueueSnapshotPayload {
+            server_id: snap.server_id.as_ref().map(|s| s.as_str().to_string()),
             entries: snap
                 .entries
                 .iter()
@@ -2675,9 +3321,21 @@ async fn emit_queue_changed(app: &tauri::AppHandle, state: &Arc<Mutex<AppState>>
             current_index: snap.current_index,
             repeat: snap.repeat,
             shuffle: snap.shuffle,
-        }
+            // Number of additional tracks available from the play
+            // context, if any. The frontend uses this for the "+N
+            // más" affordance in the QueuePanel. Computed from the
+            // library cache + context so we don't have to ship the
+            // whole track list over the wire.
+            context_remaining: remaining,
+        };
+        (payload, snap)
     };
     let _ = app.emit(EventName::QueueChanged.as_str(), payload);
+    // Persist the snapshot to disk after the event is emitted so a
+    // crash between emit and persist doesn't leave the UI ahead of
+    // the on-disk state. Failures are logged and dropped — the
+    // in-memory queue is still authoritative until the next launch.
+    persist_helpers::persist_queue(state, snap_to_persist).await;
 }
 
 async fn emit_track_changed(
@@ -2710,8 +3368,177 @@ fn emit_track_changed_from_entry(
 
 // Kept for future use by the player when the resolved track differs
 // from the queue entry (e.g., the entry was restored without metadata).
-#[allow(dead_code)]
-fn _ensure_track_id_used(_: TrackId) {}
+
+mod persist_helpers {
+    //! Cross-session queue snapshot persistence.
+    //!
+    //! Two helpers live here so `emit_queue_changed` doesn't grow
+    //! another 30 lines of inline plumbing:
+    //!
+    //! - [`persist_queue`] writes the current `QueueSnapshot` to the
+    //!   `queue_snapshots` table, scoped by the queue's `server_id`.
+    //!   No-op when:
+    //!     - the queue has no server anchor (just logged out / about
+    //!       to log in),
+    //!     - `persist_guard` is set (active during
+    //!       `teardown_active_provider` so a teardown doesn't wipe
+    //!       the previous server's snapshot with an empty queue).
+    //!   Failures are logged and dropped; the in-memory queue is
+    //!   still authoritative until the next launch.
+    //!
+    //! - [`context_remaining`] resolves how many additional tracks
+    //!   the user could pull from the active `PlayContext` (album /
+    //!   playlist / favourites) minus the ones already in the queue.
+    //!   Powers the QueuePanel "+N más" affordance.
+
+    use std::sync::atomic::Ordering;
+
+    use sinfonic_domain::{PlayContext, QueueSnapshot, ServerId, TrackId};
+
+    use super::*;
+
+    pub(super) async fn persist_queue(
+        state: &Arc<Mutex<AppState>>,
+        snapshot: QueueSnapshot,
+    ) {
+        let (server_id, library) = {
+            let guard = state.lock().await;
+            if guard.persist_guard.load(Ordering::Acquire) {
+                return;
+            }
+            let Some(server_id) = guard.queue.server_id().cloned() else {
+                return;
+            };
+            (server_id, guard.library.clone())
+        };
+        if let Err(e) = library.save_queue_snapshot(&server_id, &snapshot) {
+            tracing::warn!(
+                target: "sinfonic::commands",
+                error = %e,
+                server_id = %server_id,
+                "queue snapshot persist failed"
+            );
+        }
+    }
+
+    pub(super) fn context_remaining(
+        library: &sinfonic_library::Store,
+        snapshot: &QueueSnapshot,
+    ) -> Option<u32> {
+        let context = snapshot.last_context.as_ref()?;
+        let server_id = context_server_id(context, snapshot)?;
+        match context {
+            PlayContext::Album { album_id } => {
+                let all = library
+                    .list_album_tracks(&server_id, album_id)
+                    .ok()
+                    .unwrap_or_default();
+                let already_in_queue: std::collections::HashSet<&TrackId> = snapshot
+                    .entries
+                    .iter()
+                    .map(|e| &e.track_id)
+                    .collect();
+                let remaining = all
+                    .iter()
+                    .filter(|t| !already_in_queue.contains(&t.id))
+                    .count();
+                Some(remaining as u32)
+            }
+            PlayContext::Playlist { playlist_id, .. } => {
+                let track_ids = library
+                    .list_playlist_tracks(&server_id, playlist_id)
+                    .ok()
+                    .unwrap_or_default();
+                let already_in_queue: std::collections::HashSet<&str> = snapshot
+                    .entries
+                    .iter()
+                    .map(|e| e.track_id.as_str())
+                    .collect();
+                let remaining = track_ids
+                    .iter()
+                    .filter(|id| !already_in_queue.contains(id.as_str()))
+                    .count();
+                Some(remaining as u32)
+            }
+            PlayContext::Favorites { .. } => {
+                let (tracks, _, _) = library
+                    .get_favorites(&server_id)
+                    .ok()
+                    .unwrap_or_default();
+                let already_in_queue: std::collections::HashSet<&TrackId> = snapshot
+                    .entries
+                    .iter()
+                    .map(|e| &e.track_id)
+                    .collect();
+                let remaining = tracks
+                    .iter()
+                    .filter(|t| !already_in_queue.contains(&t.id))
+                    .count();
+                Some(remaining as u32)
+            }
+            PlayContext::All { .. } => {
+                // Count tracks after the current one in title-ascending
+                // order, skipping duplicates already in the queue.
+                // Paginates up to MAX_PAGES to keep the count bounded.
+                let already: std::collections::HashSet<&str> = snapshot
+                    .entries
+                    .iter()
+                    .map(|e| e.track_id.as_str())
+                    .collect();
+                let current_id = snapshot
+                    .entries
+                    .get(snapshot.current_index?)
+                    .map(|e| e.track_id.as_str());
+
+                const PAGE_SIZE: usize = 500;
+                const MAX_PAGES: usize = 50;
+                let mut offset: usize = 0;
+                let mut found_current = current_id.is_none();
+                let mut count: u32 = 0;
+                let mut pages_read: usize = 0;
+
+                while pages_read < MAX_PAGES {
+                    pages_read += 1;
+                    let page = match library.list_tracks(&server_id, offset, PAGE_SIZE) {
+                        Ok(p) => p,
+                        Err(_) => break,
+                    };
+                    let page_len = page.items.len();
+                    if page_len == 0 {
+                        break;
+                    }
+                    for track in page.items {
+                        if !found_current {
+                            if Some(track.id.as_str()) == current_id {
+                                found_current = true;
+                            }
+                        } else if !already.contains(track.id.as_str()) {
+                            count += 1;
+                        }
+                    }
+                    if page_len < PAGE_SIZE {
+                        break;
+                    }
+                    offset += page_len;
+                }
+                Some(count)
+            }
+        }
+    }
+
+    /// Resolve the `ServerId` for a context. For Album, the album
+    /// could live under different servers in theory; we use the
+    /// queue's current server anchor as the lookup key. For
+    /// Playlist and Favorites the context carries the id explicitly.
+    fn context_server_id(context: &PlayContext, snapshot: &QueueSnapshot) -> Option<ServerId> {
+        match context {
+            PlayContext::Album { .. } => snapshot.server_id.clone(),
+            PlayContext::Playlist { server_id, .. }
+            | PlayContext::Favorites { server_id }
+            | PlayContext::All { server_id } => Some(server_id.clone()),
+        }
+    }
+}
 
 /// Open the settings window. Idempotent — if the window is already open,
 /// this brings it to the foreground instead of creating a duplicate.

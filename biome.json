@@ -47,7 +47,7 @@
       },
       "suspicious": {
         "noExplicitAny": "error",
-        "noConsole": { "level": "warn", "options": { "allow": ["warn", "error"] } },
+        "noConsole": { "level": "warn", "options": { "allow": ["warn", "error", "log"] } },
         "noAsyncPromiseExecutor": "error",
         "noArrayIndexKey": "off",
         "useIterableCallbackReturn": "off",

@@ -29,6 +29,11 @@ pub enum EventName {
     /// frontend may surface this as a progress bar; missing listeners
     /// are harmless (the emit is fire-and-forget).
     SyncProgress,
+    /// Crossfade configuration changed (toggle or duration slider).
+    /// The settings UI listens so the slider stays in sync after
+    /// the user touches it from elsewhere (or after a remote update
+    /// from the restore-on-launch path).
+    PlaybackConfigChanged,
 }
 
 impl EventName {
@@ -39,6 +44,7 @@ impl EventName {
             Self::TrackChanged => "track-changed",
             Self::LibrarySyncStatus => "library-sync-status",
             Self::SyncProgress => "sync-progress",
+            Self::PlaybackConfigChanged => "playback-config-changed",
         }
     }
 }
@@ -90,13 +96,26 @@ impl PlaybackStatePayload {
 }
 
 /// Payload for `queue-changed`.
+///
+/// Mirrors the durable queue state minus the engine's internal seed
+/// (consumers don't need to re-shuffle to the same order — the
+/// `entries` array is already in display order). `server_id` is
+/// included so the frontend's `useQueueStore.serverId` stays in
+/// sync with the active provider, which the old payload silently
+/// dropped on every emit. `context_remaining` powers the QueuePanel
+/// "+N más" affordance — it's the count of additional tracks the
+/// user could pull from the active play context (album / playlist /
+/// favourites) that aren't already in `entries`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueSnapshotPayload {
+    pub server_id: Option<String>,
     pub entries: Vec<QueueEntryView>,
     pub current_index: Option<usize>,
     pub repeat: RepeatMode,
     pub shuffle: bool,
+    #[serde(default)]
+    pub context_remaining: Option<u32>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -141,4 +160,16 @@ pub struct SyncProgressPayload {
     pub phase: String,
     pub done: usize,
     pub total: usize,
+}
+
+/// Payload for `playback-config-changed`.
+///
+/// Mirrors `AudioPlayer::crossfade_config`. The frontend listens to
+/// keep the settings slider in sync with the durable Rust state
+/// (which is restored from disk during `lib.rs::setup`).
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybackConfigPayload {
+    pub crossfade_enabled: bool,
+    pub crossfade_seconds: u32,
 }

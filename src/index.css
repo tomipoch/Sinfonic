@@ -84,7 +84,7 @@
     width: 14px;
     height: 14px;
     border-radius: 9999px;
-    background: var(--primary);
+    background: var(--muted-foreground);
     border: 2px solid var(--card);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
     cursor: pointer;
@@ -96,7 +96,7 @@
     width: 14px;
     height: 14px;
     border-radius: 9999px;
-    background: var(--primary);
+    background: var(--muted-foreground);
     border: 2px solid var(--card);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
     cursor: pointer;
@@ -110,6 +110,74 @@
   .player-range:focus-visible::-moz-range-thumb,
   .player-range-wave:focus-visible::-moz-range-thumb {
     box-shadow: 0 0 0 2px var(--ring);
+  }
+
+  /* Form controls. The .input class is shared by SmartPlaylistsView
+     and any future forms. The .select variant renders the native
+     dropdown indicator via SVG mask so it inherits the foreground
+     color from the theme. */
+  .input {
+    @apply h-9 w-full rounded-md border border-border bg-muted px-3 text-sm text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .select {
+    @apply input appearance-none bg-[length:1rem_1rem] bg-[right_0.5rem_center] bg-no-repeat pr-8;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%23a1a1aa'><path d='M5.23 7.21a.75.75 0 011.06.02L10 11.06l3.71-3.83a.75.75 0 111.08 1.04l-4.25 4.39a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z'/></svg>");
+  }
+
+  /* Form label, paired above every <input>/<select>. */
+  .label {
+    @apply mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted-foreground;
+  }
+}
+
+/* ─── Marquee (hover-triggered overflow scroll) ─────────────────── */
+
+/* The container clips overflow; the inner span scrolls
+   horizontally via CSS animation only when the parent
+   .marquee triggers hover/focus. Respects prefers-reduced-motion. */
+.marquee {
+  @apply relative block overflow-hidden;
+}
+
+.marquee__track {
+  @apply inline-block whitespace-nowrap;
+  will-change: transform;
+}
+
+.marquee:hover .marquee__track,
+.marquee:focus-within .marquee__track {
+  animation-name: marquee-scroll;
+  animation-duration: var(--marquee-duration, 12s);
+  animation-timing-function: linear;
+  animation-iteration-count: 1;
+  animation-fill-mode: forwards;
+}
+
+@keyframes marquee-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(-1 * var(--marquee-shift, 0px)));
+  }
+}
+
+/* Respect the user's motion preference across the PlayerBar and
+   the marquee: no scale-on-hover, no clip-path transitions, no
+   fading popovers, no scrolling marquee. Animations stay instant
+   rather than disappearing completely so the layout doesn't jump. */
+@media (prefers-reduced-motion: reduce) {
+  .marquee:hover .marquee__track,
+  .marquee:focus-within .marquee__track {
+    animation: none !important;
+  }
+
+  .player-range,
+  .player-range-wave,
+  .group:hover .group-hover\:scale-\[1\.02\] {
+    transition: none !important;
+    transform: none !important;
   }
 }
 
