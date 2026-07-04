@@ -58,7 +58,14 @@ export function useAlbumArtPrewarm(): void {
     // already in the store, and a fire-and-forget fetch for those
     // that aren't — we collect their ids and wait one tick before
     // firing the byte fetch.
-    const trackSample = tracks.slice(0, 96);
+    //
+    // Phase 4 of feature/direct-fetch-providers: bumped the sample
+    // from 96 → 128 to cover more of the visible tracks. Most
+    // libraries have well under 128 unique parent albums per
+    // page, so the bulk fetch stays a single round-trip; when it
+    // overflows the FS cache is still a single hit per image on
+    // the next prewarm tick.
+    const trackSample = tracks.slice(0, 128);
     const pendingAlbumIds: string[] = [];
     for (const track of trackSample) {
       if (track.imageRef?.itemId) {
