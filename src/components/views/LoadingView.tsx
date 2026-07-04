@@ -76,13 +76,26 @@ export function LoadingView() {
             // skip the redundant `syncLibrary` call here.
             await login({ kind: "local", path: pending.path });
           } else if (pending.kind === "jellyfin") {
+            // Phase 2 of feature/direct-fetch-providers: post-login
+            // sync is no longer required for the UI to render.
+            // Each view now hits the provider directly via the
+            // provider_list_* / provider_*_detail commands, so the
+            // first HTTP response fills the page. The user lands
+            // on the home view in well under a second.
+            //
+            // The full sync (artist track counts, FTS5 search,
+            // background track cache for Subsonic /songs) still
+            // runs on demand from Settings; Phase 3 takes care of
+            // running the Subsonic one in the background.
             await login({
               kind: "jellyfin",
               baseUrl: pending.baseUrl,
               username: pending.username,
               password: pending.password,
             });
-            await syncLibrary();
+            log.log("jellyfin login complete, navigating to /");
+            navigate("/", { replace: true });
+            return;
           } else {
             await login({
               kind: "subsonic",
@@ -90,7 +103,9 @@ export function LoadingView() {
               username: pending.username,
               password: pending.password,
             });
-            await syncLibrary();
+            log.log("subsonic login complete, navigating to /");
+            navigate("/", { replace: true });
+            return;
           }
         } else if (activeServerId) {
           // Manual sync / Quick Connect / server switch: the
@@ -184,7 +199,11 @@ export function LoadingView() {
           </div>
           <p className="max-w-prose text-sm text-muted-foreground">
             {activeServer
-              ? `Connected to ${activeServer.name}. Caching your library so the home view can render without lag.`
+              ? `Connected to ${activeServer.name}. ${
+                  kind === "local"
+                    ? "Scanning your music folder so the home view can render without lag."
+                    : "Opening the home view — your library loads progressively as views fetch what they need."
+                }`
               : "Caching your library so the home view can render without lag."}
           </p>
         </header>
