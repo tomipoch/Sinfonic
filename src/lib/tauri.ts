@@ -391,6 +391,17 @@ export const providerSetActive = (serverId: string) =>
 /** Kick off a full library rescan. Listen for `library-sync-status` events for progress. */
 export const providerSyncLibrary = () => invoke<void>("provider_sync_library");
 
+/**
+ * Phase 3 of feature/direct-fetch-providers: fire-and-forget kick
+ * of the Subsonic album-tracks background sync. The backend
+ * fans out `getAlbum` for every album on the server and writes
+ * the resulting tracks into the SQLite cache so subsequent
+ * `provider_list_tracks` calls are instant reads. Idempotent —
+ * re-entry while one is already running is a no-op.
+ */
+export const kickSubsonicBackgroundSync = () =>
+  invoke<void>("kick_subsonic_background_sync");
+
 // ─── Local files ─────────────────────────────────────────────
 
 /** Result of a local folder scan. Counts are the totals the backend found. */

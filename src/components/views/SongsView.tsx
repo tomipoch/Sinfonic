@@ -16,6 +16,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { SubsonicSyncIndicator } from "@/components/layout/SubsonicSyncIndicator";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Pagination } from "@/components/ui/Pagination";
 import { PlayGlyph } from "@/components/ui/PlayGlyph";
@@ -135,9 +136,10 @@ export function SongsView() {
 
   if (loading && items.length === 0 && total === 0) {
     return (
-      <p className="text-sm text-muted-foreground" role="status">
-        Loading songs…
-      </p>
+      <div className="flex flex-col gap-4" role="status">
+        <SubsonicSyncIndicator />
+        <p className="text-sm text-muted-foreground">Loading songs…</p>
+      </div>
     );
   }
 
