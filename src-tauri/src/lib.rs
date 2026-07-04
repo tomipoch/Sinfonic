@@ -223,6 +223,10 @@ pub fn run() {
             commands::provider_album_detail,
             commands::provider_artist_detail,
             commands::provider_playlist_detail,
+            // Phase 3 of feature/direct-fetch-providers: spawn the
+            // Subsonic album-tracks background sync. Idempotent —
+            // re-entry while one is running is a no-op.
+            commands::kick_subsonic_background_sync,
             commands::play_album,
             commands::play_album_with_context,
             // Playback (Phase 1 + Phase 4 audio)
