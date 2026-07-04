@@ -303,6 +303,22 @@ impl Store {
         Ok(())
     }
 
+    /// Batch-upsert albums in a single transaction. See
+    /// `upsert_tracks` for why this exists alongside `replace_albums`.
+    pub fn upsert_albums(&self, server_id: &ServerId, albums: &[Album]) -> LibraryResult<()> {
+        if albums.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.connection()?;
+        conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        let tx = conn.transaction()?;
+        for album in albums {
+            upsert_album(&tx, server_id, album)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn list_albums(
         &self,
         server_id: &ServerId,
@@ -388,6 +404,22 @@ impl Store {
         conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
         let tx = conn.transaction()?;
         upsert_artist(&tx, server_id, artist)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Batch-upsert artists in a single transaction. See
+    /// `upsert_tracks` for why this exists alongside `replace_artists`.
+    pub fn upsert_artists(&self, server_id: &ServerId, artists: &[Artist]) -> LibraryResult<()> {
+        if artists.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.connection()?;
+        conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        let tx = conn.transaction()?;
+        for artist in artists {
+            upsert_artist(&tx, server_id, artist)?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -487,6 +519,32 @@ impl Store {
         conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
         let tx = conn.transaction()?;
         upsert_track(&tx, server_id, track)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Batch-upsert tracks in a single transaction. Unlike
+    /// `replace_tracks`, this does NOT delete any tracks that
+    /// aren't in the input slice — it only inserts / updates.
+    /// Used by the Subsonic background sync (Phase 3 of
+    /// feature/direct-fetch-providers) which streams albums in
+    /// random order via a fan-out and can't safely diff against
+    /// the whole server's track list per-batch.
+    ///
+    /// Caller is responsible for ordering: if `tracks` reference
+    /// albums or artists that don't exist in the cache yet, the
+    /// FK constraint fails. The background sync upserts the
+    /// corresponding albums / artists first.
+    pub fn upsert_tracks(&self, server_id: &ServerId, tracks: &[Track]) -> LibraryResult<()> {
+        if tracks.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.connection()?;
+        conn.execute_batch("PRAGMA defer_foreign_keys = ON")?;
+        let tx = conn.transaction()?;
+        for track in tracks {
+            upsert_track(&tx, server_id, track)?;
+        }
         tx.commit()?;
         Ok(())
     }

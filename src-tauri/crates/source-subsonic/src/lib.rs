@@ -1176,8 +1176,8 @@ impl SubsonicProvider {
         on_error: E,
     ) -> ProviderResult<SyncAlbumStats>
     where
-        F: Fn(AlbumHint, Vec<Track>) + Send + Sync + 'static,
-        E: Fn(&AlbumHint, ProviderError) + Send + Sync + 'static,
+        F: Fn(Album, Vec<Track>) + Send + Sync + 'static,
+        E: Fn(&str, ProviderError) + Send + Sync + 'static,
     {
         let hints = self.collect_all_album_hints().await?;
         let total = hints.len();
@@ -1194,7 +1194,7 @@ impl SubsonicProvider {
                 let app_handle = app_handle.clone();
                 async move {
                     let auth = session.sign();
-                    let result: Result<Vec<Track>, ProviderError> = async {
+                    let result: Result<(Album, Vec<Track>), ProviderError> = async {
                         let resp: AlbumDetailPayload = client
                             .get_json(
                                 "rest/getAlbum",
@@ -1203,12 +1203,25 @@ impl SubsonicProvider {
                                 [("id", hint.id.clone())],
                             )
                             .await?;
-                        Ok(resp
+                        // `album_from_dto` always returns Some when
+                        // the dto has a non-empty id (we just fetched
+                        // it by id, so it must). Fall back to a
+                        // minimal stub if it somehow doesn't — the
+                        // track write will then fail FK and we'll
+                        // surface the error via the on_error path.
+                        let album = mapping::album_from_dto(&resp.album).ok_or_else(|| {
+                            ProviderError::Other(format!(
+                                "getAlbum returned no id for {}",
+                                hint.id
+                            ))
+                        })?;
+                        let tracks: Vec<Track> = resp
                             .album
                             .song
                             .iter()
                             .filter_map(mapping::track_from_child)
-                            .collect::<Vec<_>>())
+                            .collect();
+                        Ok((album, tracks))
                     }
                     .await;
                     let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
@@ -1233,13 +1246,13 @@ impl SubsonicProvider {
         let mut albums_failed = 0usize;
         for (hint, result) in collected.drain(..) {
             match result {
-                Ok(tracks) => {
+                Ok((album, tracks)) => {
                     tracks_total += tracks.len();
-                    on_batch(hint, tracks);
+                    on_batch(album, tracks);
                 }
                 Err(err) => {
                     albums_failed += 1;
-                    on_error(&hint, err);
+                    on_error(&hint.id, err);
                 }
             }
         }

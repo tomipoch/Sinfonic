@@ -642,11 +642,10 @@ async fn run_subsonic_background_sync(
     server_id: ServerId,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    // Track which albums we've written so the final 'complete'
-    // event can report the actual track count we landed. The
-    // counter lives in an Arc so the Fn callbacks in
-    // `sync_album_tracks` can bump it without holding a mutable
-    // borrow on the outer function frame.
+    // Track which tracks we've written so the final 'complete'
+    // event can report the actual count. Lives in an Arc so the
+    // Fn callbacks in `sync_album_tracks` can bump it without
+    // holding a mutable borrow on the outer function frame.
     let total_tracks_written = Arc::new(AtomicUsize::new(0));
     let server_id_arc = Arc::new(server_id);
 
@@ -656,23 +655,79 @@ async fn run_subsonic_background_sync(
                 let total = Arc::clone(&total_tracks_written);
                 let library = library.clone();
                 let server_id = Arc::clone(&server_id_arc);
-                move |_hint, tracks| {
+                move |album, tracks| {
                     if tracks.is_empty() {
                         return;
                     }
-                    if let Err(e) = library.replace_tracks(&server_id, &tracks) {
+                    // The SQLite schema requires:
+                    //   tracks.album_id  → albums.album_id
+                    //   tracks.artist_id → artists.artist_id (nullable)
+                    //   albums.artist_id → artists.artist_id (nullable)
+                    // Insert artists → album → tracks within each batch.
+                    //
+                    // Synthesise Artist rows from the album + track
+                    // payloads. Only `id` and `name` matter for FK
+                    // satisfaction; album_count / track_count are
+                    // recomputed separately by the manual sync path
+                    // and are not on the critical path here.
+                    let mut artist_seen: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    let mut artists_to_upsert: Vec<sinfonic_domain::Artist> = Vec::new();
+                    if let Some(aid) = album.artist_id.as_ref() {
+                        if artist_seen.insert(aid.as_str().to_string()) {
+                            artists_to_upsert.push(sinfonic_domain::Artist {
+                                id: aid.clone(),
+                                name: album.artist.clone(),
+                                album_count: 0,
+                                track_count: 0,
+                                favorite: false,
+                                image_ref: None,
+                            });
+                        }
+                    }
+                    for track in &tracks {
+                        if let Some(aid) = track.artist_id.as_ref() {
+                            if artist_seen.insert(aid.as_str().to_string()) {
+                                artists_to_upsert.push(sinfonic_domain::Artist {
+                                    id: aid.clone(),
+                                    name: track.artist.clone(),
+                                    album_count: 0,
+                                    track_count: 0,
+                                    favorite: false,
+                                    image_ref: None,
+                                });
+                            }
+                        }
+                    }
+                    if !artists_to_upsert.is_empty() {
+                        if let Err(e) =
+                            library.upsert_artists(&server_id, &artists_to_upsert)
+                        {
+                            eprintln!(
+                                "sinfonic::commands subsonic background sync: upsert_artists failed: {e}"
+                            );
+                            return;
+                        }
+                    }
+                    if let Err(e) = library.upsert_album(&server_id, &album) {
                         eprintln!(
-                            "sinfonic::commands subsonic background sync: replace_tracks failed: {e}"
+                            "sinfonic::commands subsonic background sync: upsert_album failed: {e}"
+                        );
+                        return;
+                    }
+                    if let Err(e) = library.upsert_tracks(&server_id, &tracks) {
+                        eprintln!(
+                            "sinfonic::commands subsonic background sync: upsert_tracks failed: {e}"
                         );
                         return;
                     }
                     total.fetch_add(tracks.len(), Ordering::Relaxed);
                 }
             },
-            |hint, err| {
+            |hint_id, err| {
                 eprintln!(
                     "sinfonic::commands subsonic background sync: album {} failed: {}",
-                    hint.id, err
+                    hint_id, err
                 );
             },
         )
