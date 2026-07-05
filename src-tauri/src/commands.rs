@@ -829,6 +829,26 @@ async fn run_subsonic_background_sync(
                         );
                         return;
                     }
+                    // Some Subsonic servers omit the `coverArt` field on
+                    // individual songs (only the album row carries it).
+                    // Promote the album's image_ref onto any track that
+                    // doesn't have one of its own so the round-trip
+                    // through SQLite gives every track a cover to
+                    // render. Phase 7 of feature/direct-fetch-providers.
+                    let album_image_ref = album.image_ref.clone();
+                    let tracks: Vec<sinfonic_domain::Track> = if album_image_ref.is_some() {
+                        tracks
+                            .into_iter()
+                            .map(|mut t| {
+                                if t.image_ref.is_none() {
+                                    t.image_ref = album_image_ref.clone();
+                                }
+                                t
+                            })
+                            .collect()
+                    } else {
+                        tracks
+                    };
                     if let Err(e) = library.upsert_tracks(&server_id, &tracks) {
                         eprintln!(
                             "sinfonic::commands subsonic background sync: upsert_tracks failed: {e}"
@@ -3141,15 +3161,16 @@ pub async fn provider_image_bytes(
 
     if let Some(cache) = cache_for_lookup.as_ref() {
         if let Ok(Some(hit)) = cache.get(&cache_key) {
-            let elapsed = started.elapsed().as_millis() as u64;
-            tracing::info!(
+            // Cache hits fire constantly once a view's prewarm has
+            // landed; logging every one drowns out the interesting
+            // misses. Keep the per-hit log at debug and only upgrade
+            // the rare slow case to info.
+            tracing::debug!(
                 target: "sinfonic::commands",
                 provider = %provider_id,
                 item_id = %album_id,
-                elapsed_ms = elapsed,
-                "provider_image_bytes CACHE HIT ({} bytes, {})",
-                hit.bytes.len(),
-                hit.content_type
+                bytes = hit.bytes.len(),
+                "provider_image_bytes CACHE HIT"
             );
             return Ok(AlbumArtResponse {
                 bytes: hit.bytes,
@@ -3188,17 +3209,35 @@ pub async fn provider_image_bytes(
     }
     let write_elapsed = write_elapsed.elapsed().as_millis() as u64;
     let elapsed = started.elapsed().as_millis() as u64;
-    tracing::info!(
-        target: "sinfonic::commands",
-        provider = %provider_id,
-        item_id = %album_id,
-        fetched_bytes = fetched.bytes.len(),
-        content_type = %content_type,
-        fetch_ms = fetch_elapsed,
-        write_ms = write_elapsed,
-        total_ms = elapsed,
-        "provider_image_bytes CACHE MISS (fetched + cached)"
-    );
+    // Throttle the log: a Subsonic prewarm fires hundreds of these
+    // in a few seconds; only the slow ones (>500 ms) and the first
+    // ten of any run land at info. The full bulk-end summary in
+    // `provider_image_bytes_bulk` reports the aggregate timing.
+    let miss_count = IMAGE_BYTES_MISS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    if fetch_elapsed > 500 || miss_count <= 10 {
+        tracing::info!(
+            target: "sinfonic::commands",
+            provider = %provider_id,
+            item_id = %album_id,
+            fetched_bytes = fetched.bytes.len(),
+            content_type = %content_type,
+            fetch_ms = fetch_elapsed,
+            write_ms = write_elapsed,
+            total_ms = elapsed,
+            miss_count,
+            "provider_image_bytes CACHE MISS (fetched + cached)"
+        );
+    } else {
+        tracing::debug!(
+            target: "sinfonic::commands",
+            provider = %provider_id,
+            item_id = %album_id,
+            fetch_ms = fetch_elapsed,
+            total_ms = elapsed,
+            miss_count,
+            "provider_image_bytes CACHE MISS (logged at debug to keep the console quiet)"
+        );
+    }
 
     Ok(AlbumArtResponse {
         bytes: fetched.bytes,
@@ -3206,6 +3245,12 @@ pub async fn provider_image_bytes(
         cached: false,
     })
 }
+
+/// Atomic counter used to throttle the per-call `provider_image_bytes`
+/// CACHE MISS log. Reset to 0 every time the bulk prewarm
+/// (`provider_image_bytes_bulk`) reports its summary so each
+/// prewarm run gets a fresh ten-info-budget.
+static IMAGE_BYTES_MISS_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Bulk version of `provider_image_bytes` for the JS-side album art
 /// prewarm. Each request is resolved against the on-disk cache first
@@ -3243,7 +3288,16 @@ pub async fn provider_image_bytes_bulk(
     requests: Vec<AlbumArtRequest>,
     state: SharedState<'_>,
 ) -> Result<AlbumArtBulkResponse, String> {
-    use futures::future::join_all;
+    use futures::stream::{self, StreamExt};
+
+    /// Cap on simultaneous in-flight Subsonic `getCoverArt` requests.
+    /// Phase 7 of feature/direct-fetch-providers: empirically the
+    /// Subsonic server single-threads cover transcoding, so firing
+    /// 200 requests in parallel just queues them server-side and the
+    /// first batch takes ~30 s. Six concurrent leaves headroom for
+    /// the audio stream's `getCoverArt` while still prefetching the
+    /// visible album art at a reasonable pace.
+    const BULK_IMAGE_CONCURRENCY: usize = 6;
 
     let started = Instant::now();
     let total = requests.len();
@@ -3304,41 +3358,25 @@ pub async fn provider_image_bytes_bulk(
     // Fetch misses in parallel from the provider. Each fetch goes
     // through the same `provider.image_bytes` path as the single
     // command, so write-through to the cache still happens.
-    let fetch_futures = misses.iter().map(|req| {
-        let req = req.clone();
-        let state = state.inner().clone();
-        async move {
-            let request = ImageRequest {
-                item_id: req.album_id.clone(),
-                kind: ImageKind::Primary,
-                tag: req.tag.clone(),
-                size: 600,
-            };
-            let guard = state.lock().await;
-            let provider_guard = guard.provider.lock().await;
-            let provider = provider_guard.as_ref()?;
-            let res = provider.image_bytes(request).await.ok()?;
-            let content_type = res
-                .content_type
-                .unwrap_or_else(|| guess_image_content_type(&res.bytes).to_string());
-            if let Some(ref cache) = guard.album_art {
-                let key = ImageCacheKey::new(
-                    provider.identity().provider_id.clone(),
-                    req.album_id.clone(),
-                    req.tag.clone().unwrap_or_default(),
-                );
-                let _ = cache.put(&key, &res.bytes, &content_type);
-            }
-            Some(AlbumArtBulkItem {
-                album_id: req.album_id.clone(),
-                tag: req.tag.clone(),
-                bytes: res.bytes,
-                content_type,
-                cached: false,
-            })
-        }
-    });
-    let fetched = join_all(fetch_futures).await;
+    //
+    // We collect the futures into a `Vec<Pin<Box<dyn Future>>>` first
+    // so the iterator's items share a single concrete type. Without
+    // that, the `async move {}` per item has a distinct anonymous
+    // type and `buffer_unordered` can't infer a single `Stream`
+    // item — the compiler error reads "implementation of FnOnce
+    // is not general enough".
+    let fetch_futures: Vec<_> = misses
+        .iter()
+        .map(|req| {
+            let req = req.clone();
+            let state = state.inner().clone();
+            Box::pin(async move { fetch_one_bulk_image(state, req).await })
+        })
+        .collect();
+    let fetched = stream::iter(fetch_futures)
+        .buffer_unordered(BULK_IMAGE_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
     let mut fetched_ok = 0usize;
     for (req, maybe_image) in misses.into_iter().zip(fetched) {
         match maybe_image {
@@ -3350,6 +3388,9 @@ pub async fn provider_image_bytes_bulk(
         }
     }
     let total_elapsed = started.elapsed().as_millis() as u64;
+    // Reset the per-call throttle so the NEXT prewarm run gets a
+    // fresh ten-info-budget for its misses.
+    IMAGE_BYTES_MISS_COUNT.store(0, Ordering::Release);
     tracing::info!(
         target: "sinfonic::commands",
         provider = %provider_id,
@@ -3366,6 +3407,45 @@ pub async fn provider_image_bytes_bulk(
 
 /// Sniff a small set of magic bytes to fall back to a content type
 /// when the provider's `Content-Type` header was missing. JPEG /
+/// Worker for the bulk-image fetch pipeline. Lives in its own
+/// function so each per-item future has a single shared concrete
+/// type, which is what `stream::iter(...).buffer_unordered(N)`
+/// needs to infer the `Stream` item type. Inlined into
+/// `provider_image_bytes_bulk`.
+async fn fetch_one_bulk_image(
+    state: Arc<Mutex<AppState>>,
+    req: AlbumArtRequest,
+) -> Option<AlbumArtBulkItem> {
+    let request = ImageRequest {
+        item_id: req.album_id.clone(),
+        kind: ImageKind::Primary,
+        tag: req.tag.clone(),
+        size: 600,
+    };
+    let guard = state.lock().await;
+    let provider_guard = guard.provider.lock().await;
+    let provider = provider_guard.as_ref()?;
+    let res = provider.image_bytes(request).await.ok()?;
+    let content_type = res
+        .content_type
+        .unwrap_or_else(|| guess_image_content_type(&res.bytes).to_string());
+    if let Some(ref cache) = guard.album_art {
+        let key = ImageCacheKey::new(
+            provider.identity().provider_id.clone(),
+            req.album_id.clone(),
+            req.tag.clone().unwrap_or_default(),
+        );
+        let _ = cache.put(&key, &res.bytes, &content_type);
+    }
+    Some(AlbumArtBulkItem {
+        album_id: req.album_id.clone(),
+        tag: req.tag.clone(),
+        bytes: res.bytes,
+        content_type,
+        cached: false,
+    })
+}
+
 /// PNG / WebP / GIF cover the overwhelming majority of music
 /// artwork; anything else becomes `application/octet-stream` so the
 /// browser still tries to render.

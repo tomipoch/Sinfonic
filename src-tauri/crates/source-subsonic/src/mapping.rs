@@ -45,7 +45,7 @@ pub fn album_from_dto(dto: &AlbumDto) -> Option<Album> {
         track_count: dto.song_count,
         duration_seconds: dto.duration,
         favorite: dto.starred.is_some(),
-        image_ref: image_ref_from_cover_art(&dto.id, dto.cover_art.as_deref()),
+        image_ref: image_ref_from_cover_art(dto.cover_art.as_deref()),
         genres,
     })
 }
@@ -102,7 +102,7 @@ pub fn track_from_child(dto: &ChildDto) -> Option<Track> {
         track_number: dto.track.unwrap_or(0),
         disc_number: dto.disc_number.unwrap_or(1),
         favorite: dto.starred.is_some(),
-        image_ref: image_ref_from_cover_art(&dto.id, dto.cover_art.as_deref()),
+        image_ref: image_ref_from_cover_art(dto.cover_art.as_deref()),
     })
 }
 
@@ -186,15 +186,22 @@ pub fn track_stream_url(
     )
 }
 
-fn image_ref_from_cover_art(id: &str, cover_art: Option<&str>) -> Option<ImageRef> {
+/// Build an `ImageRef` for Subsonic's `coverArt` field. The key
+/// insight is that we use the `coverArt` *value* (not the entity
+/// id) as the basis of `item_id`: Subsonic's `getCoverArt` accepts
+/// any prefix (`ar-`, `al-`, `tr-`) and returns the same image, so
+/// an album and all its songs share an identical `coverArt` string.
+/// Deriving `item_id` from the cover-art value (instead of the
+/// entity id) makes album and track covers share the disk cache
+/// key, collapsing the prewarm from O(albums + tracks) fetches to
+/// O(unique_covers).
+fn image_ref_from_cover_art(cover_art: Option<&str>) -> Option<ImageRef> {
     let value = cover_art?;
     if value.is_empty() {
         return None;
     }
-    // If the cover art is an `id` use that; otherwise it's a
-    // server-relative path or a full URL.
     Some(ImageRef {
-        item_id: format!("coverArt:{id}"),
+        item_id: format!("coverArt:{value}"),
         kind: ImageKindHint::CoverArt,
         tag: Some(value.to_string()),
     })

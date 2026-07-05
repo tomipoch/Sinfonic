@@ -59,13 +59,14 @@ export function useAlbumArtPrewarm(): void {
     // that aren't — we collect their ids and wait one tick before
     // firing the byte fetch.
     //
-    // Phase 4 of feature/direct-fetch-providers: bumped the sample
-    // from 96 → 128 to cover more of the visible tracks. Most
-    // libraries have well under 128 unique parent albums per
-    // page, so the bulk fetch stays a single round-trip; when it
-    // overflows the FS cache is still a single hit per image on
-    // the next prewarm tick.
-    const trackSample = tracks.slice(0, 128);
+    // Phase 7 of feature/direct-fetch-providers: dropped the track
+    // sample back to 64. Combined with the cover-dedup change
+    // (track image_refs now share the album's cache key) the
+    // effective unique-cover count per page is well below 200 even
+    // on a 128-track page, so a smaller sample reduces the bulk
+    // fetch load on the Subsonic server without hurting the
+    // first-paint of visible covers.
+    const trackSample = tracks.slice(0, 64);
     const pendingAlbumIds: string[] = [];
     for (const track of trackSample) {
       if (track.imageRef?.itemId) {
