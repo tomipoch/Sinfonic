@@ -74,11 +74,12 @@ impl StreamHandle {
     }
 }
 
-/// Bytes we want prebuffered before rodio starts decoding. Sized to
-/// comfortably cover the headers of every common audio format we
-/// support (FLAC STREAMINFO, MP3 first frame, Vorbis setup header,
-/// AAC ftyp+moov box with faststart) plus ~5-10 seconds of audio.
-const INITIAL_PREFETCH: usize = 256 * 1024;
+/// Bytes we want prebuffered before rodio starts decoding. Sized
+/// to cover just the headers of every common audio format we support
+/// (FLAC STREAMINFO at byte 0, MP3 first frame sync, Vorbis setup
+/// header, AAC ftyp+moov box with faststart). A bigger buffer just
+/// adds latency on slow servers without unlocking any extra formats.
+const INITIAL_PREFETCH: usize = 32 * 1024;
 
 /// How long `open_http` waits for the first 256 KB before bailing out
 /// to the full-buffer fallback. Most LAN servers deliver this in

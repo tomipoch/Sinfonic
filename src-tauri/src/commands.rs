@@ -445,6 +445,32 @@ pub async fn provider_list_albums(
     limit: usize,
     state: SharedState<'_>,
 ) -> Result<PagedResponse<Album>, String> {
+    let server_id = active_server_id(&state).await;
+    // Phase 5 of feature/direct-fetch-providers: Subsonic has no
+    // way to populate a top-level album list cheaply (`getAlbumList2`
+    // paginates at 500/page and the background sync hammers the
+    // server concurrently), so we serve the request from the
+    // SQLite cache the sync fills. While the cache is partial the
+    // user sees the rows already ingested; the sync-progress
+    // indicator in the sidebar keeps them honest about that.
+    //
+    // Jellyfin / local pass through to the provider: their list
+    // endpoints are fast enough not to need a cache, and the local
+    // provider already holds the full snapshot in memory.
+    let guard = state.lock().await;
+    if guard
+        .provider
+        .lock()
+        .await
+        .as_ref()
+        .is_some_and(|p| p.identity().provider_id == "subsonic")
+    {
+        return guard
+            .library
+            .list_albums(&server_id, offset, limit)
+            .map_err(|e| e.to_string());
+    }
+    drop(guard);
     let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
         return Ok(PagedResponse::new(Vec::new(), 0));
     };
@@ -458,6 +484,22 @@ pub async fn provider_list_artists(
     limit: usize,
     state: SharedState<'_>,
 ) -> Result<PagedResponse<Artist>, String> {
+    let server_id = active_server_id(&state).await;
+    // See provider_list_albums for the Subsonic-rationale.
+    let guard = state.lock().await;
+    if guard
+        .provider
+        .lock()
+        .await
+        .as_ref()
+        .is_some_and(|p| p.identity().provider_id == "subsonic")
+    {
+        return guard
+            .library
+            .list_artists(&server_id, offset, limit)
+            .map_err(|e| e.to_string());
+    }
+    drop(guard);
     let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
         return Ok(PagedResponse::new(Vec::new(), 0));
     };
