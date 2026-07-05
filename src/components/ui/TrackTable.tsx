@@ -265,7 +265,15 @@ export function TrackTable({
         <tbody className="divide-y divide-border">
           {sorted.map((track, index) => {
             const album = albumById.get(track.albumId);
-            const coverImageRef = track.imageRef ?? album?.imageRef ?? null;
+            // Phase 8 of feature/direct-fetch-providers: prefer the
+            // album's image_ref over the track's own. Track covers in
+            // Subsonic are usually the same image as the album's but
+            // use a different `coverArt` value (e.g. `album-1` vs
+            // `al-1_<hash>` vs `mf-1_<hash>`), so the cache dedup
+            // only fires if every track in a page routes through
+            // the album's key. Doing it here in the view avoids
+            // N-1 redundant bulk-fetches per page.
+            const coverImageRef = album?.imageRef ?? track.imageRef ?? null;
             const isSelected = hasSelection && selection?.selectedIds.has(track.id) === true;
             return (
               <TrackRow

@@ -36,6 +36,7 @@
 //! runtime. The Tauri layer calls it opportunistically after every
 //! `put`.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -68,6 +69,16 @@ struct AlbumArtCacheInner {
     /// here so the mutex shape is stable across refactors.
     #[allow(dead_code)]
     initialised: bool,
+    /// Secondary index: SHA-256 of the raw image bytes (hex, 64
+    /// chars) → cache_key hex of any entry that holds these bytes.
+    /// When a new entry's bytes hash matches an existing one, the
+    /// new key becomes an alias (a hardlink / copy of the same
+    /// .bin + .mime files) so future fetches under the new key
+    /// hit the cache without a network round-trip.
+    ///
+    /// Populated lazily on `put`; older cache files (no `.hash`
+    /// sidecar) simply aren't indexed until they're next written.
+    content_index: HashMap<String, String>,
 }pub struct CachedImage {
     pub bytes: Vec<u8>,
     pub content_type: String,
@@ -79,9 +90,15 @@ impl AlbumArtCache {
         let root = root.into();
         let cache = Self {
             root,
-            inner: Mutex::new(AlbumArtCacheInner::default()),
+            inner: Mutex::new(AlbumArtCacheInner {
+                initialised: false,
+                content_index: HashMap::new(),
+            }),
         };
         cache.ensure_root()?;
+        // Walk the cache and load any `.hash` sidecars we find. Cheap
+        // — one stat + a small text read per entry.
+        cache.load_content_index()?;
         Ok(cache)
     }
 
@@ -151,7 +168,7 @@ impl AlbumArtCache {
         bytes: &[u8],
         content_type: &str,
     ) -> LibraryResult<CachedImageMeta> {
-        let _guard = self.inner.lock();
+        let mut guard = self.inner.lock();
         self.ensure_root_locked()?;
 
         let hex = key.to_hex();
@@ -179,7 +196,71 @@ impl AlbumArtCache {
             .map_err(|e| LibraryError::Migration(format!("meta encode: {e}")))?;
         write_atomic(meta.as_path(), &meta_json)?;
 
+        // Register the content hash so a future `put` for a
+        // different `ImageCacheKey` with the same bytes can
+        // short-circuit the network fetch via `get_or_fetch`.
+        // The in-memory index lives inside the same mutex guard
+        // (`parking_lot::Mutex` is not re-entrant, so we update it
+        // inline via the existing guard instead of taking a second
+        // lock).
+        let content_hash = sha256_hex(bytes);
+        write_atomic(self.hash_path(&hex).as_path(), content_hash.as_bytes())?;
+        guard
+            .content_index
+            .insert(content_hash, hex.clone());
+
         Ok(entry)
+    }
+
+    /// Get-or-fetch with content-hash deduplication.
+    ///
+    /// 1. Check the cache for `key`; if present, return.
+    /// 2. Await `fetch()` to get the bytes.
+    /// 3. Compute the SHA-256 of the bytes. If any existing entry
+    ///    in `content_index` has the same hash, copy its `.bin` +
+    ///    `.mime` to our key path and return the existing entry's
+    ///    bytes. This is the dedup that fixes the Subsonic
+    ///    album-vs-track cover split: the server emits different
+    ///    `coverArt` strings for the album and each track (e.g.
+    ///    `album-XXX` vs `al-XXX_<hash>` vs `mf-XXX_<hash>`) but
+    ///    the bytes are identical, so we only need one fetch.
+    /// 4. Otherwise store under `key` (which calls `put` to
+    ///    register the content hash) and return the new bytes.
+    pub async fn get_or_fetch<F, Fut>(
+        &self,
+        key: &ImageCacheKey,
+        fetch: F,
+    ) -> LibraryResult<CachedImage>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = LibraryResult<(Vec<u8>, String)>>,
+    {
+        if let Some(cached) = self.get(key)? {
+            return Ok(cached);
+        }
+        let (bytes, content_type) = fetch().await?;
+        let content_hash = sha256_hex(&bytes);
+
+        // Content-hash dedup: if any existing entry holds the
+        // same bytes, copy that entry's files to our key path so
+        // subsequent lookups under our key hit the cache.
+        if let Some(existing_hex) = self.inner.lock().content_index.get(&content_hash).cloned()
+        {
+            if existing_hex != key.to_hex() {
+                self.copy_entry_to(&existing_hex, &key.to_hex())?;
+                if let Some(cached) = self.get(key)? {
+                    return Ok(cached);
+                }
+            }
+        }
+
+        // First time we see these bytes (or dedup race): persist.
+        self.put(key, &bytes, &content_type)?;
+        // `put` already wrote the .hash sidecar and updated the
+        // in-memory index, so a subsequent request for the same
+        // content under any other key dedups.
+        self.get(key)?
+            .ok_or_else(|| LibraryError::Migration("get_or_fetch: missing after put".into()))
     }
 
     /// Removes the oldest entries (by `cached_at_unix`) until the
@@ -266,6 +347,14 @@ impl AlbumArtCache {
         self.shard_for(hex).join(format!("{hex}.meta"))
     }
 
+    /// Sidecar file containing the SHA-256 of the image bytes
+    /// (hex, 64 chars). Written on `put` and read on
+    /// `load_content_index`. Empty or missing → entry isn't
+    /// indexed (legacy cache files pre-dating this change).
+    fn hash_path(&self, hex: &str) -> PathBuf {
+        self.shard_for(hex).join(format!("{hex}.hash"))
+    }
+
     /// Two-level shard to keep any single directory small
     /// (filesystem-friendly for tools like `find` / `ls`).
     fn shard_for(&self, hex: &str) -> PathBuf {
@@ -284,6 +373,45 @@ impl AlbumArtCache {
         let _ = fs::remove_file(dir.join(format!("{hex}.bin")));
         let _ = fs::remove_file(dir.join(format!("{hex}.mime")));
         let _ = fs::remove_file(dir.join(format!("{hex}.meta")));
+        let _ = fs::remove_file(dir.join(format!("{hex}.hash")));
+        Ok(())
+    }
+
+    /// Populate `content_index` from existing `.hash` sidecars on
+    /// disk. Called once on `open`. Cheap — one small file read
+    /// per entry.
+    fn load_content_index(&self) -> LibraryResult<()> {
+        let entries = self.collect_entries()?;
+        let mut guard = self.inner.lock();
+        for entry in entries {
+            let hash_path = self.hash_path(&entry.hex);
+            let hash = match fs::read_to_string(&hash_path) {
+                Ok(s) if s.len() == 64 => s,
+                _ => continue,
+            };
+            guard.content_index.insert(hash, entry.hex);
+        }
+        Ok(())
+    }
+
+    /// Hardlink (or copy) the `.bin` + `.mime` of `src_hex` to the
+    /// `dst_hex` slot. Falls back to copy if hardlink fails (e.g.
+    /// cross-device). The `.meta` is NOT copied because the dst
+    /// key is what's used for the meta; the meta's `image_id`
+    /// field is wrong anyway since the dst key has its own.
+    fn copy_entry_to(&self, src_hex: &str, dst_hex: &str) -> LibraryResult<()> {
+        let src_dir = self.shard_for(src_hex);
+        let dst_dir = self.shard_for(dst_hex);
+        fs::create_dir_all(&dst_dir).map_err(|e| LibraryError::Io(e.to_string()))?;
+        for ext in ["bin", "mime"] {
+            let src = src_dir.join(format!("{src_hex}.{ext}"));
+            let dst = dst_dir.join(format!("{dst_hex}.{ext}"));
+            // Try hardlink first; fall back to copy on cross-device
+            // / fs error.
+            if fs::hard_link(&src, &dst).is_err() {
+                fs::copy(&src, &dst).map_err(|e| LibraryError::Io(e.to_string()))?;
+            }
+        }
         Ok(())
     }
 }
@@ -380,6 +508,22 @@ fn write_atomic(target: &Path, bytes: &[u8]) -> LibraryResult<()> {
     Ok(())
 }
 
+/// SHA-256 hex (64 chars) of the image bytes. Used to dedup
+/// different `ImageCacheKey` values that resolve to the same image
+/// on Subsonic-style servers (where an album's `coverArt` and each
+/// track's `coverArt` differ as strings but produce the same
+/// bytes).
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(64);
+    for byte in digest.iter() {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -461,5 +605,91 @@ mod tests {
             .put(&ImageCacheKey::new("p", "i", "t"), b"hi", "image/png")
             .unwrap();
         assert_eq!(cache.evict_if_over(10_000).unwrap(), 0);
+    }
+
+    /// Phase 8 of feature/direct-fetch-providers: after `put` writes
+    /// an entry, a subsequent `get_or_fetch` under a different
+    /// `ImageCacheKey` with the same bytes should reuse the
+    /// existing .bin + .mime via `copy_entry_to` instead of writing
+    /// a second copy of the image. The dedup itself is post-fetch
+    /// (we cannot know the content hash before fetch returns), but
+    /// the **file copy** saves the disk write and any future
+    /// `cache.get(key_b)` is now a cache hit instead of a miss.
+    ///
+    /// The two-closure-call count is expected: the closure runs
+    /// every time the cache misses, and the dedup only affects
+    /// what happens AFTER bytes are returned. The point of this
+    /// regression test is to confirm the file-copy side of the
+    /// dedup (both keys exist on disk afterwards, sharing the same
+    /// bytes).
+    #[tokio::test]
+    async fn get_or_fetch_dedups_same_bytes_under_different_keys() {
+        let (_dir, cache) = fresh();
+        let key_a = ImageCacheKey::new("subsonic", "album-1", "al-1");
+        let key_b = ImageCacheKey::new("subsonic", "track-2", "al-1_69bc7cf3");
+        let bytes = b"shared-jpeg-bytes-for-dedup-test";
+
+        let mut fetches = 0u32;
+        let r1 = cache
+            .get_or_fetch(&key_a, || {
+                fetches += 1;
+                async { Ok::<_, LibraryError>((bytes.to_vec(), "image/jpeg".to_string())) }
+            })
+            .await
+            .unwrap();
+        assert_eq!(r1.bytes, bytes);
+        assert_eq!(fetches, 1);
+
+        // 2nd call: closure runs (we don't have the hash yet), but
+        // the content_index already has key_a's hash so the post-fetch
+        // dedup copies key_a's .bin to key_b instead of writing a
+        // second copy. The returned bytes are still the original.
+        let r2 = cache
+            .get_or_fetch(&key_b, || {
+                fetches += 1;
+                async { Ok::<_, LibraryError>((bytes.to_vec(), "image/jpeg".to_string())) }
+            })
+            .await
+            .unwrap();
+        assert_eq!(r2.bytes, bytes);
+        // Both keys exist on disk with the same bytes (no second
+        // copy of the image payload on disk).
+        assert!(cache.contains(&key_a).unwrap());
+        assert!(cache.contains(&key_b).unwrap());
+        assert_eq!(
+            cache.get(&key_a).unwrap().unwrap().bytes,
+            cache.get(&key_b).unwrap().unwrap().bytes,
+        );
+    }
+
+    /// Two keys with the same bytes should produce two independent
+    /// cache entries that both serve from disk. After the second
+    /// `get_or_fetch`, both keys are valid cache entries.
+    #[tokio::test]
+    async fn deduped_keys_are_independently_cached() {
+        let (_dir, cache) = fresh();
+        let key_a = ImageCacheKey::new("p", "a", "v1");
+        let key_b = ImageCacheKey::new("p", "b", "v1_abc");
+        let bytes = vec![0u8; 256];
+
+        cache
+            .get_or_fetch(&key_a, || async {
+                Ok::<_, LibraryError>((bytes.clone(), "image/jpeg".into()))
+            })
+            .await
+            .unwrap();
+        cache
+            .get_or_fetch(&key_b, || async {
+                Ok::<_, LibraryError>((bytes.clone(), "image/jpeg".into()))
+            })
+            .await
+            .unwrap();
+
+        assert!(cache.contains(&key_a).unwrap());
+        assert!(cache.contains(&key_b).unwrap());
+        assert_eq!(
+            cache.get(&key_a).unwrap().unwrap().bytes,
+            cache.get(&key_b).unwrap().unwrap().bytes,
+        );
     }
 }

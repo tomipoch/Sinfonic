@@ -8,33 +8,44 @@
 // side and fans out the misses in parallel, so even the first
 // paint after login lands with all artwork decoded.
 //
-// Tracks that don't carry their own `imageRef` (Subsonic, mostly)
-// fall back to the album row by `albumId`; the same lookup table
-// that `AlbumCover` uses is updated as a side effect, so a track
-// row whose album arrives on a later page still renders the right
-// cover once `useAlbumLookup` resolves it.
+// Phase 8 of feature/direct-fetch-providers: track covers are no
+// longer prewarmed separately. The `TrackTable` now prefers
+// `album?.imageRef` over `track.imageRef`, so tracks resolve via
+// the cached album row without a second network round-trip. The
+// track image_ref field stays on the row for any future provider
+// that genuinely differentiates per-track art, but in practice
+// (Subsonic, Navidrome, etc.) tracks and their album share the
+// same image. Dropping the track prewarm roughly halves the
+// per-page request count.
 //
 // Fire-and-forget: errors are logged but never surfaced. AlbumCover
 // falls back to the gradient on a missing hit, so a partial
 // pre-warm is invisible to the user.
 
 import { useEffect } from "react";
-import { useAlbumLookup } from "@/hooks/useAlbumLookup";
 import { buildBlobUrl, getCached, setCached } from "@/lib/albumArtCache";
 import { type AlbumArtRequest, providerImageBytesBulk } from "@/lib/tauri";
 import { useLibraryStore } from "@/stores/libraryStore";
 
+/// How many of the *first* covers to prewarm. Phase 8: dropped
+/// from the full page (200) to 24 so the initial prewarm lands
+/// in ~3 s on the user's Subsonic server. The rest of the page's
+/// covers are still served by the cache (album dedup means the
+/// first 24 hits cover the common case of one cover per visible
+/// row) and by per-cell `providerImageBytes` calls (cache hits
+/// after the album is in the cache) when the user scrolls.
+const PREWARM_SAMPLE = 24;
+
 export function useAlbumArtPrewarm(): void {
   const albums = useLibraryStore((s) => s.albums);
-  const tracks = useLibraryStore((s) => s.tracks);
   const loaded = useLibraryStore((s) => s.loaded);
-  const { albumById, ensureLoaded } = useAlbumLookup();
 
   useEffect(() => {
     if (!loaded) return;
 
-    // Collect distinct (item_id, tag) pairs so duplicate refs across
-    // albums / tracks only fetch once.
+    // Collect distinct (item_id, tag) pairs. Track covers are no
+    // longer prewarmed (see module comment); only the album page's
+    // first 24 covers hit the bulk.
     const seen = new Set<string>();
     const targets: AlbumArtRequest[] = [];
 
@@ -46,39 +57,8 @@ export function useAlbumArtPrewarm(): void {
       targets.push({ albumId: itemId, tag: tag ?? null });
     };
 
-    // Cover every album in the current page. The library store only
-    // holds the visible page so this is bounded; later pages get
-    // warmed by their own component mounts.
-    for (const album of albums) {
+    for (const album of albums.slice(0, PREWARM_SAMPLE)) {
       push(album.imageRef?.itemId, album.imageRef?.tag);
-    }
-
-    // Resolve the first batch of tracks' parent albums through the
-    // shared lookup. `ensureLoaded` is a no-op for albums that are
-    // already in the store, and a fire-and-forget fetch for those
-    // that aren't — we collect their ids and wait one tick before
-    // firing the byte fetch.
-    //
-    // Phase 7 of feature/direct-fetch-providers: dropped the track
-    // sample back to 64. Combined with the cover-dedup change
-    // (track image_refs now share the album's cache key) the
-    // effective unique-cover count per page is well below 200 even
-    // on a 128-track page, so a smaller sample reduces the bulk
-    // fetch load on the Subsonic server without hurting the
-    // first-paint of visible covers.
-    const trackSample = tracks.slice(0, 64);
-    const pendingAlbumIds: string[] = [];
-    for (const track of trackSample) {
-      if (track.imageRef?.itemId) {
-        push(track.imageRef.itemId, track.imageRef.tag);
-      } else {
-        if (!albumById.has(track.albumId)) {
-          ensureLoaded(track.albumId);
-          pendingAlbumIds.push(track.albumId);
-        }
-        const album = albumById.get(track.albumId);
-        push(album?.imageRef?.itemId, album?.imageRef?.tag);
-      }
     }
 
     // Skip any target that is already in the JS cache — the bulk
@@ -88,18 +68,9 @@ export function useAlbumArtPrewarm(): void {
 
     let cancelled = false;
     void (async () => {
-      if (pendingAlbumIds.length > 0) {
-        // One tick for the lazy album lookups to land in the store
-        // before we fire the byte fetch.
-        await new Promise((r) => setTimeout(r, 0));
-        if (cancelled) return;
-      }
       try {
         const res = await providerImageBytesBulk(uncached);
         if (cancelled) return;
-        // The bulk response carries the (albumId, tag) for each
-        // resolved image so the cache write does not depend on
-        // request/response ordering.
         for (const image of res.images) {
           const url = buildBlobUrl(image.bytes, image.contentType);
           setCached(image.albumId, image.tag, url);
@@ -112,5 +83,5 @@ export function useAlbumArtPrewarm(): void {
     return () => {
       cancelled = true;
     };
-  }, [loaded, albums, tracks, albumById, ensureLoaded]);
+  }, [loaded, albums]);
 }

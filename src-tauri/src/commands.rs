@@ -50,9 +50,10 @@ use sinfonic_domain::{
     SmartPlaylistSortDirection, SmartPlaylistSortField, Track, TrackId,
 };
 use sinfonic_library::ImageCacheKey;
+use sinfonic_library::LibraryError;
 use sinfonic_secrets::SecretStore;
 use sinfonic_source::MusicProvider;
-use sinfonic_source::{ImageBytes, ImageRequest, Lyrics};
+use sinfonic_source::{ImageRequest, Lyrics};
 use sinfonic_source_jellyfin::auth::{login as jellyfin_login_inner, LoginRequest as JellyfinAuthRequest};
 use sinfonic_source_subsonic::auth::{login as subsonic_login_inner, LoginRequest as SubsonicAuthRequest};
 
@@ -3151,81 +3152,67 @@ pub async fn provider_image_bytes(
         tag.clone().unwrap_or_default(),
     );
 
-    let (cache_for_lookup, cache_for_write) = {
+    let cache = {
         let guard = state.lock().await;
-        let cache = guard.album_art.clone();
-        // Hand the same Arc clone to both the lookup and the eventual
-        // write — no need to clone twice.
-        (cache.clone(), cache)
+        guard.album_art.clone()
     };
 
-    if let Some(cache) = cache_for_lookup.as_ref() {
-        if let Ok(Some(hit)) = cache.get(&cache_key) {
-            // Cache hits fire constantly once a view's prewarm has
-            // landed; logging every one drowns out the interesting
-            // misses. Keep the per-hit log at debug and only upgrade
-            // the rare slow case to info.
-            tracing::debug!(
-                target: "sinfonic::commands",
-                provider = %provider_id,
-                item_id = %album_id,
-                bytes = hit.bytes.len(),
-                "provider_image_bytes CACHE HIT"
-            );
-            return Ok(AlbumArtResponse {
-                bytes: hit.bytes,
-                content_type: hit.content_type,
-                cached: true,
-            });
-        }
-    }
+    // Phase 8 of feature/direct-fetch-providers: route through
+    // `get_or_fetch` so the cache's content-hash dedup kicks in.
+    // A Subsonic album and each of its tracks use *different*
+    // `coverArt` strings (e.g. `album-XXX` vs `al-XXX_<hash>` vs
+    // `mf-XXX_<hash>`) but resolve to identical bytes — the dedup
+    // collapses them to a single on-disk entry, so the bulk
+    // prewarm fires one network request per *unique image* rather
+    // than per *key*.
+    let Some(cache) = cache.as_ref() else {
+        return Err("provider_image_bytes: no album art cache available".into());
+    };
 
-    // Cache miss — fetch from the provider.
     let fetch_started = Instant::now();
-    let fetched: ImageBytes = {
+    let fetch_closure = || async {
         let guard = state.lock().await;
         let provider_guard = guard.provider.lock().await;
         let provider = provider_guard
             .as_ref()
-            .ok_or_else(|| "provider_image_bytes: no active provider".to_string())?;
-        provider
-            .image_bytes(request)
+            .ok_or_else(|| {
+                LibraryError::Io("provider_image_bytes: no active provider".into())
+            })?;
+        let bytes = provider
+            .image_bytes(request.clone())
             .await
-            .map_err(|e| format!("image_bytes: {e}"))?
+            .map_err(|e| LibraryError::Io(format!("image_bytes: {e}")))?;
+        let ct = bytes
+            .content_type
+            .unwrap_or_else(|| guess_image_content_type(&bytes.bytes).to_string());
+        Ok((bytes.bytes, ct))
     };
+
+    let cached = cache
+        .get_or_fetch(&cache_key, fetch_closure)
+        .await
+        .map_err(|e| format!("get_or_fetch: {e}"))?;
     let fetch_elapsed = fetch_started.elapsed().as_millis() as u64;
+    let content_type = cached.content_type.clone();
+    let fetched_bytes_len = cached.bytes.len();
 
-    // Pick a sensible default if the provider did not surface a
-    // content type — JPEG is the dominant format in the wild.
-    let content_type = fetched
-        .content_type
-        .unwrap_or_else(|| guess_image_content_type(&fetched.bytes).to_string());
-
-    // Best-effort write-through. Failures here are non-fatal — we
-    // already have the bytes to return to the UI.
-    let write_elapsed = Instant::now();
-    if let Some(cache) = cache_for_write.as_ref() {
-        let _ = cache.put(&cache_key, &fetched.bytes, &content_type);
-    }
-    let write_elapsed = write_elapsed.elapsed().as_millis() as u64;
-    let elapsed = started.elapsed().as_millis() as u64;
     // Throttle the log: a Subsonic prewarm fires hundreds of these
     // in a few seconds; only the slow ones (>500 ms) and the first
     // ten of any run land at info. The full bulk-end summary in
     // `provider_image_bytes_bulk` reports the aggregate timing.
+    let elapsed = started.elapsed().as_millis() as u64;
     let miss_count = IMAGE_BYTES_MISS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if fetch_elapsed > 500 || miss_count <= 10 {
         tracing::info!(
             target: "sinfonic::commands",
             provider = %provider_id,
             item_id = %album_id,
-            fetched_bytes = fetched.bytes.len(),
+            fetched_bytes = fetched_bytes_len,
             content_type = %content_type,
             fetch_ms = fetch_elapsed,
-            write_ms = write_elapsed,
             total_ms = elapsed,
             miss_count,
-            "provider_image_bytes CACHE MISS (fetched + cached)"
+            "provider_image_bytes CACHE MISS (fetched + cached + dedup)"
         );
     } else {
         tracing::debug!(
@@ -3240,7 +3227,7 @@ pub async fn provider_image_bytes(
     }
 
     Ok(AlbumArtResponse {
-        bytes: fetched.bytes,
+        bytes: cached.bytes,
         content_type,
         cached: false,
     })
@@ -3291,13 +3278,13 @@ pub async fn provider_image_bytes_bulk(
     use futures::stream::{self, StreamExt};
 
     /// Cap on simultaneous in-flight Subsonic `getCoverArt` requests.
-    /// Phase 7 of feature/direct-fetch-providers: empirically the
-    /// Subsonic server single-threads cover transcoding, so firing
-    /// 200 requests in parallel just queues them server-side and the
-    /// first batch takes ~30 s. Six concurrent leaves headroom for
-    /// the audio stream's `getCoverArt` while still prefetching the
-    /// visible album art at a reasonable pace.
-    const BULK_IMAGE_CONCURRENCY: usize = 6;
+    /// Phase 8 of feature/direct-fetch-providers: bumped from 6 to 8
+    /// to better match Navidrome's default transcoding pool. With
+    /// the content-hash dedup in `AlbumArtCache::get_or_fetch` the
+    /// per-page unique-cover count is much lower than the request
+    /// count, so a slightly higher concurrency finishes the bulk in
+    /// fewer wall-clock seconds without overwhelming the server.
+    const BULK_IMAGE_CONCURRENCY: usize = 8;
 
     let started = Instant::now();
     let total = requests.len();
