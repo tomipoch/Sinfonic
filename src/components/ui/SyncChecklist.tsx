@@ -47,6 +47,13 @@ export function stepForState(state: SyncState): StepId {
       return "caching";
     case "complete":
       return "ready";
+    case "error":
+      // The full-screen LoadingView shows the error inline; from
+      // the checklist's perspective an error is "we stopped before
+      // reaching the ready state" — surface it as the last completed
+      // step so the user sees everything that DID land plus the error
+      // indicator on the LoadingView header.
+      return "caching";
   }
 }
 

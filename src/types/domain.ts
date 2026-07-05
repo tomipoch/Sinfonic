@@ -234,7 +234,8 @@ export type SyncState =
   | "indexing"
   | "caching"
   | "syncing"
-  | "complete";
+  | "complete"
+  | "error";
 
 export interface LibrarySyncStatus {
   serverId: string | null;

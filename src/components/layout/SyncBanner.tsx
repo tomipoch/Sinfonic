@@ -28,6 +28,8 @@ function labelFor(state: SyncState): string {
       return "Syncing tracks…";
     case "complete":
       return "Library ready";
+    case "error":
+      return "Sync failed";
   }
 }
 
