@@ -141,6 +141,7 @@ fn open_local(path: &str) -> Result<StreamHandle, StreamError> {
 ///    starts playback. Subsequent reads wait for more bytes via
 ///    `Condvar` as the worker continues streaming.
 async fn open_http(url: &str) -> Result<StreamHandle, StreamError> {
+    let started = Instant::now();
     let buffer = Arc::new(Mutex::new(Vec::new()));
     let eof = Arc::new(AtomicBool::new(false));
     let notify = Arc::new(Condvar::new());
@@ -160,14 +161,37 @@ async fn open_http(url: &str) -> Result<StreamHandle, StreamError> {
     std::thread::Builder::new()
         .name("stream-download".into())
         .spawn(move || {
-            run_download(url_string, buffer_for_thread, eof_for_thread, notify_for_thread, failed_for_thread, error_for_thread);
+            let thread_started = Instant::now();
+            let first_byte = Arc::new(std::sync::Mutex::new(None::<std::time::Duration>));
+            run_download(
+                url_string.clone(),
+                buffer_for_thread,
+                eof_for_thread,
+                notify_for_thread,
+                failed_for_thread,
+                error_for_thread,
+                Some(Arc::clone(&first_byte)),
+            );
+            let elapsed = thread_started.elapsed().as_millis() as u64;
+            let first = first_byte.lock().unwrap().map(|d| d.as_millis() as u64);
+            eprintln!(
+                "sinfonic::playback open_http thread: download done elapsed={}ms first_byte={:?}ms",
+                elapsed, first
+            );
         })
         .map_err(|e| StreamError::Http(format!("spawn download thread: {e}")))?;
 
     // Wait until at least INITIAL_PREFETCH bytes are buffered or EOF
     // is signalled. Times out and falls back to a full download so
     // the user can still play the track on slow networks.
-    if !wait_for_prebuffer(&buffer, &eof, &notify, &download_failed) {
+    let waited_for_prebuffer = wait_for_prebuffer(&buffer, &eof, &notify, &download_failed);
+    if !waited_for_prebuffer {
+        let prebuffer_bytes = buffer.lock().unwrap().len();
+        eprintln!(
+            "sinfonic::playback open_http: prebuffer TIMEOUT ({} bytes in {}s)",
+            prebuffer_bytes,
+            INITIAL_PREFETCH_TIMEOUT.as_secs()
+        );
         // Inspect why we gave up — EOF with no bytes is a real error,
         // anything else (timeout) is just a slow connection.
         if eof.load(Ordering::Acquire) && buffer.lock().unwrap().is_empty() {
@@ -180,8 +204,21 @@ async fn open_http(url: &str) -> Result<StreamHandle, StreamError> {
         }
         // Slow connection path — drop the streaming attempt and
         // download the whole file in one shot.
-        return open_http_full(url).await;
+        let fb_started = Instant::now();
+        let res = open_http_full(url).await;
+        eprintln!(
+            "sinfonic::playback open_http: full download fallback took {}ms",
+            fb_started.elapsed().as_millis()
+        );
+        return res;
     }
+    let prebuffer_bytes = buffer.lock().unwrap().len();
+    eprintln!(
+        "sinfonic::playback open_http: prebuffer ready {} bytes in {}ms (target {} bytes)",
+        prebuffer_bytes,
+        started.elapsed().as_millis(),
+        INITIAL_PREFETCH
+    );
 
     let source = StreamingSource::new(buffer, eof, notify);
     let decoded = Decoder::new(source)
@@ -241,8 +278,15 @@ fn run_download(
     notify: Arc<Condvar>,
     failed: Arc<AtomicBool>,
     download_error: Arc<Mutex<Option<String>>>,
+    first_byte_at: Option<Arc<std::sync::Mutex<Option<std::time::Duration>>>>,
 ) {
-    let result = download(&url, &buffer, &eof, &notify);
+    let result = download(
+        &url,
+        &buffer,
+        &eof,
+        &notify,
+        first_byte_at.as_ref().map(Arc::clone),
+    );
     if let Err(err) = result {
         *download_error.lock().unwrap() = Some(err.to_string());
         failed.store(true, Ordering::Release);
@@ -259,7 +303,9 @@ fn download(
     buffer: &Arc<Mutex<Vec<u8>>>,
     eof: &Arc<AtomicBool>,
     notify: &Arc<Condvar>,
+    first_byte_at: Option<Arc<std::sync::Mutex<Option<std::time::Duration>>>>,
 ) -> Result<(), StreamError> {
+    let client_started = Instant::now();
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         // Hard cap on the entire body read. After this a slow server
@@ -279,12 +325,30 @@ fn download(
             response.status()
         )));
     }
+    eprintln!(
+        "sinfonic::playback open_http: response headers arrived after {}ms",
+        client_started.elapsed().as_millis()
+    );
 
     let mut chunk = [0u8; 32 * 1024];
+    let mut total_bytes = 0usize;
+    let mut first_byte_logged = false;
     loop {
         match response.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => {
+                if !first_byte_logged {
+                    if let Some(slot) = first_byte_at.as_ref() {
+                        *slot.lock().unwrap() = Some(client_started.elapsed());
+                    }
+                    eprintln!(
+                        "sinfonic::playback open_http: first {} bytes arrived in {}ms",
+                        n,
+                        client_started.elapsed().as_millis()
+                    );
+                    first_byte_logged = true;
+                }
+                total_bytes += n;
                 let mut guard = buffer.lock().unwrap();
                 guard.extend_from_slice(&chunk[..n]);
                 drop(guard);
@@ -296,6 +360,11 @@ fn download(
         }
     }
 
+    eprintln!(
+        "sinfonic::playback open_http: stream complete total={} bytes in {}ms",
+        total_bytes,
+        client_started.elapsed().as_millis()
+    );
     eof.store(true, Ordering::Release);
     notify.notify_all();
     Ok(())

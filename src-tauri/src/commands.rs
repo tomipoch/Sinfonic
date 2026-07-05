@@ -34,6 +34,7 @@ use tauri::{Emitter, Manager, State};
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 
 use crate::events::{
@@ -445,6 +446,7 @@ pub async fn provider_list_albums(
     limit: usize,
     state: SharedState<'_>,
 ) -> Result<PagedResponse<Album>, String> {
+    let started = Instant::now();
     let server_id = active_server_id(&state).await;
     // Phase 5 of feature/direct-fetch-providers: Subsonic has no
     // way to populate a top-level album list cheaply (`getAlbumList2`
@@ -458,24 +460,42 @@ pub async fn provider_list_albums(
     // endpoints are fast enough not to need a cache, and the local
     // provider already holds the full snapshot in memory.
     let guard = state.lock().await;
-    if guard
+    let is_subsonic = guard
         .provider
         .lock()
         .await
         .as_ref()
-        .is_some_and(|p| p.identity().provider_id == "subsonic")
-    {
-        return guard
+        .is_some_and(|p| p.identity().provider_id == "subsonic");
+    if is_subsonic {
+        let res = guard
             .library
             .list_albums(&server_id, offset, limit)
             .map_err(|e| e.to_string());
+        tracing::info!(
+            target: "sinfonic::commands",
+            offset,
+            limit,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "provider_list_albums (subsonic → sqlite) → {} items",
+            res.as_ref().map(|r| r.items.len()).unwrap_or(0)
+        );
+        return res;
     }
     drop(guard);
     let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
         return Ok(PagedResponse::new(Vec::new(), 0));
     };
     let req = sinfonic_domain::PagedRequest::new(offset, limit);
-    provider.albums(req).await.map_err(|e| e.to_string())
+    let res = provider.albums(req).await.map_err(|e| e.to_string());
+    tracing::info!(
+        target: "sinfonic::commands",
+        offset,
+        limit,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "provider_list_albums (http) → {} items",
+        res.as_ref().map(|r| r.items.len()).unwrap_or(0)
+    );
+    res
 }
 
 #[tauri::command]
@@ -484,27 +504,46 @@ pub async fn provider_list_artists(
     limit: usize,
     state: SharedState<'_>,
 ) -> Result<PagedResponse<Artist>, String> {
+    let started = Instant::now();
     let server_id = active_server_id(&state).await;
     // See provider_list_albums for the Subsonic-rationale.
     let guard = state.lock().await;
-    if guard
+    let is_subsonic = guard
         .provider
         .lock()
         .await
         .as_ref()
-        .is_some_and(|p| p.identity().provider_id == "subsonic")
-    {
-        return guard
+        .is_some_and(|p| p.identity().provider_id == "subsonic");
+    if is_subsonic {
+        let res = guard
             .library
             .list_artists(&server_id, offset, limit)
             .map_err(|e| e.to_string());
+        tracing::info!(
+            target: "sinfonic::commands",
+            offset,
+            limit,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "provider_list_artists (subsonic → sqlite) → {} items",
+            res.as_ref().map(|r| r.items.len()).unwrap_or(0)
+        );
+        return res;
     }
     drop(guard);
     let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
         return Ok(PagedResponse::new(Vec::new(), 0));
     };
     let req = sinfonic_domain::PagedRequest::new(offset, limit);
-    provider.artists(req).await.map_err(|e| e.to_string())
+    let res = provider.artists(req).await.map_err(|e| e.to_string());
+    tracing::info!(
+        target: "sinfonic::commands",
+        offset,
+        limit,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "provider_list_artists (http) → {} items",
+        res.as_ref().map(|r| r.items.len()).unwrap_or(0)
+    );
+    res
 }
 
 #[tauri::command]
@@ -513,6 +552,7 @@ pub async fn provider_list_tracks(
     limit: usize,
     state: SharedState<'_>,
 ) -> Result<PagedResponse<Track>, String> {
+    let started = Instant::now();
     let server_id = active_server_id(&state).await;
     // Phase 3 of feature/direct-fetch-providers: Subsonic has no
     // "list every track" endpoint so we serve the request from the
@@ -533,17 +573,35 @@ pub async fn provider_list_tracks(
         .as_ref()
         .map(|p| p.identity().provider_id.clone());
     if provider_kind.as_deref() == Some("subsonic") {
-        return guard
+        let res = guard
             .library
             .list_tracks(&server_id, offset, limit)
             .map_err(|e| e.to_string());
+        tracing::info!(
+            target: "sinfonic::commands",
+            offset,
+            limit,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "provider_list_tracks (subsonic → sqlite) → {} items",
+            res.as_ref().map(|r| r.items.len()).unwrap_or(0)
+        );
+        return res;
     }
     drop(guard);
     let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
         return Ok(PagedResponse::new(Vec::new(), 0));
     };
     let req = sinfonic_domain::PagedRequest::new(offset, limit);
-    provider.tracks(req).await.map_err(|e| e.to_string())
+    let res = provider.tracks(req).await.map_err(|e| e.to_string());
+    tracing::info!(
+        target: "sinfonic::commands",
+        offset,
+        limit,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "provider_list_tracks (http) → {} items",
+        res.as_ref().map(|r| r.items.len()).unwrap_or(0)
+    );
+    res
 }
 
 /// Album with its tracks resolved straight from the active provider.
@@ -599,7 +657,15 @@ pub async fn kick_subsonic_background_sync(
     app: tauri::AppHandle,
     state: SharedState<'_>,
 ) -> Result<(), String> {
-    kick_subsonic_background_sync_inner(app, state.inner().clone()).await
+    let started = Instant::now();
+    let inner = kick_subsonic_background_sync_inner(app.clone(), state.inner().clone()).await;
+    tracing::info!(
+        target: "sinfonic::commands",
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "kick_subsonic_background_sync returned ({})",
+        if inner.is_ok() { "ok" } else { "err" }
+    );
+    inner
 }
 
 /// Same body as the Tauri command but takes the raw
@@ -690,6 +756,9 @@ async fn run_subsonic_background_sync(
     // holding a mutable borrow on the outer function frame.
     let total_tracks_written = Arc::new(AtomicUsize::new(0));
     let server_id_arc = Arc::new(server_id);
+    let sync_started = Instant::now();
+    let batch_counter = Arc::new(AtomicUsize::new(0));
+    let slow_batches = Arc::new(AtomicUsize::new(0));
 
     let stats = provider
         .sync_album_tracks(
@@ -697,7 +766,10 @@ async fn run_subsonic_background_sync(
                 let total = Arc::clone(&total_tracks_written);
                 let library = library.clone();
                 let server_id = Arc::clone(&server_id_arc);
+                let batch_counter = Arc::clone(&batch_counter);
+                let slow_batches = Arc::clone(&slow_batches);
                 move |album, tracks| {
+                    let batch_started = Instant::now();
                     if tracks.is_empty() {
                         return;
                     }
@@ -764,12 +836,32 @@ async fn run_subsonic_background_sync(
                         return;
                     }
                     total.fetch_add(tracks.len(), Ordering::Relaxed);
+                    let n = batch_counter.fetch_add(1, Ordering::Relaxed) + 1;
+                    let elapsed = batch_started.elapsed().as_millis() as u64;
+                    // Log first batch + last batch + any batch taking
+                    // > 200ms (slow compared to typical SQLite
+                    // transaction cost under 50ms).
+                    if n == 1 || elapsed > 200 {
+                        tracing::info!(
+                            target: "sinfonic::commands",
+                            batch = n,
+                            tracks = tracks.len(),
+                            album_id = %album.id.as_str(),
+                            elapsed_ms = elapsed,
+                            "subsonic bg sync batch persisted"
+                        );
+                    }
+                    if elapsed > 200 {
+                        slow_batches.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             },
             |hint_id, err| {
-                eprintln!(
-                    "sinfonic::commands subsonic background sync: album {} failed: {}",
-                    hint_id, err
+                tracing::warn!(
+                    target: "sinfonic::commands",
+                    album = %hint_id,
+                    error = %err,
+                    "subsonic bg sync album failed"
                 );
             },
         )
@@ -782,6 +874,8 @@ async fn run_subsonic_background_sync(
         albums_total = stats.albums_total,
         albums_failed = stats.albums_failed,
         tracks_total = total,
+        slow_batches_persisting = slow_batches.load(Ordering::Relaxed),
+        elapsed_ms = sync_started.elapsed().as_millis() as u64,
         "subsonic background sync complete"
     );
 
@@ -3006,6 +3100,7 @@ pub async fn provider_image_bytes(
     tag: Option<String>,
     state: SharedState<'_>,
 ) -> Result<AlbumArtResponse, String> {
+    let started = Instant::now();
     if album_id.is_empty() {
         return Err("provider_image_bytes: album_id is empty".into());
     }
@@ -3046,6 +3141,16 @@ pub async fn provider_image_bytes(
 
     if let Some(cache) = cache_for_lookup.as_ref() {
         if let Ok(Some(hit)) = cache.get(&cache_key) {
+            let elapsed = started.elapsed().as_millis() as u64;
+            tracing::info!(
+                target: "sinfonic::commands",
+                provider = %provider_id,
+                item_id = %album_id,
+                elapsed_ms = elapsed,
+                "provider_image_bytes CACHE HIT ({} bytes, {})",
+                hit.bytes.len(),
+                hit.content_type
+            );
             return Ok(AlbumArtResponse {
                 bytes: hit.bytes,
                 content_type: hit.content_type,
@@ -3055,6 +3160,7 @@ pub async fn provider_image_bytes(
     }
 
     // Cache miss — fetch from the provider.
+    let fetch_started = Instant::now();
     let fetched: ImageBytes = {
         let guard = state.lock().await;
         let provider_guard = guard.provider.lock().await;
@@ -3066,6 +3172,7 @@ pub async fn provider_image_bytes(
             .await
             .map_err(|e| format!("image_bytes: {e}"))?
     };
+    let fetch_elapsed = fetch_started.elapsed().as_millis() as u64;
 
     // Pick a sensible default if the provider did not surface a
     // content type — JPEG is the dominant format in the wild.
@@ -3075,9 +3182,23 @@ pub async fn provider_image_bytes(
 
     // Best-effort write-through. Failures here are non-fatal — we
     // already have the bytes to return to the UI.
+    let write_elapsed = Instant::now();
     if let Some(cache) = cache_for_write.as_ref() {
         let _ = cache.put(&cache_key, &fetched.bytes, &content_type);
     }
+    let write_elapsed = write_elapsed.elapsed().as_millis() as u64;
+    let elapsed = started.elapsed().as_millis() as u64;
+    tracing::info!(
+        target: "sinfonic::commands",
+        provider = %provider_id,
+        item_id = %album_id,
+        fetched_bytes = fetched.bytes.len(),
+        content_type = %content_type,
+        fetch_ms = fetch_elapsed,
+        write_ms = write_elapsed,
+        total_ms = elapsed,
+        "provider_image_bytes CACHE MISS (fetched + cached)"
+    );
 
     Ok(AlbumArtResponse {
         bytes: fetched.bytes,
@@ -3124,6 +3245,8 @@ pub async fn provider_image_bytes_bulk(
 ) -> Result<AlbumArtBulkResponse, String> {
     use futures::future::join_all;
 
+    let started = Instant::now();
+    let total = requests.len();
     let (provider_id, cache) = {
         let guard = state.lock().await;
         let provider_id = guard
@@ -3141,6 +3264,7 @@ pub async fn provider_image_bytes_bulk(
     let mut images: Vec<AlbumArtBulkItem> = Vec::with_capacity(requests.len());
     let mut misses: Vec<AlbumArtRequest> = Vec::new();
     let mut not_found: Vec<String> = Vec::new();
+    let mut hit_count = 0usize;
 
     for req in requests {
         if req.album_id.is_empty() {
@@ -3153,16 +3277,29 @@ pub async fn provider_image_bytes_bulk(
         );
         let hit = cache.as_ref().and_then(|c| c.get(&key).ok().flatten());
         match hit {
-            Some(cached) => images.push(AlbumArtBulkItem {
-                album_id: req.album_id.clone(),
-                tag: req.tag.clone(),
-                bytes: cached.bytes,
-                content_type: cached.content_type,
-                cached: true,
-            }),
+            Some(cached) => {
+                hit_count += 1;
+                images.push(AlbumArtBulkItem {
+                    album_id: req.album_id.clone(),
+                    tag: req.tag.clone(),
+                    bytes: cached.bytes,
+                    content_type: cached.content_type,
+                    cached: true,
+                })
+            }
             None => misses.push(req),
         }
     }
+    let hit_elapsed = started.elapsed().as_millis() as u64;
+    tracing::info!(
+        target: "sinfonic::commands",
+        provider = %provider_id,
+        total,
+        hits = hit_count,
+        misses = total.saturating_sub(hit_count),
+        elapsed_ms = hit_elapsed,
+        "provider_image_bytes_bulk cache scan"
+    );
 
     // Fetch misses in parallel from the provider. Each fetch goes
     // through the same `provider.image_bytes` path as the single
@@ -3202,12 +3339,27 @@ pub async fn provider_image_bytes_bulk(
         }
     });
     let fetched = join_all(fetch_futures).await;
+    let mut fetched_ok = 0usize;
     for (req, maybe_image) in misses.into_iter().zip(fetched) {
         match maybe_image {
-            Some(image) => images.push(image),
+            Some(image) => {
+                fetched_ok += 1;
+                images.push(image)
+            }
             None => not_found.push(req.album_id),
         }
     }
+    let total_elapsed = started.elapsed().as_millis() as u64;
+    tracing::info!(
+        target: "sinfonic::commands",
+        provider = %provider_id,
+        total,
+        cache_hits = hit_count,
+        fetched = fetched_ok,
+        failed = total.saturating_sub(hit_count + fetched_ok),
+        elapsed_ms = total_elapsed,
+        "provider_image_bytes_bulk done"
+    );
 
     Ok(AlbumArtBulkResponse { images, not_found })
 }
