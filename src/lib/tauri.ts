@@ -49,14 +49,6 @@ interface AlbumDetail {
 
 // ─── Library ────────────────────────────────────────────────────
 
-/** Fetch a paginated slice of albums, sorted by Rust-side default. */
-export const getAlbums = (offset = 0, limit = 50) =>
-  invoke<PagedResponse<Album>>("get_albums", { offset, limit });
-
-/** Fetch a paginated slice of artists. */
-export const getArtists = (offset = 0, limit = 50) =>
-  invoke<PagedResponse<Artist>>("get_artists", { offset, limit });
-
 /** Fetch every genre (rarely paginated — usually < 200 entries). */
 export const getGenres = () => invoke<Genre[]>("get_genres");
 
@@ -68,16 +60,8 @@ export const getAlbumsByGenre = (genre: string, offset = 0, limit = 50) =>
 export const getTracksByGenre = (genre: string, offset = 0, limit = 200) =>
   invoke<PagedResponse<Track>>("get_tracks_by_genre", { genre, offset, limit });
 
-/** Fetch a paginated slice of tracks. */
-export const getTracks = (offset = 0, limit = 50) =>
-  invoke<PagedResponse<Track>>("get_tracks", { offset, limit });
-
 /** Single album by id; `null` if missing. */
 export const getAlbum = (albumId: string) => invoke<Album | null>("get_album", { albumId });
-
-/** Album + its tracks in a single round-trip. `null` if missing. */
-export const getAlbumDetail = (albumId: string) =>
-  invoke<AlbumDetail | null>("get_album_detail", { albumId });
 
 // ─── Provider-direct reads (Phase 1 of feature/direct-fetch-providers) ─
 //
@@ -108,10 +92,6 @@ export const providerAlbumDetail = (albumId: string) =>
 /** Artist + their albums from the active provider. `null` when offline or unknown. */
 export const providerArtistDetail = (artistId: string) =>
   invoke<ArtistDetail | null>("provider_artist_detail", { artistId });
-
-/** Playlist + tracks from the active provider. `null` when offline, unsupported, or unknown. */
-export const providerPlaylistDetail = (playlistId: string) =>
-  invoke<PlaylistDetail | null>("provider_playlist_detail", { playlistId });
 
 // ─── Playback ───────────────────────────────────────────────────
 
@@ -156,10 +136,6 @@ export const queueRemove = (entryId: string) => invoke<boolean>("queue_remove", 
 /** Skip playback to the given entry. `false` if the id was already gone. */
 export const queueJumpTo = (entryId: string) => invoke<boolean>("queue_jump_to", { entryId });
 
-/** Reorder one entry to a new index in the queue. */
-export const queueMove = (entryId: string, targetIndex: number) =>
-  invoke<void>("queue_move", { entryId, targetIndex });
-
 /** Drop every entry from the queue. */
 export const queueClear = () => invoke<void>("queue_clear");
 
@@ -202,14 +178,11 @@ export const renamePlaylist = (playlistId: string, name: string) =>
 export const deletePlaylist = (playlistId: string) =>
   invoke<void>("delete_playlist", { playlistId });
 
-export const addPlaylistTracks = (playlistId: string, trackIds: string[]) =>
-  invoke<void>("add_playlist_tracks", { playlistId, trackIds });
-
 export const removePlaylistEntries = (playlistId: string, entryIds: string[]) =>
   invoke<void>("remove_playlist_entries", { playlistId, entryIds });
 
-export const movePlaylistEntry = (playlistId: string, entryId: string, newIndex: number) =>
-  invoke<void>("move_playlist_entry", { playlistId, entryId, newIndex });
+export const addPlaylistTracks = (playlistId: string, trackIds: string[]) =>
+  invoke<void>("add_playlist_tracks", { playlistId, trackIds });
 
 // ─── Favorites ─────────────────────────────────────────────────
 
@@ -390,32 +363,6 @@ export const providerSetActive = (serverId: string) =>
 
 /** Kick off a full library rescan. Listen for `library-sync-status` events for progress. */
 export const providerSyncLibrary = () => invoke<void>("provider_sync_library");
-
-/**
- * Phase 3 of feature/direct-fetch-providers: fire-and-forget kick
- * of the Subsonic album-tracks background sync. The backend
- * fans out `getAlbum` for every album on the server and writes
- * the resulting tracks into the SQLite cache so subsequent
- * `provider_list_tracks` calls are instant reads. Idempotent —
- * re-entry while one is already running is a no-op.
- */
-export const kickSubsonicBackgroundSync = () =>
-  invoke<void>("kick_subsonic_background_sync");
-
-/**
- * Phase 3 parity for Jellyfin: fire-and-forget kick of the Jellyfin
- * background sync. The backend paginates
- * `/Items?IncludeItemTypes=Audio|MusicAlbum|MusicArtist|Playlist`
- * and writes the rows into the SQLite cache, mirroring what the
- * manual `provider_sync_library` button does but without awaiting
- * it from the caller. Idempotent — re-entry while one is already
- * running is a no-op. Auto-fired from `jellyfinLogin` /
- * `providerSetActive` / `tryRestoreProvider`; the wrapper exists
- * for symmetry with the Subsonic one and for future manual-sync
- * UI.
- */
-export const kickJellyfinBackgroundSync = () =>
-  invoke<void>("kick_jellyfin_background_sync");
 
 // ─── Local files ─────────────────────────────────────────────
 

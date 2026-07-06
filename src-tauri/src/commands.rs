@@ -284,34 +284,6 @@ mod provider_helpers {
 
 // ─── Library queries (Phase 2) ──────────────────────────────────
 
-#[tauri::command]
-pub async fn get_albums(
-    offset: usize,
-    limit: usize,
-    state: SharedState<'_>,
-) -> Result<PagedResponse<Album>, String> {
-    let server_id = active_server_id(&state).await;
-    let guard = state.lock().await;
-    guard
-        .library
-        .list_albums(&server_id, offset, limit)
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn get_artists(
-    offset: usize,
-    limit: usize,
-    state: SharedState<'_>,
-) -> Result<PagedResponse<Artist>, String> {
-    let server_id = active_server_id(&state).await;
-    let guard = state.lock().await;
-    guard
-        .library
-        .list_artists(&server_id, offset, limit)
-        .map_err(|e| e.to_string())
-}
-
 /// Distinct genres for the active server, computed from the
 /// `album_genres` join table. Each row carries a count of distinct
 /// albums and a (rolled-up) count of tracks under that genre.
@@ -363,50 +335,9 @@ pub async fn get_tracks_by_genre(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub async fn get_tracks(
-    offset: usize,
-    limit: usize,
-    state: SharedState<'_>,
-) -> Result<PagedResponse<Track>, String> {
-    let server_id = active_server_id(&state).await;
-    let guard = state.lock().await;
-    guard
-        .library
-        .list_tracks(&server_id, offset, limit)
-        .map_err(|e| e.to_string())
-}
-
-/// Album detail: the album row plus its tracks in disc/track-number
-/// order. Reads from the SQLite cache (same scope as `get_albums`),
-/// so the detail view works offline after a sync. Returns `None`
-/// for the album when the cache doesn't know about that id (the
-/// frontend shows a "not found" state instead of erroring).
-#[tauri::command]
-pub async fn get_album_detail(
-    album_id: String,
-    state: SharedState<'_>,
-) -> Result<Option<AlbumDetail>, String> {
-    let server_id = active_server_id(&state).await;
-    let parsed = AlbumId::try_new(album_id).map_err(|e| e.to_string())?;
-    let guard = state.lock().await;
-    let album = guard
-        .library
-        .get_album(&server_id, &parsed)
-        .map_err(|e| e.to_string())?;
-    let Some(album) = album else {
-        return Ok(None);
-    };
-    let tracks = guard
-        .library
-        .list_album_tracks(&server_id, &parsed)
-        .map_err(|e| e.to_string())?;
-    Ok(Some(AlbumDetail { album, tracks }))
-}
-
 /// Single album row by id. Cheap lookup used by views that only
 /// need the cover (e.g. resolving a track's parent album when it
-/// wasn't in the first page of `get_albums`). Skips the track list
+/// wasn't in the first page of the library). Skips the track list
 /// to keep the payload small.
 #[tauri::command]
 pub async fn get_album(
@@ -655,31 +586,10 @@ static SUBSONIC_BACKGROUND_SYNC_IN_PROGRESS: AtomicBool =
 static JELLYFIN_BACKGROUND_SYNC_IN_PROGRESS: AtomicBool =
     AtomicBool::new(false);
 
-/// Phase 3 entry point. Spawns the background sync and returns
-/// immediately. Errors are logged inside the task — the command
-/// returns `Ok(())` whenever the provider is not Subsonic or the
-/// task was already running so callers (frontend) don't have to
-/// handle transient states.
-#[tauri::command]
-pub async fn kick_subsonic_background_sync(
-    app: tauri::AppHandle,
-    state: SharedState<'_>,
-) -> Result<(), String> {
-    let started = Instant::now();
-    let inner = kick_subsonic_background_sync_inner(app.clone(), state.inner().clone()).await;
-    tracing::info!(
-        target: "sinfonic::commands",
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "kick_subsonic_background_sync returned ({})",
-        if inner.is_ok() { "ok" } else { "err" }
-    );
-    inner
-}
-
-/// Same body as the Tauri command but takes the raw
-/// `Arc<Mutex<AppState>>` so internal callers (subsonic_login,
-/// provider_set_active, try_restore_provider) can fire the
-/// background sync without going through the IPC layer.
+/// Internal helper: fires the Subsonic background sync from
+/// `subsonic_login`, `provider_set_active`, and
+/// `try_restore_provider`. No Tauri command surface — the sync is
+/// auto-started on those trigger sites, never by user request.
 async fn kick_subsonic_background_sync_inner(
     app: tauri::AppHandle,
     state: Arc<Mutex<AppState>>,
@@ -918,35 +828,16 @@ async fn run_subsonic_background_sync(
     Ok(())
 }
 
-/// Jellyfin background-sync entry point, parallel to
-/// `kick_subsonic_background_sync`. Jellyfin has no two-phase
-/// album-fan-out (its `/Items?IncludeItemTypes=Audio` returns every
-/// track in a single paginated endpoint), so the worker just calls
-/// the existing `sync_library_data` and emits the same
-/// `library-sync-status:started/complete` events the manual
-/// `provider_sync_library` button does. Triggers: `jellyfin_login`,
-/// `provider_set_active` (Jellyfin branch), `try_restore_provider`.
-#[tauri::command]
-pub async fn kick_jellyfin_background_sync(
-    app: tauri::AppHandle,
-    state: SharedState<'_>,
-) -> Result<(), String> {
-    let started = Instant::now();
-    let inner = kick_jellyfin_background_sync_inner(app.clone(), state.inner().clone()).await;
-    tracing::info!(
-        target: "sinfonic::commands",
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "kick_jellyfin_background_sync returned ({})",
-        if inner.is_ok() { "ok" } else { "err" }
-    );
-    inner
-}
-
-/// Same body as the Tauri command but takes the raw
-/// `Arc<Mutex<AppState>>` so internal callers (jellyfin_login,
-/// provider_set_active, try_restore_provider) can fire the
-/// background sync without going through the IPC layer. Signature
-/// matches `kick_subsonic_background_sync_inner`.
+/// Internal helper: fires the Jellyfin background sync from
+/// `jellyfin_login`, `provider_set_active`, and
+/// `try_restore_provider`. No Tauri command surface — the sync is
+/// auto-started on those trigger sites, never by user request.
+/// Parallel to `kick_subsonic_background_sync_inner`. Jellyfin has
+/// no two-phase album fan-out (its `/Items?IncludeItemTypes=Audio`
+/// returns every track in a single paginated endpoint), so the
+/// worker just calls the existing `sync_library_data` and emits
+/// the same `library-sync-status:started/complete` events the
+/// manual `provider_sync_library` button does.
 async fn kick_jellyfin_background_sync_inner(
     app: tauri::AppHandle,
     state: Arc<Mutex<AppState>>,
@@ -1080,30 +971,12 @@ pub async fn provider_artist_detail(
     }
 }
 
-/// Playlist with its tracks resolved from the active provider.
-/// Returns `Ok(None)` when no provider is connected, the provider
-/// doesn't support playlist reads, or the playlist id is unknown.
-#[tauri::command]
-pub async fn provider_playlist_detail(
-    playlist_id: String,
-    state: SharedState<'_>,
-) -> Result<Option<PlaylistDetail>, String> {
-    let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
-        return Ok(None);
-    };
-    let parsed: PlaylistId = playlist_id.into();
-    match provider.playlist_detail(&parsed).await {
-        Ok(detail) => Ok(Some(detail)),
-        Err(sinfonic_source::ProviderError::NotFound) => Ok(None),
-        Err(sinfonic_source::ProviderError::Unsupported(_)) => Ok(None),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
+/// Playlist CRUD lives entirely on the SQLite cache; the
+/// `MusicProvider::playlist_detail` method is still used by
+/// `sync_library_data` to fill the initial snapshot.
 /// Replace the queue with `tracks` and start playing the first one
 /// in one atomic step. `play_track` only handles a single track and
-/// would clobber the queue; `queue_play_now` queues without
-/// starting playback. `play_album` is the right shape for the
+/// would clobber the queue; `play_album` is the right shape for the
 /// "Play album" button in the UI.
 #[tauri::command]
 pub async fn play_album(
@@ -1486,59 +1359,6 @@ fn resolve_all_next_via_pagination(
 }
 
 #[tauri::command]
-pub async fn queue_play_now(
-    tracks: Vec<Track>,
-    app: tauri::AppHandle,
-    state: SharedState<'_>,
-) -> Result<Vec<QueueEntryId>, String> {
-    if tracks.is_empty() {
-        return Err("queue_play_now: track list is empty".into());
-    }
-    let ids = {
-        let mut guard = state.lock().await;
-        guard.queue.play_now(&tracks)
-    };
-    if ids.is_empty() {
-        return Err("queue_play_now: nothing to play".into());
-    }
-
-    emit_queue_changed(&app, state.inner()).await;
-    if let Some(first) = tracks.first() {
-        emit_track_changed(&app, state.inner(), first).await;
-    }
-    emit_playback_state(&app, state.inner()).await;
-    Ok(ids)
-}
-
-#[tauri::command]
-pub async fn queue_play_next(
-    track: Track,
-    app: tauri::AppHandle,
-    state: SharedState<'_>,
-) -> Result<QueueEntryId, String> {
-    let id = {
-        let mut guard = state.lock().await;
-        guard.queue.play_next(&track)
-    };
-    emit_queue_changed(&app, state.inner()).await;
-    Ok(id)
-}
-
-#[tauri::command]
-pub async fn queue_add(
-    track: Track,
-    app: tauri::AppHandle,
-    state: SharedState<'_>,
-) -> Result<QueueEntryId, String> {
-    let id = {
-        let mut guard = state.lock().await;
-        guard.queue.add_to_queue(&track)
-    };
-    emit_queue_changed(&app, state.inner()).await;
-    Ok(id)
-}
-
-#[tauri::command]
 pub async fn queue_remove(
     entry_id: String,
     app: tauri::AppHandle,
@@ -1580,25 +1400,6 @@ pub async fn queue_jump_to(
         }
     }
     Ok(found)
-}
-
-#[tauri::command]
-pub async fn queue_move(
-    entry_id: String,
-    target_index: usize,
-    app: tauri::AppHandle,
-    state: SharedState<'_>,
-) -> Result<(), String> {
-    let parsed: QueueEntryId = entry_id.into();
-    {
-        let mut guard = state.lock().await;
-        guard
-            .queue
-            .move_entry(&parsed, target_index)
-            .map_err(|e| e.to_string())?;
-    }
-    emit_queue_changed(&app, state.inner()).await;
-    Ok(())
 }
 
 #[tauri::command]
@@ -2081,28 +1882,6 @@ pub async fn remove_playlist_entries(
         guard
             .library
             .remove_playlist_entries(&server_id, &parsed, &entry_ids)
-            .map_err(|e| e.to_string())?
-    }
-    emit_queue_changed(&app, state.inner()).await;
-    Ok(())
-}
-
-/// Moves a playlist entry to a new position.
-#[tauri::command]
-pub async fn move_playlist_entry(
-    playlist_id: String,
-    entry_id: String,
-    new_index: usize,
-    app: tauri::AppHandle,
-    state: SharedState<'_>,
-) -> Result<(), String> {
-    let server_id = active_server_id(&state).await;
-    let parsed: PlaylistId = playlist_id.into();
-    {
-        let guard = state.lock().await;
-        guard
-            .library
-            .move_playlist_entry(&server_id, &parsed, &entry_id, new_index)
             .map_err(|e| e.to_string())?
     }
     emit_queue_changed(&app, state.inner()).await;

@@ -206,15 +206,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // Library reads (Phase 2)
-            commands::get_albums,
-            commands::get_artists,
+            // Library reads (Phase 2) — kept for genre detail view.
             commands::get_genres,
             commands::get_albums_by_genre,
             commands::get_tracks_by_genre,
-            commands::get_tracks,
             commands::get_album,
-            commands::get_album_detail,
             // Provider-direct reads (Phase 1 of feature/direct-fetch-providers).
             // Bypass the SQLite cache and hit the upstream server so
             // the UI doesn't wait for `provider_sync_library`.
@@ -223,15 +219,6 @@ pub fn run() {
             commands::provider_list_tracks,
             commands::provider_album_detail,
             commands::provider_artist_detail,
-            commands::provider_playlist_detail,
-            // Phase 3 of feature/direct-fetch-providers: spawn the
-            // Subsonic album-tracks background sync. Idempotent —
-            // re-entry while one is running is a no-op.
-            commands::kick_subsonic_background_sync,
-            // Phase 3 parity for Jellyfin: identical contract
-            // (fire-and-forget, idempotent) over
-            // `sync_library_data` instead of the album fan-out.
-            commands::kick_jellyfin_background_sync,
             commands::play_album,
             commands::play_album_with_context,
             // Playback (Phase 1 + Phase 4 audio)
@@ -239,12 +226,8 @@ pub fn run() {
             commands::get_queue,
             commands::play_track,
             commands::play_track_with_context,
-            commands::queue_play_now,
-            commands::queue_play_next,
-            commands::queue_add,
             commands::queue_remove,
             commands::queue_jump_to,
-            commands::queue_move,
             commands::queue_clear,
             commands::queue_extend_more,
             // Queue bulk + Playlist CRUD (Phase 9)
@@ -257,7 +240,7 @@ pub fn run() {
             commands::delete_playlist,
             commands::add_playlist_tracks,
             commands::remove_playlist_entries,
-            commands::move_playlist_entry,
+            commands::add_playlist_tracks,
             // Favorites (Phase 9)
             commands::set_track_favorite,
             commands::set_album_favorite,
