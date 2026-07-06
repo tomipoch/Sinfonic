@@ -440,6 +440,29 @@ pub async fn get_album(
 // hint in that state; raising a `Result::Err` would trigger a toast
 // on every cold start.
 
+/// Snapshot the routing decision the three Subsonic-vs-upstream
+/// `provider_list_*` commands share: whether the active provider is
+/// Subsonic (route to SQLite), the active `ServerId` for the
+/// library reads, and a cloned handle to the dyn provider for the
+/// upstream HTTP path. Holds the `AppState` lock only briefly so
+/// the HTTP round-trip never wedges other Tauri commands.
+async fn snapshot_list_route(
+    state: &SharedState<'_>,
+) -> (bool, ServerId, Option<Arc<dyn MusicProvider>>) {
+    let guard = state.lock().await;
+    let provider_guard = guard.provider.lock().await;
+    let is_subsonic = provider_guard
+        .as_ref()
+        .is_some_and(|p| p.identity().provider_id == "subsonic");
+    let server_id = provider_guard
+        .as_ref()
+        .map(|p| p.identity().server_id.clone())
+        .unwrap_or_else(default_server_id);
+    let provider = provider_guard.as_ref().cloned();
+    drop(provider_guard);
+    (is_subsonic, server_id, provider)
+}
+
 #[tauri::command]
 pub async fn provider_list_albums(
     offset: usize,
@@ -447,7 +470,7 @@ pub async fn provider_list_albums(
     state: SharedState<'_>,
 ) -> Result<PagedResponse<Album>, String> {
     let started = Instant::now();
-    let server_id = active_server_id(&state).await;
+    let (is_subsonic, server_id, provider) = snapshot_list_route(&state).await;
     // Phase 5 of feature/direct-fetch-providers: Subsonic has no
     // way to populate a top-level album list cheaply (`getAlbumList2`
     // paginates at 500/page and the background sync hammers the
@@ -459,15 +482,10 @@ pub async fn provider_list_albums(
     // Jellyfin / local pass through to the provider: their list
     // endpoints are fast enough not to need a cache, and the local
     // provider already holds the full snapshot in memory.
-    let guard = state.lock().await;
-    let is_subsonic = guard
-        .provider
-        .lock()
-        .await
-        .as_ref()
-        .is_some_and(|p| p.identity().provider_id == "subsonic");
     if is_subsonic {
-        let res = guard
+        let res = state
+            .lock()
+            .await
             .library
             .list_albums(&server_id, offset, limit)
             .map_err(|e| e.to_string());
@@ -481,8 +499,7 @@ pub async fn provider_list_albums(
         );
         return res;
     }
-    drop(guard);
-    let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
+    let Some(provider) = provider else {
         return Ok(PagedResponse::new(Vec::new(), 0));
     };
     let req = sinfonic_domain::PagedRequest::new(offset, limit);
@@ -505,17 +522,12 @@ pub async fn provider_list_artists(
     state: SharedState<'_>,
 ) -> Result<PagedResponse<Artist>, String> {
     let started = Instant::now();
-    let server_id = active_server_id(&state).await;
+    let (is_subsonic, server_id, provider) = snapshot_list_route(&state).await;
     // See provider_list_albums for the Subsonic-rationale.
-    let guard = state.lock().await;
-    let is_subsonic = guard
-        .provider
-        .lock()
-        .await
-        .as_ref()
-        .is_some_and(|p| p.identity().provider_id == "subsonic");
     if is_subsonic {
-        let res = guard
+        let res = state
+            .lock()
+            .await
             .library
             .list_artists(&server_id, offset, limit)
             .map_err(|e| e.to_string());
@@ -529,8 +541,7 @@ pub async fn provider_list_artists(
         );
         return res;
     }
-    drop(guard);
-    let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
+    let Some(provider) = provider else {
         return Ok(PagedResponse::new(Vec::new(), 0));
     };
     let req = sinfonic_domain::PagedRequest::new(offset, limit);
@@ -553,27 +564,17 @@ pub async fn provider_list_tracks(
     state: SharedState<'_>,
 ) -> Result<PagedResponse<Track>, String> {
     let started = Instant::now();
-    let server_id = active_server_id(&state).await;
+    let (is_subsonic, server_id, provider) = snapshot_list_route(&state).await;
     // Phase 3 of feature/direct-fetch-providers: Subsonic has no
     // "list every track" endpoint so we serve the request from the
     // SQLite cache populated by `kick_subsonic_background_sync`.
     // While the background sync is running, the cache is partial
     // and the user sees only the tracks already ingested — the
     // `sync-progress` event keeps the UI honest about that.
-    //
-    // The trait-object `provider.tracks(...)` path is still
-    // available as a fallback for Subsonic (used by the background
-    // sync itself and by the legacy fan-out window path), but the
-    // UI no longer hits it directly.
-    let guard = state.lock().await;
-    let provider_kind = guard
-        .provider
-        .lock()
-        .await
-        .as_ref()
-        .map(|p| p.identity().provider_id.clone());
-    if provider_kind.as_deref() == Some("subsonic") {
-        let res = guard
+    if is_subsonic {
+        let res = state
+            .lock()
+            .await
             .library
             .list_tracks(&server_id, offset, limit)
             .map_err(|e| e.to_string());
@@ -587,8 +588,7 @@ pub async fn provider_list_tracks(
         );
         return res;
     }
-    drop(guard);
-    let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
+    let Some(provider) = provider else {
         return Ok(PagedResponse::new(Vec::new(), 0));
     };
     let req = sinfonic_domain::PagedRequest::new(offset, limit);
