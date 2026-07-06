@@ -551,7 +551,6 @@ pub(crate) fn write_test_wav(path: &Path, duration_seconds: u32) -> Result<PathB
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as IoWrite;
 
     fn block_on<F: std::future::Future>(fut: F) -> F::Output {
         tokio::runtime::Builder::new_current_thread()
@@ -652,8 +651,7 @@ mod tests {
             }
         });
 
-        let mut out = Vec::new();
-        out.resize(5, 0u8);
+        let mut out = vec![0u8; 5];
         let n = source.read(&mut out).unwrap();
         assert_eq!(n, 5);
         assert_eq!(&out, b"hello");

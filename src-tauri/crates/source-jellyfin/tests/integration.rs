@@ -10,7 +10,7 @@ use sinfonic_domain::{AlbumId, ArtistId, PagedRequest, ServerId, TrackId};
 use sinfonic_source::MusicProvider;
 use sinfonic_source_jellyfin::auth::{login, LoginRequest};
 use sinfonic_source_jellyfin::{JellyfinProvider, JellyfinSession};
-use wiremock::matchers::{any, body_string, method, path};
+use wiremock::matchers::{body_string, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn session_for(server: &MockServer) -> JellyfinSession {

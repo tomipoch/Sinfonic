@@ -19,16 +19,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::json;
 use sinfonic_domain::{
-    Album, AlbumId, Artist, ArtistId, ImageKind, PagedRequest, PagedResponse, ServerId, Track,
+    Album, AlbumId, Artist, ArtistId, PagedRequest, PagedResponse, ServerId, Track,
     TrackId,
 };
 use sinfonic_lib::lookup_lyrics;
 use sinfonic_library::Store;
 use sinfonic_lyrics::LrclibClient;
 use sinfonic_source::{
-    AlbumDetailResponse, ArtistDetailResponse, FavoriteItemId, HomeSection, ImageBytes,
-    ImageMetadata, ImageRequest, Lyrics, MusicProvider, PlaybackReport, ProviderCapabilities,
-    ProviderError, ProviderIdentity, ProviderResult, RandomTrackRequest, StreamRequest,
+    AlbumDetailResponse, ArtistDetailResponse, FavoriteItemId, ImageBytes, ImageRequest, Lyrics, MusicProvider, PlaybackReport, ProviderCapabilities,
+    ProviderError, ProviderIdentity, ProviderResult,
 };
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};

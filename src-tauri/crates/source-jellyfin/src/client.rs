@@ -107,48 +107,6 @@ impl JellyfinClient {
         self.send_json(Method::POST, path, auth, Some(body)).await
     }
 
-    /// Run `DELETE {path}` and ignore the body. Jellyfin returns 204
-    /// for most mutating endpoints; we tolerate any 2xx.
-    pub async fn delete(&self, path: &str, auth: &AuthContext) -> Result<(), ProviderError> {
-        let url = self.url(path)?;
-        let resp = self
-            .http
-            .request(Method::DELETE, url)
-            .header("X-Emby-Authorization", auth.header_value())
-            .header("Accept", "application/json")
-            .send()
-            .await
-            .map_err(|e| ProviderError::Network(e.to_string()))?;
-        let resp = check_status(resp, path).await?;
-        // Drain so the connection can be reused.
-        let _ = resp.bytes().await;
-        Ok(())
-    }
-
-    /// `DELETE` with a JSON body — Jellyfin's playlist-entry removal
-    /// requires this (`DELETE /Playlists/{id}/Items` with
-    /// `{ "EntryIds": [...] }`).
-    pub async fn delete_with_body<B: Serialize>(
-        &self,
-        path: &str,
-        auth: &AuthContext,
-        body: &B,
-    ) -> Result<(), ProviderError> {
-        let url = self.url(path)?;
-        let resp = self
-            .http
-            .request(Method::DELETE, url)
-            .header("X-Emby-Authorization", auth.header_value())
-            .header("Accept", "application/json")
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| ProviderError::Network(e.to_string()))?;
-        let resp = check_status(resp, path).await?;
-        let _ = resp.bytes().await;
-        Ok(())
-    }
-
     /// Run `GET {path}` and return raw bytes (for image fetches).
     /// Enforces `JELLYFIN_IMAGE_MAX_BYTES` so a malicious server can't
     /// exhaust memory. The returned tuple is `(bytes, content_type)`

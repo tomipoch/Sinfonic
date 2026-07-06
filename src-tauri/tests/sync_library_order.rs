@@ -20,15 +20,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use sinfonic_domain::{
-    Album, AlbumId, Artist, ArtistId, FolderDetail, FolderId, Genre, GenreDetail, GenreId,
-    MusicFolder, MusicFolderId, PagedRequest, PagedResponse, Playlist, PlaylistDetail, PlaylistId,
+    Album, AlbumId, Artist, ArtistId, PagedRequest, PagedResponse, Playlist, PlaylistDetail, PlaylistId,
     SearchResults, ServerId, StreamDescriptor, Track, TrackId,
 };
 use sinfonic_library::Store;
 use sinfonic_source::{
-    AlbumDetailResponse, ArtistDetailResponse, FavoriteItemId, HomeSection, ImageBytes,
-    ImageMetadata, ImageRequest, Lyrics, MusicProvider, PlaybackReport, ProviderCapabilities,
-    ProviderError, ProviderIdentity, ProviderResult, RandomTrackRequest, StreamRequest,
+    AlbumDetailResponse, ArtistDetailResponse, FavoriteItemId, ImageBytes, ImageRequest, Lyrics, MusicProvider, PlaybackReport, ProviderCapabilities,
+    ProviderError, ProviderIdentity, ProviderResult,
 };
 
 /// Stub provider that returns a single artist / album / track on each

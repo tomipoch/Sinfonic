@@ -35,24 +35,20 @@ use tokio::sync::Mutex as AsyncMutex;
 use async_trait::async_trait;
 use futures::stream::{StreamExt, TryStreamExt};
 use sinfonic_domain::{
-    Album, AlbumId, Artist, ArtistId, FolderDetail, FolderId, Genre, GenreDetail, GenreId,
-    MusicFolder, MusicFolderId, PagedRequest, PagedResponse, Playlist, PlaylistDetail, PlaylistId,
+    Album, AlbumId, Artist, ArtistId, PagedRequest, PagedResponse, Playlist, PlaylistDetail, PlaylistId,
     SearchResults, StreamDescriptor, Track, TrackId,
 };
 use sinfonic_source::{
-    split_image_id, strip_prefix, slugify, AlbumDetailResponse, ArtistDetailResponse, FavoriteItemId,
-    HomeSection, HomeSectionKind, ImageBytes, ImageMetadata, ImageRequest, Lyrics, MusicProvider,
+    split_image_id, strip_prefix, AlbumDetailResponse, ArtistDetailResponse, FavoriteItemId, ImageBytes, ImageRequest, Lyrics, MusicProvider,
     PlaybackReport, ProviderCapabilities, ProviderError, ProviderIdentity, ProviderResult,
-    RandomTrackRequest,
 };
 use tauri::Emitter;
 
 pub use auth::{LoginRequest, LoginSuccess, SubsonicSession};
 use client::{SubsonicClient, SUBSONIC_API_VERSION};
 use dto::{
-    AlbumDetailPayload, AlbumListPayload, ArtistDetailPayload, ArtistsPayload, CreatePlaylistResponse,
-    GenreDto, GenresPayload, IndexesPayload, PlaylistsPayload, PlaylistDetailPayload,
-    PlaylistDto, RandomSongsPayload, SearchResult3Payload,
+    AlbumDetailPayload, AlbumListPayload, ArtistDetailPayload, ArtistsPayload, IndexesPayload, PlaylistsPayload, PlaylistDetailPayload,
+    PlaylistDto, SearchResult3Payload,
 };
 
 /// Progress event name for `sync-progress`. Now sourced from

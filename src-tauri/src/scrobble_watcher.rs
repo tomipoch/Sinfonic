@@ -147,33 +147,26 @@ async fn tick(
         // The throttling timer resets on track change so the next
         // 30s tick always re-fires `Progress` after `Started`.
         state.last_progress_at = None;
-        if current_track_id.is_some() && current_entry.is_some() {
+        if let (Some(track_id), Some(_entry)) = (&current_track_id, &current_entry) {
             send_provider_report(
                 provider_slot,
-                build_report(
-                    PlaybackReportKind::Started,
-                    &cached,
-                    current_track_id.as_ref().unwrap(),
-                ),
+                build_report(PlaybackReportKind::Started, &cached, track_id),
             )
             .await;
         }
-    } else if current_track_id.is_some()
-        && state
+    } else if let Some(track_id) = &current_track_id {
+        let throttle_due = state
             .last_progress_at
             .map(|t| t.elapsed() >= PROGRESS_THROTTLE)
-            .unwrap_or(true)
-    {
-        send_provider_report(
-            provider_slot,
-            build_report(
-                PlaybackReportKind::Progress,
-                &cached,
-                current_track_id.as_ref().unwrap(),
-            ),
-        )
-        .await;
-        state.last_progress_at = Some(Instant::now());
+            .unwrap_or(true);
+        if throttle_due {
+            send_provider_report(
+                provider_slot,
+                build_report(PlaybackReportKind::Progress, &cached, track_id),
+            )
+            .await;
+            state.last_progress_at = Some(Instant::now());
+        }
     }
 
     // 2) Last.fm path (opt-in).

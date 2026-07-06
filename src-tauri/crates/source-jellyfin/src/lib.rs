@@ -28,15 +28,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use sinfonic_domain::{
-    Album, AlbumId, Artist, ArtistId, FolderDetail, FolderId, Genre, GenreDetail, GenreId,
-    MusicFolder, MusicFolderId, PagedRequest, PagedResponse, Playlist, PlaylistDetail, PlaylistId,
+    Album, AlbumId, Artist, ArtistId, PagedRequest, PagedResponse, Playlist, PlaylistDetail, PlaylistId,
     SearchResults, ServerId, StreamDescriptor, Track, TrackId,
 };
 use sinfonic_source::{
     split_image_id, strip_prefix, AlbumDetailResponse, ArtistDetailResponse, Capabilities,
-    FavoriteItemId, HomeSection, Identity, ImageBytes, ImageMetadata, ImageRequest, Lyrics,
+    FavoriteItemId, Identity, ImageBytes, ImageRequest, Lyrics,
     MusicProvider, PlaybackReport, ProviderCapabilities, ProviderError, ProviderIdentity,
-    ProviderResult, RandomTrackRequest,
+    ProviderResult,
 };
 use url::Url;
 

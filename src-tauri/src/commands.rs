@@ -4125,14 +4125,12 @@ mod persist_helpers {
     //!
     //! - [`persist_queue`] writes the current `QueueSnapshot` to the
     //!   `queue_snapshots` table, scoped by the queue's `server_id`.
-    //!   No-op when:
-    //!     - the queue has no server anchor (just logged out / about
-    //!       to log in),
-    //!     - `persist_guard` is set (active during
-    //!       `teardown_active_provider` so a teardown doesn't wipe
-    //!       the previous server's snapshot with an empty queue).
-    //!   Failures are logged and dropped; the in-memory queue is
-    //!   still authoritative until the next launch.
+    //!   No-op when the queue has no server anchor (just logged out
+    //!   / about to log in) or `persist_guard` is set (active during
+    //!   `teardown_active_provider` so a teardown doesn't wipe the
+    //!   previous server's snapshot with an empty queue). Failures
+    //!   are logged and dropped; the in-memory queue is still
+    //!   authoritative until the next launch.
     //!
     //! - [`context_remaining`] resolves how many additional tracks
     //!   the user could pull from the active `PlayContext` (album /

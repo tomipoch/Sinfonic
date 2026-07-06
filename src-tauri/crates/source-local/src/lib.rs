@@ -11,15 +11,14 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use sinfonic_domain::{
-    Album, AlbumDetail, AlbumId, Artist, ArtistDetail, ArtistId, FolderDetail, FolderId, Genre,
-    GenreDetail, GenreId, ImageKind, MusicFolder, MusicFolderId, PagedRequest, PagedResponse,
+    Album, AlbumDetail, AlbumId, Artist, ArtistDetail, ArtistId, PagedRequest, PagedResponse,
     Playlist, PlaylistDetail, PlaylistId, SearchResults, ServerId, StreamDescriptor, Track,
     TrackId,
 };
 use sinfonic_source::{
-    AlbumDetailResponse, ArtistDetailResponse, Capabilities, FavoriteItemId, HomeSection, Identity,
-    ImageBytes, ImageMetadata, ImageRequest, Lyrics, MusicProvider, PlaybackReport, ProviderCapabilities,
-    ProviderError, ProviderIdentity, ProviderResult, RandomTrackRequest,
+    AlbumDetailResponse, ArtistDetailResponse, Capabilities, FavoriteItemId, Identity,
+    ImageBytes, ImageRequest, Lyrics, MusicProvider, PlaybackReport, ProviderCapabilities,
+    ProviderError, ProviderIdentity, ProviderResult,
 };
 
 pub mod scanner;
