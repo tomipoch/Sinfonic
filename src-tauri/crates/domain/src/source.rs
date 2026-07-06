@@ -106,17 +106,6 @@ fn redact_uri(uri: &str) -> String {
     }
 }
 
-/// What the UI asked for when hitting a search endpoint.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
-pub enum SearchKind {
-    #[default]
-    All,
-    Albums,
-    Tracks,
-    Artists,
-    Playlists,
-}
-
 /// Result of a search across all entity kinds.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct SearchResults {

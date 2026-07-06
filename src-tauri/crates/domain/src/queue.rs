@@ -172,15 +172,7 @@ impl QueueEntry {
     }
 }
 
-// ─── Snapshot / Replacement ─────────────────────────────────────
-
-/// A batch replacement used by "Play album" / "Play playlist" actions.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct QueueReplacement {
-    pub track_ids: Vec<TrackId>,
-    pub origin: QueueEntryOrigin,
-}
+// ─── Snapshot ───────────────────────────────────────────────────
 
 /// Serializable view of the queue for the UI.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

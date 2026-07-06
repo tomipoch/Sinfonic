@@ -18,8 +18,6 @@ pub mod events;
 pub mod ids;
 pub mod playback;
 pub mod queue;
-pub mod route;
-pub mod settings;
 pub mod source;
 
 pub use entities::{
@@ -39,9 +37,6 @@ pub use ids::{
 };
 pub use playback::PlaybackState;
 pub use queue::{
-    PlayContext, QueueEngine, QueueEntry, QueueEntryOrigin, QueueReplacement, QueueSnapshot,
-    RepeatMode,
+    PlayContext, QueueEngine, QueueEntry, QueueEntryOrigin, QueueSnapshot, RepeatMode,
 };
-pub use route::Route;
-pub use settings::AppSettings;
 pub use source::{ImageBytes, ImageKind, PagedRequest, PagedResponse, SearchResults, StreamDescriptor};
