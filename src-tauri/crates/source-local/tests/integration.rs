@@ -277,13 +277,13 @@ fn lazy_scan_does_not_re_scan_when_already_populated() {
 }
 
 #[test]
-fn lazy_scan_makes_artists_tracks_music_folders_and_search_work() {
+fn lazy_scan_makes_artists_tracks_and_search_work() {
     let root = tempfile::tempdir().unwrap();
     let root_path = root.path();
     write_wav(&root_path.join("album/track.wav"));
 
     let provider = LocalProvider::new(root_path);
-    // All four data methods must succeed without an explicit rescan.
+    // All three data methods must succeed without an explicit rescan.
     let albums = futures::executor::block_on(
         provider.albums(PagedRequest::new(0, 50)),
     )
@@ -296,15 +296,12 @@ fn lazy_scan_makes_artists_tracks_music_folders_and_search_work() {
         provider.tracks(PagedRequest::new(0, 50)),
     )
     .expect("tracks");
-    let folders = futures::executor::block_on(provider.music_folders())
-        .expect("music_folders");
     let search = futures::executor::block_on(provider.search("track"))
         .expect("search");
 
     assert!(albums.total >= 1);
     assert!(artists.total >= 1);
     assert!(tracks.total >= 1);
-    assert_eq!(folders.len(), 1);
     assert!(!search.tracks.is_empty());
 }
 

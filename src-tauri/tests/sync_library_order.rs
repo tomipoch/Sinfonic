@@ -109,9 +109,6 @@ impl MusicProvider for StubProvider {
         CAPS.get_or_init(ProviderCapabilities::default)
     }
 
-    async fn home_sections(&self) -> ProviderResult<Vec<HomeSection>> {
-        unimplemented!()
-    }
     async fn albums(&self, _req: PagedRequest) -> ProviderResult<PagedResponse<Album>> {
         Ok(PagedResponse::new(self.albums.clone(), self.albums.len()))
     }
@@ -121,39 +118,10 @@ impl MusicProvider for StubProvider {
     async fn tracks(&self, _req: PagedRequest) -> ProviderResult<PagedResponse<Track>> {
         Ok(PagedResponse::new(self.tracks.clone(), self.tracks.len()))
     }
-    async fn track(&self, _: &TrackId) -> ProviderResult<Track> {
-        unimplemented!()
-    }
-    async fn music_folders(&self) -> ProviderResult<Vec<MusicFolder>> {
-        unimplemented!()
-    }
-    async fn tracks_in_music_folder(
-        &self,
-        _: &MusicFolderId,
-        _: PagedRequest,
-    ) -> ProviderResult<PagedResponse<Track>> {
-        unimplemented!()
-    }
-    async fn folder(
-        &self,
-        _: Option<&FolderId>,
-        _: Option<&MusicFolderId>,
-    ) -> ProviderResult<FolderDetail> {
-        unimplemented!()
-    }
     async fn artists(&self, _req: PagedRequest) -> ProviderResult<PagedResponse<Artist>> {
         Ok(PagedResponse::new(self.artists.clone(), self.artists.len()))
     }
-    async fn album_artists(&self, req: PagedRequest) -> ProviderResult<PagedResponse<Artist>> {
-        self.artists(req).await
-    }
     async fn artist_detail(&self, _: &ArtistId) -> ProviderResult<ArtistDetailResponse> {
-        unimplemented!()
-    }
-    async fn genres(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Genre>> {
-        unimplemented!()
-    }
-    async fn genre_detail(&self, _: &GenreId) -> ProviderResult<GenreDetail> {
         unimplemented!()
     }
     async fn playlists(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Playlist>> {
@@ -162,52 +130,16 @@ impl MusicProvider for StubProvider {
     async fn playlist_detail(&self, _: &PlaylistId) -> ProviderResult<PlaylistDetail> {
         unimplemented!()
     }
-    async fn random_tracks(&self, _: RandomTrackRequest) -> ProviderResult<Vec<Track>> {
-        unimplemented!()
-    }
     async fn stream(&self, _: &TrackId) -> ProviderResult<StreamDescriptor> {
         unimplemented!()
     }
-    async fn stream_with_request(&self, _: StreamRequest) -> ProviderResult<StreamDescriptor> {
-        unimplemented!()
-    }
     async fn search(&self, _: &str) -> ProviderResult<SearchResults> {
-        unimplemented!()
-    }
-    async fn image_metadata(
-        &self,
-        _: &str,
-        _: sinfonic_domain::ImageKind,
-    ) -> ProviderResult<ImageMetadata> {
         unimplemented!()
     }
     async fn image_bytes(&self, _: ImageRequest) -> ProviderResult<ImageBytes> {
         unimplemented!()
     }
     async fn set_favorite(&self, _: FavoriteItemId, _: bool) -> ProviderResult<()> {
-        unimplemented!()
-    }
-    async fn create_playlist(&self, _: &str, _: &[TrackId]) -> ProviderResult<PlaylistId> {
-        unimplemented!()
-    }
-    async fn rename_playlist(&self, _: &PlaylistId, _: &str) -> ProviderResult<()> {
-        unimplemented!()
-    }
-    async fn delete_playlist(&self, _: &PlaylistId) -> ProviderResult<()> {
-        unimplemented!()
-    }
-    async fn add_playlist_tracks(&self, _: &PlaylistId, _: &[TrackId]) -> ProviderResult<()> {
-        unimplemented!()
-    }
-    async fn remove_playlist_entries(&self, _: &PlaylistId, _: &[String]) -> ProviderResult<()> {
-        unimplemented!()
-    }
-    async fn move_playlist_entry(
-        &self,
-        _: &PlaylistId,
-        _: &str,
-        _: usize,
-    ) -> ProviderResult<()> {
         unimplemented!()
     }
     async fn lyrics(&self, _: &TrackId, _: bool) -> ProviderResult<Option<Lyrics>> {
@@ -258,9 +190,6 @@ async fn sync_library_data_succeeds_against_empty_provider() {
         fn capabilities(&self) -> &ProviderCapabilities {
             unimplemented!()
         }
-        async fn home_sections(&self) -> ProviderResult<Vec<HomeSection>> {
-            Ok(vec![])
-        }
         async fn albums(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Album>> {
             Ok(PagedResponse::new(vec![], 0))
         }
@@ -270,42 +199,10 @@ async fn sync_library_data_succeeds_against_empty_provider() {
         async fn tracks(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Track>> {
             Ok(PagedResponse::new(vec![], 0))
         }
-        async fn track(&self, _: &TrackId) -> ProviderResult<Track> {
-            unimplemented!()
-        }
-        async fn music_folders(&self) -> ProviderResult<Vec<MusicFolder>> {
-            Ok(vec![])
-        }
-        async fn tracks_in_music_folder(
-            &self,
-            _: &MusicFolderId,
-            _: PagedRequest,
-        ) -> ProviderResult<PagedResponse<Track>> {
-            unimplemented!()
-        }
-        async fn folder(
-            &self,
-            _: Option<&FolderId>,
-            _: Option<&MusicFolderId>,
-        ) -> ProviderResult<FolderDetail> {
-            unimplemented!()
-        }
         async fn artists(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Artist>> {
             Ok(PagedResponse::new(vec![], 0))
         }
-        async fn album_artists(
-            &self,
-            req: PagedRequest,
-        ) -> ProviderResult<PagedResponse<Artist>> {
-            self.artists(req).await
-        }
         async fn artist_detail(&self, _: &ArtistId) -> ProviderResult<ArtistDetailResponse> {
-            unimplemented!()
-        }
-        async fn genres(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Genre>> {
-            unimplemented!()
-        }
-        async fn genre_detail(&self, _: &GenreId) -> ProviderResult<GenreDetail> {
             unimplemented!()
         }
         async fn playlists(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Playlist>> {
@@ -314,59 +211,16 @@ async fn sync_library_data_succeeds_against_empty_provider() {
         async fn playlist_detail(&self, _: &PlaylistId) -> ProviderResult<PlaylistDetail> {
             unimplemented!()
         }
-        async fn random_tracks(&self, _: RandomTrackRequest) -> ProviderResult<Vec<Track>> {
-            Ok(vec![])
-        }
         async fn stream(&self, _: &TrackId) -> ProviderResult<StreamDescriptor> {
             unimplemented!()
         }
-        async fn stream_with_request(
-            &self,
-            _: StreamRequest,
-        ) -> ProviderResult<StreamDescriptor> {
-            unimplemented!()
-        }
         async fn search(&self, _: &str) -> ProviderResult<SearchResults> {
-            unimplemented!()
-        }
-        async fn image_metadata(
-            &self,
-            _: &str,
-            _: sinfonic_domain::ImageKind,
-        ) -> ProviderResult<ImageMetadata> {
             unimplemented!()
         }
         async fn image_bytes(&self, _: ImageRequest) -> ProviderResult<ImageBytes> {
             unimplemented!()
         }
         async fn set_favorite(&self, _: FavoriteItemId, _: bool) -> ProviderResult<()> {
-            unimplemented!()
-        }
-        async fn create_playlist(&self, _: &str, _: &[TrackId]) -> ProviderResult<PlaylistId> {
-            unimplemented!()
-        }
-        async fn rename_playlist(&self, _: &PlaylistId, _: &str) -> ProviderResult<()> {
-            unimplemented!()
-        }
-        async fn delete_playlist(&self, _: &PlaylistId) -> ProviderResult<()> {
-            unimplemented!()
-        }
-        async fn add_playlist_tracks(&self, _: &PlaylistId, _: &[TrackId]) -> ProviderResult<()> {
-            unimplemented!()
-        }
-        async fn remove_playlist_entries(
-            &self,
-            _: &PlaylistId,
-            _: &[String],
-        ) -> ProviderResult<()> {
-            unimplemented!()
-        }
-        async fn move_playlist_entry(
-            &self,
-            _: &PlaylistId,
-            _: &str,
-            _: usize,
-        ) -> ProviderResult<()> {
             unimplemented!()
         }
         async fn lyrics(&self, _: &TrackId, _: bool) -> ProviderResult<Option<Lyrics>> {
@@ -433,9 +287,6 @@ async fn sync_library_data_fetches_every_page_not_just_the_first() {
         fn capabilities(&self) -> &ProviderCapabilities {
             unimplemented!()
         }
-        async fn home_sections(&self) -> ProviderResult<Vec<HomeSection>> {
-            Ok(vec![])
-        }
         async fn albums(&self, req: PagedRequest) -> ProviderResult<PagedResponse<Album>> {
             self.album_calls.fetch_add(1, Ordering::SeqCst);
             let total = self.albums.len();
@@ -449,26 +300,6 @@ async fn sync_library_data_fetches_every_page_not_just_the_first() {
         async fn tracks(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Track>> {
             Ok(PagedResponse::new(self.tracks.clone(), self.tracks.len()))
         }
-        async fn track(&self, _: &TrackId) -> ProviderResult<Track> {
-            unimplemented!()
-        }
-        async fn music_folders(&self) -> ProviderResult<Vec<MusicFolder>> {
-            Ok(vec![])
-        }
-        async fn tracks_in_music_folder(
-            &self,
-            _: &MusicFolderId,
-            _: PagedRequest,
-        ) -> ProviderResult<PagedResponse<Track>> {
-            unimplemented!()
-        }
-        async fn folder(
-            &self,
-            _: Option<&FolderId>,
-            _: Option<&MusicFolderId>,
-        ) -> ProviderResult<FolderDetail> {
-            unimplemented!()
-        }
         async fn artists(&self, req: PagedRequest) -> ProviderResult<PagedResponse<Artist>> {
             self.artist_calls.fetch_add(1, Ordering::SeqCst);
             let total = self.artists.len();
@@ -476,19 +307,7 @@ async fn sync_library_data_fetches_every_page_not_just_the_first() {
             let end = (start + req.limit).min(total);
             Ok(PagedResponse::new(self.artists[start..end].to_vec(), total))
         }
-        async fn album_artists(
-            &self,
-            req: PagedRequest,
-        ) -> ProviderResult<PagedResponse<Artist>> {
-            self.artists(req).await
-        }
         async fn artist_detail(&self, _: &ArtistId) -> ProviderResult<ArtistDetailResponse> {
-            unimplemented!()
-        }
-        async fn genres(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Genre>> {
-            unimplemented!()
-        }
-        async fn genre_detail(&self, _: &GenreId) -> ProviderResult<GenreDetail> {
             unimplemented!()
         }
         async fn playlists(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Playlist>> {
@@ -497,59 +316,16 @@ async fn sync_library_data_fetches_every_page_not_just_the_first() {
         async fn playlist_detail(&self, _: &PlaylistId) -> ProviderResult<PlaylistDetail> {
             unimplemented!()
         }
-        async fn random_tracks(&self, _: RandomTrackRequest) -> ProviderResult<Vec<Track>> {
-            unimplemented!()
-        }
         async fn stream(&self, _: &TrackId) -> ProviderResult<StreamDescriptor> {
             unimplemented!()
         }
-        async fn stream_with_request(
-            &self,
-            _: StreamRequest,
-        ) -> ProviderResult<StreamDescriptor> {
-            unimplemented!()
-        }
         async fn search(&self, _: &str) -> ProviderResult<SearchResults> {
-            unimplemented!()
-        }
-        async fn image_metadata(
-            &self,
-            _: &str,
-            _: sinfonic_domain::ImageKind,
-        ) -> ProviderResult<ImageMetadata> {
             unimplemented!()
         }
         async fn image_bytes(&self, _: ImageRequest) -> ProviderResult<ImageBytes> {
             unimplemented!()
         }
         async fn set_favorite(&self, _: FavoriteItemId, _: bool) -> ProviderResult<()> {
-            unimplemented!()
-        }
-        async fn create_playlist(&self, _: &str, _: &[TrackId]) -> ProviderResult<PlaylistId> {
-            unimplemented!()
-        }
-        async fn rename_playlist(&self, _: &PlaylistId, _: &str) -> ProviderResult<()> {
-            unimplemented!()
-        }
-        async fn delete_playlist(&self, _: &PlaylistId) -> ProviderResult<()> {
-            unimplemented!()
-        }
-        async fn add_playlist_tracks(&self, _: &PlaylistId, _: &[TrackId]) -> ProviderResult<()> {
-            unimplemented!()
-        }
-        async fn remove_playlist_entries(
-            &self,
-            _: &PlaylistId,
-            _: &[String],
-        ) -> ProviderResult<()> {
-            unimplemented!()
-        }
-        async fn move_playlist_entry(
-            &self,
-            _: &PlaylistId,
-            _: &str,
-            _: usize,
-        ) -> ProviderResult<()> {
             unimplemented!()
         }
         async fn lyrics(&self, _: &TrackId, _: bool) -> ProviderResult<Option<Lyrics>> {
@@ -651,9 +427,6 @@ async fn sync_library_data_persists_playlists() {
         fn capabilities(&self) -> &ProviderCapabilities {
             unimplemented!()
         }
-        async fn home_sections(&self) -> ProviderResult<Vec<HomeSection>> {
-            Ok(vec![])
-        }
         async fn albums(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Album>> {
             Ok(PagedResponse::new(vec![], 0))
         }
@@ -666,45 +439,13 @@ async fn sync_library_data_persists_playlists() {
         async fn tracks(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Track>> {
             Ok(PagedResponse::new(vec![], 0))
         }
-        async fn track(&self, _: &TrackId) -> ProviderResult<Track> {
-            unimplemented!()
-        }
-        async fn music_folders(&self) -> ProviderResult<Vec<MusicFolder>> {
-            Ok(vec![])
-        }
-        async fn tracks_in_music_folder(
-            &self,
-            _: &MusicFolderId,
-            _: PagedRequest,
-        ) -> ProviderResult<PagedResponse<Track>> {
-            unimplemented!()
-        }
-        async fn folder(
-            &self,
-            _: Option<&FolderId>,
-            _: Option<&MusicFolderId>,
-        ) -> ProviderResult<FolderDetail> {
-            unimplemented!()
-        }
         async fn artists(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Artist>> {
             Ok(PagedResponse::new(vec![], 0))
-        }
-        async fn album_artists(
-            &self,
-            req: PagedRequest,
-        ) -> ProviderResult<PagedResponse<Artist>> {
-            self.artists(req).await
         }
         async fn artist_detail(
             &self,
             _: &ArtistId,
         ) -> ProviderResult<ArtistDetailResponse> {
-            unimplemented!()
-        }
-        async fn genres(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Genre>> {
-            Ok(PagedResponse::new(vec![], 0))
-        }
-        async fn genre_detail(&self, _: &GenreId) -> ProviderResult<GenreDetail> {
             unimplemented!()
         }
         async fn playlists(
@@ -747,70 +488,16 @@ async fn sync_library_data_persists_playlists() {
                 .unwrap_or_default();
             Ok(PlaylistDetail { playlist, tracks })
         }
-        async fn random_tracks(
-            &self,
-            _: RandomTrackRequest,
-        ) -> ProviderResult<Vec<Track>> {
-            Ok(vec![])
-        }
         async fn stream(&self, _: &TrackId) -> ProviderResult<StreamDescriptor> {
             unimplemented!()
         }
-        async fn stream_with_request(
-            &self,
-            _: StreamRequest,
-        ) -> ProviderResult<StreamDescriptor> {
-            unimplemented!()
-        }
         async fn search(&self, _: &str) -> ProviderResult<SearchResults> {
-            unimplemented!()
-        }
-        async fn image_metadata(
-            &self,
-            _: &str,
-            _: sinfonic_domain::ImageKind,
-        ) -> ProviderResult<ImageMetadata> {
             unimplemented!()
         }
         async fn image_bytes(&self, _: ImageRequest) -> ProviderResult<ImageBytes> {
             unimplemented!()
         }
         async fn set_favorite(&self, _: FavoriteItemId, _: bool) -> ProviderResult<()> {
-            unimplemented!()
-        }
-        async fn create_playlist(
-            &self,
-            _: &str,
-            _: &[TrackId],
-        ) -> ProviderResult<PlaylistId> {
-            unimplemented!()
-        }
-        async fn rename_playlist(&self, _: &PlaylistId, _: &str) -> ProviderResult<()> {
-            unimplemented!()
-        }
-        async fn delete_playlist(&self, _: &PlaylistId) -> ProviderResult<()> {
-            unimplemented!()
-        }
-        async fn add_playlist_tracks(
-            &self,
-            _: &PlaylistId,
-            _: &[TrackId],
-        ) -> ProviderResult<()> {
-            unimplemented!()
-        }
-        async fn remove_playlist_entries(
-            &self,
-            _: &PlaylistId,
-            _: &[String],
-        ) -> ProviderResult<()> {
-            unimplemented!()
-        }
-        async fn move_playlist_entry(
-            &self,
-            _: &PlaylistId,
-            _: &str,
-            _: usize,
-        ) -> ProviderResult<()> {
             unimplemented!()
         }
         async fn lyrics(

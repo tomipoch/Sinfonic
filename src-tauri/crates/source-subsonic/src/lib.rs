@@ -313,21 +313,16 @@ impl SubsonicProvider {
     }
 }
 
-/// Subsonic-specific capability defaults. We enable everything
-/// supported by the standard Subsonic API and disable what is
-/// strictly optional.
+/// Subsonic-specific capability defaults. Enables everything the
+/// actual trait surface supports; any flags that survived the
+/// `feature/cleanup-phase2` audit are settable here.
 fn subsonic_capabilities() -> ProviderCapabilities {
     ProviderCapabilities {
         lyrics: true,
         playback_reporting: true,
-        playlist_mutations: true,
-        playlist_delete: true,
+        playlist_mutations: false,
+        playlist_delete: false,
         favorite_mutations: true,
-        auto_dj: false,
-        random_tracks: true,
-        random_played_filter: false,
-        music_folders: true,
-        folder_browsing: false,
         ..ProviderCapabilities::default()
     }
 }
@@ -340,15 +335,6 @@ impl MusicProvider for SubsonicProvider {
 
     fn capabilities(&self) -> &ProviderCapabilities {
         &self.capabilities
-    }
-
-    async fn home_sections(&self) -> ProviderResult<Vec<HomeSection>> {
-        let albums = self.fetch_recent_albums("newest", 10).await?;
-        Ok(vec![HomeSection {
-            kind: HomeSectionKind::NewlyAdded,
-            albums,
-            tracks: Vec::new(),
-        }])
     }
 
     async fn albums(&self, request: PagedRequest) -> ProviderResult<PagedResponse<Album>> {
@@ -517,78 +503,7 @@ impl MusicProvider for SubsonicProvider {
         Ok(PagedResponse::new(sliced, total_tracks))
     }
 
-    async fn track(&self, track_id: &TrackId) -> ProviderResult<Track> {
-        let id = track_id.as_str().trim_start_matches("track-");
-        let auth = self.session.sign();
-        let resp: AlbumDetailPayload = self
-            .client
-            .get_json(
-                "rest/getSong",
-                &auth,
-                SUBSONIC_API_VERSION,
-                [("id", id.to_string())],
-            )
-            .await?;
-        // getSong returns the song as if it were the only child of
-        // a synthetic album. We map the first song.
-        let song = resp
-            .album
-            .song
-            .first()
-            .ok_or(ProviderError::NotFound)?;
-        mapping::track_from_child(song)
-            .ok_or_else(|| ProviderError::Other("song detail without id".into()))
-    }
-
-    async fn music_folders(&self) -> ProviderResult<Vec<MusicFolder>> {
-        let auth = self.session.sign();
-        let resp: dto::MusicFoldersPayload = self
-            .client
-            .get_json(
-                "rest/getMusicFolders",
-                &auth,
-                SUBSONIC_API_VERSION,
-                [],
-            )
-            .await?;
-        Ok(resp
-            .music_folders
-            .music_folder
-            .iter()
-            .map(|f| MusicFolder {
-                id: sinfonic_domain::MusicFolderId::new(format!("music-folder-{}", f.id)),
-                name: f.name.clone(),
-                track_count: 0,
-            })
-            .collect())
-    }
-
-    async fn tracks_in_music_folder(
-        &self,
-        _folder_id: &MusicFolderId,
-        _request: PagedRequest,
-    ) -> ProviderResult<PagedResponse<Track>> {
-        Err(ProviderError::Unsupported("tracks_in_music_folder"))
-    }
-
-    async fn folder(
-        &self,
-        _id: Option<&FolderId>,
-        _music_folder_id: Option<&MusicFolderId>,
-    ) -> ProviderResult<FolderDetail> {
-        Err(ProviderError::Unsupported("folder"))
-    }
-
     async fn artists(&self, request: PagedRequest) -> ProviderResult<PagedResponse<Artist>> {
-        self.fetch_artists(request).await
-    }
-
-    async fn album_artists(
-        &self,
-        request: PagedRequest,
-    ) -> ProviderResult<PagedResponse<Artist>> {
-        // Subsonic does not distinguish album artists from track
-        // artists; both come from getArtists. We collapse the two.
         self.fetch_artists(request).await
     }
 
@@ -620,40 +535,6 @@ impl MusicProvider for SubsonicProvider {
         Ok(ArtistDetailResponse {
             detail: sinfonic_domain::ArtistDetail { artist, albums },
         })
-    }
-
-    async fn genres(&self, _request: PagedRequest) -> ProviderResult<PagedResponse<Genre>> {
-        let auth = self.session.sign();
-        let resp: GenresPayload = self
-            .client
-            .get_json("rest/getGenres", &auth, SUBSONIC_API_VERSION, [])
-            .await?;
-        let genres: Vec<Genre> = resp
-            .genres
-            .genre
-            .iter()
-            .filter_map(|g: &GenreDto| {
-                if g.value.is_empty() {
-                    None
-                } else {
-                    Some(Genre {
-                        id: GenreId::new(format!("genre-{}", slugify(&g.value))),
-                        name: g.value.clone(),
-                        album_count: g.album_count,
-                        track_count: g.song_count,
-                    })
-                }
-            })
-            .collect();
-        let total = genres.len();
-        Ok(PagedResponse::new(genres, total))
-    }
-
-    async fn genre_detail(&self, _id: &GenreId) -> ProviderResult<GenreDetail> {
-        // Subsonic doesn't expose a single "get genre detail"
-        // endpoint; the playlist + search can be used to populate a
-        // view. v0.1 returns Unsupported.
-        Err(ProviderError::Unsupported("genre_detail"))
     }
 
     async fn playlists(&self, request: PagedRequest) -> ProviderResult<PagedResponse<Playlist>> {
@@ -730,34 +611,6 @@ impl MusicProvider for SubsonicProvider {
         Ok(PlaylistDetail { playlist, tracks })
     }
 
-    async fn random_tracks(
-        &self,
-        request: RandomTrackRequest,
-    ) -> ProviderResult<Vec<Track>> {
-        let auth = self.session.sign();
-        let mut params: Vec<(&'static str, String)> = Vec::new();
-        params.push(("size", request.limit.to_string()));
-        if let Some(genre) = &request.genre {
-            params.push(("genre", genre.clone()));
-        }
-        if let Some(year) = request.from_year {
-            params.push(("fromYear", year.to_string()));
-        }
-        if let Some(year) = request.to_year {
-            params.push(("toYear", year.to_string()));
-        }
-        let resp: RandomSongsPayload = self
-            .client
-            .get_json("rest/getRandomSongs", &auth, SUBSONIC_API_VERSION, params)
-            .await?;
-        Ok(resp
-            .random_songs
-            .song
-            .iter()
-            .filter_map(mapping::track_from_child)
-            .collect())
-    }
-
     async fn stream(&self, track_id: &TrackId) -> ProviderResult<StreamDescriptor> {
         let auth = self.session.sign();
         let url = mapping::track_stream_url(
@@ -775,29 +628,6 @@ impl MusicProvider for SubsonicProvider {
             return Ok(SearchResults::default());
         }
         self.search_remote(query, 10, 20, 30).await
-    }
-
-    async fn image_metadata(
-        &self,
-        item_id: &str,
-        _kind: sinfonic_domain::ImageKind,
-    ) -> ProviderResult<ImageMetadata> {
-        let (_, real_id) = split_image_id(item_id);
-        let stripped = real_id
-            .strip_prefix("track-")
-            .or_else(|| real_id.strip_prefix("album-"))
-            .or_else(|| real_id.strip_prefix("artist-"))
-            .unwrap_or(real_id);
-        Ok(ImageMetadata {
-            item_id: real_id.to_string(),
-            kind: sinfonic_domain::ImageKind::Primary,
-            tag: None,
-            url: format!(
-                "{}/rest/getCoverArt?id={}&size=600",
-                self.session.base_url.trim_end_matches('/'),
-                stripped
-            ),
-        })
     }
 
     async fn image_bytes(&self, request: ImageRequest) -> ProviderResult<ImageBytes> {
@@ -856,113 +686,6 @@ impl MusicProvider for SubsonicProvider {
             )
             .await?;
         Ok(())
-    }
-
-    async fn create_playlist(
-        &self,
-        name: &str,
-        track_ids: &[TrackId],
-    ) -> ProviderResult<PlaylistId> {
-        let auth = self.session.sign();
-        let ids: Vec<&str> = track_ids
-            .iter()
-            .map(|t| strip_prefix(t.as_str(), "track-"))
-            .collect();
-        let mut params: Vec<(&'static str, String)> = vec![("name", name.to_string())];
-        for id in &ids {
-            params.push(("songId", (*id).to_string()));
-        }
-        let resp: CreatePlaylistResponse = self
-            .client
-            .post_json("rest/createPlaylist", &auth, SUBSONIC_API_VERSION, params)
-            .await?;
-        Ok(PlaylistId::from_external(&resp.playlist.id))
-    }
-
-    async fn rename_playlist(
-        &self,
-        playlist_id: &PlaylistId,
-        name: &str,
-    ) -> ProviderResult<()> {
-        let id = strip_prefix(playlist_id.as_str(), "playlist-");
-        let auth = self.session.sign();
-        let _: serde_json::Value = self
-            .client
-            .post_json(
-                "rest/updatePlaylist",
-                &auth,
-                SUBSONIC_API_VERSION,
-                [("playlistId", id.to_string()), ("name", name.to_string())],
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn delete_playlist(&self, playlist_id: &PlaylistId) -> ProviderResult<()> {
-        let id = strip_prefix(playlist_id.as_str(), "playlist-");
-        let auth = self.session.sign();
-        let _: serde_json::Value = self
-            .client
-            .post_json(
-                "rest/deletePlaylist",
-                &auth,
-                SUBSONIC_API_VERSION,
-                [("id", id.to_string())],
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn add_playlist_tracks(
-        &self,
-        playlist_id: &PlaylistId,
-        track_ids: &[TrackId],
-    ) -> ProviderResult<()> {
-        let id = strip_prefix(playlist_id.as_str(), "playlist-");
-        let mut params: Vec<(&'static str, String)> =
-            vec![("playlistId", id.to_string())];
-        for t in track_ids {
-            params.push((
-                "songIdToAdd",
-                strip_prefix(t.as_str(), "track-").to_string(),
-            ));
-        }
-        let auth = self.session.sign();
-        let _: serde_json::Value = self
-            .client
-            .post_json("rest/updatePlaylist", &auth, SUBSONIC_API_VERSION, params)
-            .await?;
-        Ok(())
-    }
-
-    async fn remove_playlist_entries(
-        &self,
-        playlist_id: &PlaylistId,
-        entry_ids: &[String],
-    ) -> ProviderResult<()> {
-        let id = strip_prefix(playlist_id.as_str(), "playlist-");
-        let mut params: Vec<(&'static str, String)> =
-            vec![("playlistId", id.to_string())];
-        for e in entry_ids {
-            params.push(("songIndexToRemove", e.clone()));
-        }
-        let auth = self.session.sign();
-        let _: serde_json::Value = self
-            .client
-            .post_json("rest/updatePlaylist", &auth, SUBSONIC_API_VERSION, params)
-            .await?;
-        Ok(())
-    }
-
-    async fn move_playlist_entry(
-        &self,
-        _playlist_id: &PlaylistId,
-        _entry_id: &str,
-        _new_index: usize,
-    ) -> ProviderResult<()> {
-        // Subsonic doesn't have a "move" endpoint; the canonical
-        // workaround is `remove_playlist_entries` + `add_playlist_tracks`.
-        Err(ProviderError::Unsupported("move_playlist_entry"))
     }
 
     async fn lyrics(

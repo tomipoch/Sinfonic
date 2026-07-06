@@ -558,15 +558,9 @@ async fn capabilities_advertise_what_subsonic_supports() {
     assert!(caps.tracks);
     assert!(caps.artists);
     assert!(caps.search);
-    assert!(caps.image_metadata);
-    assert!(caps.playlist_mutations);
-    assert!(caps.playlist_delete);
     assert!(caps.favorite_mutations);
     assert!(caps.playback_reporting);
-    assert!(caps.random_tracks);
-    assert!(caps.music_folders);
     assert!(caps.lyrics);
-    assert!(!caps.folder_browsing);
 }
 
 #[tokio::test]
@@ -718,36 +712,7 @@ async fn playlists_passes_size_param_and_respects_offset() {
     );
 }
 
-#[tokio::test]
-async fn create_playlist_posts_with_song_ids() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/rest/createPlaylist"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(envelope_ok(json!({
-            "playlist": {
-                "id": "pl-1",
-                "name": "My Mix",
-                "songCount": 2,
-                "duration": 480,
-                "public": false,
-                "owner": "alice",
-                "entry": []
-            }
-        }))))
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let provider = SubsonicProvider::new(session_for(&server)).unwrap();
-    let playlist_id = provider
-        .create_playlist(
-            "My Mix",
-            &[TrackId::new("track-1"), TrackId::new("track-2")],
-        )
-        .await
-        .expect("create ok");
-    assert_eq!(playlist_id.as_str(), "playlist-pl-1");
-}
+// ─── /rest/getLyrics ────────────────────────────────────────────────
 
 // ─── /rest/getLyrics ────────────────────────────────────────────────
 //

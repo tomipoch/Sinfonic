@@ -62,14 +62,12 @@ pub struct LocalProvider {
 }
 
 fn local_capabilities() -> ProviderCapabilities {
-    // Every field listed explicitly so clippy is happy and the
-    // capability surface is obvious at a glance.
+    // Every field listed explicitly so the capability surface is
+    // obvious at a glance.
     ProviderCapabilities {
         albums: true,
         tracks: true,
         artists: true,
-        album_artists: true,
-        genres: false,
         playlists: false,
         favorites: false,
         lyrics: true,
@@ -77,13 +75,7 @@ fn local_capabilities() -> ProviderCapabilities {
         playlist_mutations: false,
         playlist_delete: false,
         favorite_mutations: false,
-        auto_dj: false,
-        random_tracks: false,
-        random_played_filter: false,
         search: true,
-        image_metadata: true,
-        music_folders: true,
-        folder_browsing: false,
     }
 }
 
@@ -223,25 +215,6 @@ impl MusicProvider for LocalProvider {
         &self.capabilities
     }
 
-    async fn home_sections(&self) -> ProviderResult<Vec<HomeSection>> {
-        // Cheapest possible "home": the first few albums the scan
-        // surfaced, labelled "Explore". The Tauri layer typically
-        // calls the SQLite cache directly for home view, so this is
-        // a courtesy fallback.
-        self.ensure_scanned()?;
-        let snapshot = self.state.read();
-        let albums = snapshot
-            .scan
-            .as_ref()
-            .map(|s| s.albums.iter().take(10).cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
-        Ok(vec![HomeSection {
-            kind: sinfonic_source::HomeSectionKind::Explore,
-            albums,
-            tracks: Vec::new(),
-        }])
-    }
-
     async fn albums(&self, request: PagedRequest) -> ProviderResult<PagedResponse<Album>> {
         self.ensure_scanned()?;
         let snapshot = self.state.read();
@@ -287,52 +260,6 @@ impl MusicProvider for LocalProvider {
         Ok(PagedResponse::new(items, total))
     }
 
-    async fn track(&self, track_id: &TrackId) -> ProviderResult<Track> {
-        self.ensure_scanned()?;
-        let snapshot = self.state.read();
-        let scan = snapshot.scan.as_ref().expect("ensure_scanned set this");
-        scan.tracks
-            .iter()
-            .find(|t| t.id == *track_id)
-            .cloned()
-            .ok_or(ProviderError::NotFound)
-    }
-
-    async fn music_folders(&self) -> ProviderResult<Vec<MusicFolder>> {
-        self.ensure_scanned()?;
-        let snapshot = self.state.read();
-        let scan = snapshot.scan.as_ref().expect("ensure_scanned set this");
-        let track_count = scan.tracks.len() as u32;
-        let folder_name = self
-            .root
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("Music")
-            .to_string();
-        Ok(vec![MusicFolder {
-            id: MusicFolderId::new("music-folder-local"),
-            name: folder_name,
-            track_count,
-        }])
-    }
-
-    async fn tracks_in_music_folder(
-        &self,
-        _folder_id: &MusicFolderId,
-        request: PagedRequest,
-    ) -> ProviderResult<PagedResponse<Track>> {
-        // Single-folder provider: same as `tracks`.
-        self.tracks(request).await
-    }
-
-    async fn folder(
-        &self,
-        _id: Option<&FolderId>,
-        _music_folder_id: Option<&MusicFolderId>,
-    ) -> ProviderResult<FolderDetail> {
-        Err(ProviderError::Unsupported("folder browsing"))
-    }
-
     async fn artists(&self, request: PagedRequest) -> ProviderResult<PagedResponse<Artist>> {
         self.ensure_scanned()?;
         let snapshot = self.state.read();
@@ -340,13 +267,6 @@ impl MusicProvider for LocalProvider {
         let total = scan.artists.len();
         let items = paginate(&scan.artists, request.offset, request.limit);
         Ok(PagedResponse::new(items, total))
-    }
-
-    async fn album_artists(
-        &self,
-        request: PagedRequest,
-    ) -> ProviderResult<PagedResponse<Artist>> {
-        self.artists(request).await
     }
 
     async fn artist_detail(
@@ -373,17 +293,6 @@ impl MusicProvider for LocalProvider {
         })
     }
 
-    async fn genres(
-        &self,
-        _request: PagedRequest,
-    ) -> ProviderResult<PagedResponse<Genre>> {
-        Err(ProviderError::Unsupported("genres (local)"))
-    }
-
-    async fn genre_detail(&self, _id: &GenreId) -> ProviderResult<GenreDetail> {
-        Err(ProviderError::Unsupported("genre_detail (local)"))
-    }
-
     async fn playlists(
         &self,
         _request: PagedRequest,
@@ -396,13 +305,6 @@ impl MusicProvider for LocalProvider {
         _id: &PlaylistId,
     ) -> ProviderResult<PlaylistDetail> {
         Err(ProviderError::Unsupported("playlist_detail (local)"))
-    }
-
-    async fn random_tracks(
-        &self,
-        _req: RandomTrackRequest,
-    ) -> ProviderResult<Vec<Track>> {
-        Err(ProviderError::Unsupported("random_tracks (local)"))
     }
 
     async fn stream(&self, track_id: &TrackId) -> ProviderResult<StreamDescriptor> {
@@ -463,23 +365,6 @@ impl MusicProvider for LocalProvider {
         })
     }
 
-    async fn image_metadata(
-        &self,
-        item_id: &str,
-        kind: ImageKind,
-    ) -> ProviderResult<ImageMetadata> {
-        // The local provider doesn't expose image URLs (cover art is
-        // embedded inside the audio file, surfaced via `image_bytes`).
-        // We still return the same `item_id` so callers can route
-        // through the same `provider_image_bytes` IPC.
-        Ok(ImageMetadata {
-            item_id: item_id.to_string(),
-            kind,
-            tag: Some("embedded".into()),
-            url: String::new(),
-        })
-    }
-
     async fn image_bytes(&self, request: ImageRequest) -> ProviderResult<ImageBytes> {
         let art = self
             .lookup_embedded_art(&request.item_id)
@@ -500,49 +385,6 @@ impl MusicProvider for LocalProvider {
         // that state from here, so we surface it as unsupported and
         // let callers use the cache directly.
         Err(ProviderError::Unsupported("set_favorite (local)"))
-    }
-
-    async fn create_playlist(
-        &self,
-        _name: &str,
-        _track_ids: &[TrackId],
-    ) -> ProviderResult<PlaylistId> {
-        Err(ProviderError::Unsupported("create_playlist (local)"))
-    }
-
-    async fn rename_playlist(&self, _id: &PlaylistId, _name: &str) -> ProviderResult<()> {
-        Err(ProviderError::Unsupported("rename_playlist (local)"))
-    }
-
-    async fn delete_playlist(&self, _id: &PlaylistId) -> ProviderResult<()> {
-        Err(ProviderError::Unsupported("delete_playlist (local)"))
-    }
-
-    async fn add_playlist_tracks(
-        &self,
-        _id: &PlaylistId,
-        _track_ids: &[TrackId],
-    ) -> ProviderResult<()> {
-        Err(ProviderError::Unsupported("add_playlist_tracks (local)"))
-    }
-
-    async fn remove_playlist_entries(
-        &self,
-        _id: &PlaylistId,
-        _entries: &[String],
-    ) -> ProviderResult<()> {
-        Err(ProviderError::Unsupported(
-            "remove_playlist_entries (local)",
-        ))
-    }
-
-    async fn move_playlist_entry(
-        &self,
-        _id: &PlaylistId,
-        _entry: &str,
-        _new_index: usize,
-    ) -> ProviderResult<()> {
-        Err(ProviderError::Unsupported("move_playlist_entry (local)"))
     }
 
     async fn lyrics(
@@ -729,10 +571,8 @@ mod tests {
         assert!(caps.tracks);
         assert!(caps.artists);
         assert!(caps.search);
-        assert!(caps.image_metadata);
-        assert!(caps.music_folders);
+        assert!(caps.lyrics);
         assert!(!caps.playlists);
-        assert!(!caps.genres);
         assert!(!caps.favorites);
     }
 

@@ -1,8 +1,11 @@
 //! `ProviderCapabilities` declares what a `MusicProvider` can do.
 //!
-//! Defaults are conservative: providers must opt-in to optional features.
-//! This keeps the SOLID Interface Segregation principle honest — the
-//! frontend checks capability flags before invoking specialised methods.
+//! After the `feature/cleanup-phase2` audit only the flags the
+//! frontend actually checks against are kept here. Every other
+//! flag used to advertise a `MusicProvider` method that the UI
+//! never called (random tracks, folder browsing, music folders,
+//! image metadata, …) has been removed alongside the trait
+//! methods.
 
 use serde::{Deserialize, Serialize};
 
@@ -14,8 +17,6 @@ pub struct ProviderCapabilities {
     pub albums: bool,
     pub tracks: bool,
     pub artists: bool,
-    pub album_artists: bool,
-    pub genres: bool,
     pub playlists: bool,
     pub favorites: bool,
     pub lyrics: bool,
@@ -23,13 +24,7 @@ pub struct ProviderCapabilities {
     pub playlist_mutations: bool,
     pub playlist_delete: bool,
     pub favorite_mutations: bool,
-    pub auto_dj: bool,
-    pub random_tracks: bool,
-    pub random_played_filter: bool,
     pub search: bool,
-    pub image_metadata: bool,
-    pub music_folders: bool,
-    pub folder_browsing: bool,
 }
 
 impl Default for ProviderCapabilities {
@@ -38,8 +33,6 @@ impl Default for ProviderCapabilities {
             albums: true,
             tracks: true,
             artists: true,
-            album_artists: true,
-            genres: true,
             playlists: true,
             favorites: true,
             lyrics: false,
@@ -47,13 +40,7 @@ impl Default for ProviderCapabilities {
             playlist_mutations: false,
             playlist_delete: false,
             favorite_mutations: false,
-            auto_dj: false,
-            random_tracks: false,
-            random_played_filter: false,
             search: true,
-            image_metadata: true,
-            music_folders: false,
-            folder_browsing: false,
         }
     }
 }

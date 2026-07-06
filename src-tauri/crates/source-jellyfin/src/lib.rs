@@ -228,14 +228,9 @@ fn jellyfin_capabilities() -> ProviderCapabilities {
         // `lyrics()` implementation still returns `Ok(None)`.
         lyrics: true,
         playback_reporting: true,
-        playlist_mutations: true,
-        playlist_delete: true,
+        playlist_mutations: false,
+        playlist_delete: false,
         favorite_mutations: true,
-        auto_dj: false,
-        random_tracks: false,
-        random_played_filter: false,
-        music_folders: false,
-        folder_browsing: false,
         ..ProviderCapabilities::default()
     }
 }
@@ -248,19 +243,6 @@ impl MusicProvider for JellyfinProvider {
 
     fn capabilities(&self) -> &Capabilities {
         &self.capabilities
-    }
-
-    async fn home_sections(&self) -> ProviderResult<Vec<HomeSection>> {
-        // v0.1: surface the most recently added albums.
-        let albums = self
-            .fetch_albums(PagedRequest::new(0, 10))
-            .await?
-            .items;
-        Ok(vec![HomeSection {
-            kind: sinfonic_source::HomeSectionKind::NewlyAdded,
-            albums,
-            tracks: Vec::new(),
-        }])
     }
 
     async fn albums(&self, request: PagedRequest) -> ProviderResult<PagedResponse<Album>> {
@@ -301,44 +283,7 @@ impl MusicProvider for JellyfinProvider {
         self.fetch_tracks(request).await
     }
 
-    async fn track(&self, track_id: &TrackId) -> ProviderResult<Track> {
-        let id = track_id.as_str().trim_start_matches("track-");
-        let dto: BaseItemDto = self
-            .client
-            .get_json(&format!("Items/{id}"), &self.session.auth())
-            .await?;
-        mapping::track_from_dto(&dto)
-            .ok_or_else(|| ProviderError::Other("track detail without id".into()))
-    }
-
-    async fn music_folders(&self) -> ProviderResult<Vec<MusicFolder>> {
-        Err(ProviderError::Unsupported("music_folders"))
-    }
-
-    async fn tracks_in_music_folder(
-        &self,
-        _id: &MusicFolderId,
-        _request: PagedRequest,
-    ) -> ProviderResult<PagedResponse<Track>> {
-        Err(ProviderError::Unsupported("tracks_in_music_folder"))
-    }
-
-    async fn folder(
-        &self,
-        _id: Option<&FolderId>,
-        _music_folder_id: Option<&MusicFolderId>,
-    ) -> ProviderResult<FolderDetail> {
-        Err(ProviderError::Unsupported("folder"))
-    }
-
     async fn artists(&self, request: PagedRequest) -> ProviderResult<PagedResponse<Artist>> {
-        self.fetch_artists(request).await
-    }
-
-    async fn album_artists(
-        &self,
-        request: PagedRequest,
-    ) -> ProviderResult<PagedResponse<Artist>> {
         self.fetch_artists(request).await
     }
 
@@ -368,44 +313,6 @@ impl MusicProvider for JellyfinProvider {
         Ok(ArtistDetailResponse {
             detail: sinfonic_domain::ArtistDetail { artist, albums },
         })
-    }
-
-    async fn genres(&self, request: PagedRequest) -> ProviderResult<PagedResponse<Genre>> {
-        let resp: ItemsResponse<BaseItemDto> = self
-            .client
-            .get_json(
-                &items_query(&ItemsQuery {
-                    types: "MusicGenre",
-                    user_id: Some(&self.session.user_id),
-                    start_index: Some(request.offset),
-                    limit: Some(request.limit),
-                    sort_by: Some("SortName"),
-                    recursive: true,
-                    fields: Some("ChildCount"),
-                }),
-                &self.session.auth(),
-            )
-            .await?;
-        let genres = resp
-            .items
-            .iter()
-            .filter_map(|d| {
-                if d.id.is_empty() {
-                    return None;
-                }
-                Some(Genre {
-                    id: GenreId::new(format!("genre-{}", d.id)),
-                    name: d.name.clone().unwrap_or_default(),
-                    album_count: 0,
-                    track_count: 0,
-                })
-            })
-            .collect();
-        Ok(PagedResponse::new(genres, resp.total_record_count))
-    }
-
-    async fn genre_detail(&self, _id: &GenreId) -> ProviderResult<GenreDetail> {
-        Err(ProviderError::Unsupported("genre_detail"))
     }
 
     async fn playlists(&self, request: PagedRequest) -> ProviderResult<PagedResponse<Playlist>> {
@@ -459,13 +366,6 @@ impl MusicProvider for JellyfinProvider {
         Ok(PlaylistDetail { playlist, tracks })
     }
 
-    async fn random_tracks(
-        &self,
-        _request: RandomTrackRequest,
-    ) -> ProviderResult<Vec<Track>> {
-        Err(ProviderError::Unsupported("random_tracks"))
-    }
-
     async fn stream(&self, track_id: &TrackId) -> ProviderResult<StreamDescriptor> {
         Ok(StreamDescriptor::new(self.session.stream_url(track_id)))
     }
@@ -480,33 +380,6 @@ impl MusicProvider for JellyfinProvider {
         // the cache and then call the `search` Tauri command.
         let _ = query;
         Ok(SearchResults::default())
-    }
-
-    async fn image_metadata(
-        &self,
-        item_id: &str,
-        kind: sinfonic_domain::ImageKind,
-    ) -> ProviderResult<ImageMetadata> {
-        let (kind_part, real_id) = split_image_id(item_id);
-        let kind_str = match kind {
-            sinfonic_domain::ImageKind::Primary => "Primary",
-            sinfonic_domain::ImageKind::Backdrop => "Backdrop",
-        };
-        // The kind in the ImageRef (e.g. "Primary") takes precedence
-        // when present — the caller may not have known the original
-        // kind, but the cache tagged it.
-        let kind_str = if kind_part.is_empty() { kind_str } else { kind_part };
-        Ok(ImageMetadata {
-            item_id: real_id.to_string(),
-            kind,
-            tag: None,
-            url: format!(
-                "{}/Items/{}/Images/{}?maxHeight=600&quality=90",
-                self.session.base_url.trim_end_matches('/'),
-                real_id,
-                kind_str,
-            ),
-        })
     }
 
     async fn image_bytes(&self, request: ImageRequest) -> ProviderResult<ImageBytes> {
@@ -542,121 +415,6 @@ impl MusicProvider for JellyfinProvider {
                 &format!("Users/{}/FavoriteItems/{}", self.session.user_id, id),
                 &self.session.auth(),
                 &serde_json::json!({ "IsFavorite": favorite }),
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn create_playlist(
-        &self,
-        name: &str,
-        track_ids: &[TrackId],
-    ) -> ProviderResult<PlaylistId> {
-        #[derive(serde::Serialize)]
-        struct Body<'a> {
-            #[serde(rename = "Name")]
-            name: &'a str,
-            #[serde(rename = "UserId")]
-            user_id: &'a str,
-            #[serde(rename = "MediaType")]
-            media_type: &'a str,
-            #[serde(rename = "Ids")]
-            ids: Vec<String>,
-        }
-        let ids: Vec<String> = track_ids
-            .iter()
-            .map(|t| strip_prefix(t.as_str(), "track-").to_string())
-            .collect();
-        let body = Body {
-            name,
-            user_id: &self.session.user_id,
-            media_type: "Audio",
-            ids,
-        };
-        let resp: dto::PlaylistDto = self
-            .client
-            .post_json("Playlists", &self.session.auth(), &body)
-            .await?;
-        Ok(PlaylistId::from_external(&resp.id))
-    }
-
-    async fn rename_playlist(
-        &self,
-        playlist_id: &PlaylistId,
-        name: &str,
-    ) -> ProviderResult<()> {
-        let id = strip_prefix(playlist_id.as_str(), "playlist-");
-        let body = serde_json::json!({ "Name": name });
-        self.client
-            .post_json::<_, ()>(
-                &format!("Playlists/{id}"),
-                &self.session.auth(),
-                &body,
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn delete_playlist(&self, playlist_id: &PlaylistId) -> ProviderResult<()> {
-        let id = strip_prefix(playlist_id.as_str(), "playlist-");
-        self.client
-            .delete(&format!("Playlists/{id}"), &self.session.auth())
-            .await
-    }
-
-    async fn add_playlist_tracks(
-        &self,
-        playlist_id: &PlaylistId,
-        track_ids: &[TrackId],
-    ) -> ProviderResult<()> {
-        let id = strip_prefix(playlist_id.as_str(), "playlist-");
-        let ids: Vec<String> = track_ids
-            .iter()
-            .map(|t| strip_prefix(t.as_str(), "track-").to_string())
-            .collect();
-        let body = serde_json::json!({ "Ids": ids });
-        self.client
-            .post_json::<_, ()>(
-                &format!("Playlists/{id}/Items"),
-                &self.session.auth(),
-                &body,
-            )
-            .await?;
-        Ok(())
-    }
-
-    async fn remove_playlist_entries(
-        &self,
-        playlist_id: &PlaylistId,
-        entry_ids: &[String],
-    ) -> ProviderResult<()> {
-        let id = strip_prefix(playlist_id.as_str(), "playlist-");
-        let body = serde_json::json!({ "EntryIds": entry_ids });
-        self.client
-            .delete_with_body(
-                &format!("Playlists/{id}/Items"),
-                &self.session.auth(),
-                &body,
-            )
-            .await
-    }
-
-    async fn move_playlist_entry(
-        &self,
-        playlist_id: &PlaylistId,
-        entry_id: &str,
-        new_index: usize,
-    ) -> ProviderResult<()> {
-        let id = strip_prefix(playlist_id.as_str(), "playlist-");
-        let body = serde_json::json!({
-            "PlaylistItemId": entry_id,
-            "NewIndex": new_index,
-        });
-        self.client
-            .post_json::<_, ()>(
-                &format!("Playlists/{id}/Items/{entry_id}/Move/{new_index}"),
-                &self.session.auth(),
-                &body,
             )
             .await?;
         Ok(())

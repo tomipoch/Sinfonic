@@ -79,9 +79,6 @@ where
     fn capabilities(&self) -> &ProviderCapabilities {
         &self.capabilities
     }
-    async fn home_sections(&self) -> ProviderResult<Vec<HomeSection>> {
-        unimplemented!()
-    }
     async fn albums(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Album>> {
         unimplemented!()
     }
@@ -91,48 +88,13 @@ where
     async fn tracks(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Track>> {
         unimplemented!()
     }
-    async fn track(&self, _: &TrackId) -> ProviderResult<Track> {
-        unimplemented!()
-    }
-    async fn music_folders(&self) -> ProviderResult<Vec<sinfonic_domain::MusicFolder>> {
-        unimplemented!()
-    }
-    async fn tracks_in_music_folder(
-        &self,
-        _: &sinfonic_domain::MusicFolderId,
-        _: PagedRequest,
-    ) -> ProviderResult<PagedResponse<Track>> {
-        unimplemented!()
-    }
-    async fn folder(
-        &self,
-        _: Option<&sinfonic_domain::FolderId>,
-        _: Option<&sinfonic_domain::MusicFolderId>,
-    ) -> ProviderResult<sinfonic_domain::FolderDetail> {
-        unimplemented!()
-    }
     async fn artists(&self, _: PagedRequest) -> ProviderResult<PagedResponse<Artist>> {
-        unimplemented!()
-    }
-    async fn album_artists(
-        &self,
-        _: PagedRequest,
-    ) -> ProviderResult<PagedResponse<Artist>> {
         unimplemented!()
     }
     async fn artist_detail(
         &self,
         _: &ArtistId,
     ) -> ProviderResult<ArtistDetailResponse> {
-        unimplemented!()
-    }
-    async fn genres(&self, _: PagedRequest) -> ProviderResult<PagedResponse<sinfonic_domain::Genre>> {
-        unimplemented!()
-    }
-    async fn genre_detail(
-        &self,
-        _: &sinfonic_domain::GenreId,
-    ) -> ProviderResult<sinfonic_domain::GenreDetail> {
         unimplemented!()
     }
     async fn playlists(
@@ -147,71 +109,16 @@ where
     ) -> ProviderResult<sinfonic_domain::PlaylistDetail> {
         unimplemented!()
     }
-    async fn random_tracks(&self, _: RandomTrackRequest) -> ProviderResult<Vec<Track>> {
-        unimplemented!()
-    }
     async fn stream(&self, _: &TrackId) -> ProviderResult<sinfonic_domain::StreamDescriptor> {
         unimplemented!()
     }
-    async fn stream_with_request(
-        &self,
-        _: StreamRequest,
-    ) -> ProviderResult<sinfonic_domain::StreamDescriptor> {
-        unimplemented!()
-    }
     async fn search(&self, _: &str) -> ProviderResult<sinfonic_domain::SearchResults> {
-        unimplemented!()
-    }
-    async fn image_metadata(
-        &self,
-        _: &str,
-        _: ImageKind,
-    ) -> ProviderResult<ImageMetadata> {
         unimplemented!()
     }
     async fn image_bytes(&self, _: ImageRequest) -> ProviderResult<ImageBytes> {
         unimplemented!()
     }
     async fn set_favorite(&self, _: FavoriteItemId, _: bool) -> ProviderResult<()> {
-        unimplemented!()
-    }
-    async fn create_playlist(
-        &self,
-        _: &str,
-        _: &[TrackId],
-    ) -> ProviderResult<sinfonic_domain::PlaylistId> {
-        unimplemented!()
-    }
-    async fn rename_playlist(
-        &self,
-        _: &sinfonic_domain::PlaylistId,
-        _: &str,
-    ) -> ProviderResult<()> {
-        unimplemented!()
-    }
-    async fn delete_playlist(&self, _: &sinfonic_domain::PlaylistId) -> ProviderResult<()> {
-        unimplemented!()
-    }
-    async fn add_playlist_tracks(
-        &self,
-        _: &sinfonic_domain::PlaylistId,
-        _: &[TrackId],
-    ) -> ProviderResult<()> {
-        unimplemented!()
-    }
-    async fn remove_playlist_entries(
-        &self,
-        _: &sinfonic_domain::PlaylistId,
-        _: &[String],
-    ) -> ProviderResult<()> {
-        unimplemented!()
-    }
-    async fn move_playlist_entry(
-        &self,
-        _: &sinfonic_domain::PlaylistId,
-        _: &str,
-        _: usize,
-    ) -> ProviderResult<()> {
         unimplemented!()
     }
     async fn lyrics(

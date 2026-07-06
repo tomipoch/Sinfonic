@@ -207,25 +207,6 @@ async fn stream_returns_redacted_url_with_token() {
 }
 
 #[tokio::test]
-async fn delete_with_body_is_used_for_remove_playlist_entries() {
-    let server = MockServer::start().await;
-    Mock::given(method("DELETE"))
-        .and(path("/Playlists/p-1/Items"))
-        .and(any())
-        .respond_with(ResponseTemplate::new(204))
-        .expect(1..)
-        .mount(&server)
-        .await;
-
-    let provider = JellyfinProvider::new(session_for(&server)).unwrap();
-    let playlist_id = sinfonic_domain::PlaylistId::new("playlist-p-1");
-    provider
-        .remove_playlist_entries(&playlist_id, &["entry-1".into()])
-        .await
-        .expect("delete ok");
-}
-
-#[tokio::test]
 async fn network_failure_becomes_provider_error_network() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -271,12 +252,9 @@ async fn capabilities_advertise_what_jellyfin_supports() {
     assert!(caps.tracks);
     assert!(caps.artists);
     assert!(caps.search);
-    assert!(caps.image_metadata);
-    assert!(caps.playlist_mutations);
+    assert!(caps.favorite_mutations);
     assert!(caps.playback_reporting);
     assert!(caps.lyrics);
-    assert!(!caps.random_tracks);
-    assert!(!caps.folder_browsing);
 }
 
 #[tokio::test]
