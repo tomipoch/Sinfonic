@@ -15,6 +15,7 @@ use sinfonic_lyrics::LrclibClient;
 use sinfonic_playback::AudioPlayer;
 use sinfonic_secrets::KeyringStore;
 use sinfonic_source::MusicProvider;
+use sinfonic_source_subsonic::SubsonicProvider;
 use tokio::sync::Mutex;
 
 /// The single bag of state shared across all Tauri commands.
@@ -47,6 +48,15 @@ pub struct AppState {
     /// Subsonic, or any future implementation without changing
     /// command code.
     pub provider: Arc<Mutex<Option<Arc<dyn MusicProvider>>>>,
+    /// Typed `Arc<SubsonicProvider>` mirror of `provider`, set only
+    /// when the active provider is a Subsonic server. Used by
+    /// `commands::kick_subsonic_background_sync` to call
+    /// `SubsonicProvider::sync_album_tracks` — a Subsonic-specific
+    /// helper that lives outside the `MusicProvider` trait because
+    /// no other source needs the album-fan-out pattern. Kept in
+    /// lockstep with `provider`: cleared on logout / server switch,
+    /// re-populated on subsonic login / activate.
+    pub subsonic: Arc<Mutex<Option<Arc<SubsonicProvider>>>>,
     /// OS keyring wrapper. Cloned handles share the same backend.
     pub secrets: Arc<KeyringStore>,
     /// Stable device id sent in the Jellyfin auth header. Generated
@@ -94,6 +104,7 @@ impl Default for AppState {
             player: Arc::new(AudioPlayer::new()),
             library: Store::open_memory().expect("open_memory never fails"),
             provider: Arc::new(Mutex::new(None)),
+            subsonic: Arc::new(Mutex::new(None)),
             secrets: Arc::new(secrets),
             device_id: default_device_id(),
             album_art: None,
@@ -108,25 +119,6 @@ impl Default for AppState {
 impl AppState {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Build an `AppState` with the library cache pointed at a real
-    /// on-disk file. Called from `lib.rs` on app startup.
-    pub fn with_library_path(path: impl AsRef<std::path::Path>) -> Result<Self, String> {
-        let library = Store::open(path).map_err(|e| e.to_string())?;
-        Ok(Self {
-            queue: QueueEngine::default(),
-            player: Arc::new(AudioPlayer::new()),
-            library,
-            provider: Arc::new(Mutex::new(None)),
-            secrets: Arc::new(KeyringStore::new("sinfonic")),
-            device_id: default_device_id(),
-            album_art: None,
-            lastfm: Arc::new(Mutex::new(None)),
-            lyrics_client: Arc::new(build_lrclib_client()),
-            bootstrap_complete: Arc::new(AtomicBool::new(false)),
-            persist_guard: Arc::new(AtomicBool::new(false)),
-        })
     }
 
     /// Build an `AppState` with both the library cache and the album
@@ -144,6 +136,7 @@ impl AppState {
             player: Arc::new(AudioPlayer::new()),
             library,
             provider: Arc::new(Mutex::new(None)),
+            subsonic: Arc::new(Mutex::new(None)),
             secrets: Arc::new(KeyringStore::new("sinfonic")),
             device_id: default_device_id(),
             album_art: Some(Arc::new(album_art)),

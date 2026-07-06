@@ -21,6 +21,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Album,
   Artist,
+  ArtistDetail,
   ConnectedServer,
   DiscoveredServer,
   EqBandPayload,
@@ -37,9 +38,9 @@ import type {
 export type { ConnectedServer };
 
 /**
- * Album with its full track list. Returned by `getAlbumDetail`.
- * `null` is returned for a missing id so callers can render a
- * not-found state without catching.
+ * Album with its full track list. Returned by `getAlbumDetail` and
+ * `providerAlbumDetail`. `null` is returned for a missing id so
+ * callers can render a not-found state without catching.
  */
 interface AlbumDetail {
   album: Album;
@@ -77,6 +78,40 @@ export const getAlbum = (albumId: string) => invoke<Album | null>("get_album", {
 /** Album + its tracks in a single round-trip. `null` if missing. */
 export const getAlbumDetail = (albumId: string) =>
   invoke<AlbumDetail | null>("get_album_detail", { albumId });
+
+// ─── Provider-direct reads (Phase 1 of feature/direct-fetch-providers) ─
+//
+// Bypass the SQLite cache and hit the upstream server directly. Each
+// call returns within one HTTP round-trip per page, so the UI can
+// show data without waiting for `provider_sync_library` to finish.
+//
+// Behaviour matches the cached equivalents: empty pages / `null`
+// when no provider is connected, so the "connect a server" hint
+// still renders.
+
+/** Paginated albums from the active provider. Empty page when offline. */
+export const providerListAlbums = (offset = 0, limit = 50) =>
+  invoke<PagedResponse<Album>>("provider_list_albums", { offset, limit });
+
+/** Paginated artists from the active provider. */
+export const providerListArtists = (offset = 0, limit = 50) =>
+  invoke<PagedResponse<Artist>>("provider_list_artists", { offset, limit });
+
+/** Paginated tracks from the active provider. */
+export const providerListTracks = (offset = 0, limit = 50) =>
+  invoke<PagedResponse<Track>>("provider_list_tracks", { offset, limit });
+
+/** Album + tracks from the active provider. `null` when offline or unknown. */
+export const providerAlbumDetail = (albumId: string) =>
+  invoke<AlbumDetail | null>("provider_album_detail", { albumId });
+
+/** Artist + their albums from the active provider. `null` when offline or unknown. */
+export const providerArtistDetail = (artistId: string) =>
+  invoke<ArtistDetail | null>("provider_artist_detail", { artistId });
+
+/** Playlist + tracks from the active provider. `null` when offline, unsupported, or unknown. */
+export const providerPlaylistDetail = (playlistId: string) =>
+  invoke<PlaylistDetail | null>("provider_playlist_detail", { playlistId });
 
 // ─── Playback ───────────────────────────────────────────────────
 
@@ -355,6 +390,32 @@ export const providerSetActive = (serverId: string) =>
 
 /** Kick off a full library rescan. Listen for `library-sync-status` events for progress. */
 export const providerSyncLibrary = () => invoke<void>("provider_sync_library");
+
+/**
+ * Phase 3 of feature/direct-fetch-providers: fire-and-forget kick
+ * of the Subsonic album-tracks background sync. The backend
+ * fans out `getAlbum` for every album on the server and writes
+ * the resulting tracks into the SQLite cache so subsequent
+ * `provider_list_tracks` calls are instant reads. Idempotent —
+ * re-entry while one is already running is a no-op.
+ */
+export const kickSubsonicBackgroundSync = () =>
+  invoke<void>("kick_subsonic_background_sync");
+
+/**
+ * Phase 3 parity for Jellyfin: fire-and-forget kick of the Jellyfin
+ * background sync. The backend paginates
+ * `/Items?IncludeItemTypes=Audio|MusicAlbum|MusicArtist|Playlist`
+ * and writes the rows into the SQLite cache, mirroring what the
+ * manual `provider_sync_library` button does but without awaiting
+ * it from the caller. Idempotent — re-entry while one is already
+ * running is a no-op. Auto-fired from `jellyfinLogin` /
+ * `providerSetActive` / `tryRestoreProvider`; the wrapper exists
+ * for symmetry with the Subsonic one and for future manual-sync
+ * UI.
+ */
+export const kickJellyfinBackgroundSync = () =>
+  invoke<void>("kick_jellyfin_background_sync");
 
 // ─── Local files ─────────────────────────────────────────────
 

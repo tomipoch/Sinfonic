@@ -40,6 +40,7 @@ import { usePlaylistsStore } from "@/stores/playlistsStore";
 import { useServerStore } from "@/stores/serverStore";
 
 import { SourceSelector } from "./SourceSelector";
+import { SubsonicSyncIndicator } from "./SubsonicSyncIndicator";
 
 type NavItem = {
   to: string;
@@ -213,6 +214,8 @@ export function Sidebar({ collapsed = false }: Props) {
       ))}
 
       <div className="flex-1" />
+
+      {!collapsed && <SubsonicSyncIndicator />}
 
       {!collapsed && (
         <div className="border-t border-border pt-2">

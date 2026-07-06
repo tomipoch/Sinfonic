@@ -6,12 +6,19 @@
 // when a sync was kicked off from the Settings window (or any
 // future surface that doesn't navigate to `/loading`).
 //
-// Renders nothing unless a sync is in progress so it's safe to mount
-// unconditionally.
+// Phase 5 of feature/direct-fetch-providers: once the sync reports
+// `complete` we keep the "Library ready ✓" badge visible for a few
+// seconds — long enough to confirm the sync landed — then auto-hide.
+// Without this the chip stays on screen forever ("luego aparece
+// otro debajo del header" in the user's report) because `done=true`
+// is sticky until the next sync starts.
 
 import { Loading03Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { useEffect, useState } from "react";
 import { type SyncState, useSyncProgress } from "@/hooks/useSyncProgress";
+
+const COMPLETE_VISIBLE_MS = 3_000;
 
 function labelFor(state: SyncState): string {
   switch (state) {
@@ -28,12 +35,33 @@ function labelFor(state: SyncState): string {
       return "Syncing tracks…";
     case "complete":
       return "Library ready";
+    case "error":
+      return "Sync failed";
   }
 }
 
 export function SyncBanner() {
   const sync = useSyncProgress();
-  if (!sync.active && !sync.done) return null;
+  // `confirmedDone` is a one-shot timer that flips true when the
+  // sync reports `complete`. We keep the chip visible for
+  // COMPLETE_VISIBLE_MS after that so the user sees the success
+  // confirmation, then hide it. The next sync resets `confirmedDone`
+  // to false (via the `useEffect`) and the chip reappears.
+  const [confirmedDone, setConfirmedDone] = useState(false);
+
+  useEffect(() => {
+    if (sync.done) {
+      const id = window.setTimeout(() => setConfirmedDone(false), COMPLETE_VISIBLE_MS);
+      return () => window.clearTimeout(id);
+    }
+    // During an in-progress sync, mark "not yet confirmed done" so
+    // a new `done` flag re-shows the chip even if we just hid it.
+    setConfirmedDone(true);
+    return undefined;
+  }, [sync.done]);
+
+  const visible = sync.active || (sync.done && confirmedDone);
+  if (!visible) return null;
 
   const percent = Math.round(sync.progress * 100);
 

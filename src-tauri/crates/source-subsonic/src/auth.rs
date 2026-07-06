@@ -25,14 +25,13 @@ use rand::distributions::Alphanumeric;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sinfonic_domain::ServerId;
-use sinfonic_source::{ProviderError, ProviderResult};
+use sinfonic_source::{slugify, ProviderError, ProviderResult};
 use url::Url;
 
 use super::client::{SubsonicClient, SUBSONIC_CLIENT_NAME};
 use super::dto::PingResponse;
 
 const SUBSONIC_LOGIN_PATH: &str = "rest/ping";
-const SUBSONIC_LOGIN_VIEW: &str = "rest/ping.view";
 // The default Subsonic JSON envelope version. Newer servers also
 // support `1.16.1`; we pick `1.16.1` because Navidrome, Funkwhale
 // and modern Airsonic-derivatives all understand it and it adds
@@ -170,16 +169,3 @@ fn parse_base_url(raw: &str) -> ProviderResult<Url> {
     }
     Url::parse(trimmed).map_err(|e| ProviderError::Auth(format!("invalid base_url: {e}")))
 }
-
-/// Lowercase, alphanumeric-only derivation used to make a stable
-/// `server-id` from a server name. Delegates to
-/// `sinfonic_source::slugify` so the slug rules stay in lockstep
-/// with the ones used in `lib.rs::tracks()` for genre ids.
-fn slugify(name: &str) -> String {
-    sinfonic_source::slugify(name)
-}
-
-// Kept referenced so the import isn't flagged as unused when the
-// path is changed in the future.
-#[allow(dead_code)]
-const _UNUSED: (&str, &str) = (SUBSONIC_LOGIN_PATH, SUBSONIC_LOGIN_VIEW);

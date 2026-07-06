@@ -265,15 +265,13 @@ where
         track_id: TrackId,
         stream_uri: &str,
     ) -> Result<u32, PlayerError> {
-        // Open the stream first so we know the duration before we
-        // touch any state. A decode failure here is surfaced to the
-        // caller and nothing else happens.
-        //
-        // `stream::open` is async because HTTP downloads are funneled
-        // through `tokio::task::spawn_blocking` internally — keeping
-        // the rodio `Sink` work on the same task avoids any chance of
-        // the user pressing "next" mid-decode and leaving us with a
-        // dangling source.
+        // Open the stream once. `stream::open` is async because HTTP
+        // downloads are funneled through a worker thread — we open
+        // the body before touching any state so a decode failure here
+        // is surfaced to the caller without side effects. The decoded
+        // source is wrapped in the project's EQ and either consumed
+        // by the crossfade path or handed off to the dry-cut Sink;
+        // either way we read the file once per play.
         let decoded = stream::open(stream_uri)
             .await
             .map_err(|e| PlayerError::Stream(e.to_string()))?
@@ -281,76 +279,84 @@ where
         let duration_seconds = decoded.duration_seconds.unwrap_or(0);
 
         // Crossfade path: if crossfade is on AND a preload exists
-        // for this exact track_id, ramp the current sink down and
-        // the preloaded one up over `crossfade_seconds`, then
-        // promote the new sink. Falls through to the dry-cut path
-        // when either condition fails (no preload, no device, or
-        // feature disabled).
-        if self.inner.crossfade_enabled.load(Ordering::Relaxed) {
-            if let Some((preload_id, next_sink)) = self.inner.next_sink.lock().take() {
-                if preload_id == track_id {
-                    if self.inner.stream_handle.lock().is_some() {
-                        self.start_crossfade(decoded.source, track_id.clone(), next_sink);
-                        self.inner.position_seconds.store(0, Ordering::Relaxed);
-                        self.inner.duration_seconds.store(duration_seconds, Ordering::Relaxed);
-                        self.inner.is_paused.store(false, Ordering::Relaxed);
-                        self.inner.ended_fired.store(false, Ordering::Relaxed);
-                        *self.inner.track_id.lock() = Some(track_id.clone());
-                        self.start_poller();
-                        self.emit_state(Some(track_id));
-                        return Ok(duration_seconds);
-                    }
-                    // No device — drop the new sink and fall through.
-                    next_sink.stop();
-                    drop(decoded);
-                    self.cancel_preload();
-                } else {
-                    // Stale preload for a different track — drop it
-                    // and fall through to dry cut.
-                    next_sink.stop();
-                    drop(decoded);
+        // for this exact track_id AND a real audio device is open,
+        // ramp the current sink down and the preloaded one up over
+        // `crossfade_seconds`, then promote the new sink. Falls
+        // through to the dry-cut path when any condition fails.
+        //
+        // Either branch uses `decoded` end-to-end: the crossfade
+        // path consumes `decoded.source` (move), the dry-cut path
+        // stashes it in `stream_for_dry_cut` and uses it below.
+        #[allow(unused_assignments)]
+        let mut stream_for_dry_cut: Option<stream::StreamHandle> = None;
+
+        // Always drop any stale preload first — even crossfade-off
+        // callers must not leave a half-built sink in `next_sink`
+        // from a previous track.
+        let stale_preload = self.inner.next_sink.lock().take();
+
+        if self.inner.crossfade_enabled.load(Ordering::Relaxed)
+            && self.inner.stream_handle.lock().is_some()
+        {
+            if let Some((ref preload_id, _)) = stale_preload {
+                if *preload_id == track_id {
+                    // Exact preload match — take ownership of the
+                    // preloaded sink and promote `decoded`'s source
+                    // into the crossfade.
+                    let (_, next_sink) = stale_preload.unwrap();
+                    self.start_crossfade(decoded.source, track_id.clone(), next_sink);
+                    self.inner.position_seconds.store(0, Ordering::Relaxed);
+                    self.inner.duration_seconds.store(duration_seconds, Ordering::Relaxed);
+                    self.inner.is_paused.store(false, Ordering::Relaxed);
+                    self.inner.ended_fired.store(false, Ordering::Relaxed);
+                    *self.inner.track_id.lock() = Some(track_id.clone());
+                    self.start_poller();
+                    self.emit_state(Some(track_id));
+                    return Ok(duration_seconds);
                 }
-            } else {
-                drop(decoded);
+            }
+            // Crossfade on but no exact preload (or stale preload for
+            // a different track): drop the stale one and fall through.
+            if let Some((_, stale_sink)) = stale_preload {
+                stale_sink.stop();
             }
         } else {
-            // Crossfade off: any stale preload is irrelevant.
-            self.cancel_preload();
-            drop(decoded);
+            // Crossfade off — kill any in-flight preload because we
+            // won't consume it on this play.
+            if let Some((_, stale_sink)) = stale_preload {
+                stale_sink.stop();
+            }
         }
 
-        // Dry-cut path (no fade). Kill any existing poller + clear
-        // the previous sink before swapping in a new one. We do
-        // this BEFORE building the new sink so the old one is fully
-        // torn down.
+        // No crossfade match — keep `decoded` alive for the dry-cut
+        // path that follows.
+        stream_for_dry_cut = Some(decoded);
+
+        // Dry-cut path. Kill the existing poller + sink before
+        // swapping in the new one so the old one is fully torn down.
         self.stop_poller();
         {
             let mut sink_slot = self.inner.sink.lock();
             *sink_slot = None;
         }
 
-        // Build the new sink and append the source. Re-decode here
-        // (the previous `stream::open` was dropped above) so the
-        // dry-cut path owns its own decoded source end-to-end.
-        let decoded = stream::open(stream_uri)
-            .await
-            .map_err(|e| PlayerError::Stream(e.to_string()))?
-            .with_eq(self.inner.equalizer.clone());
-
+        let stream = stream_for_dry_cut
+            .take()
+            .expect("dry-cut path needs the decoded stream");
         let os_handle = self.inner.stream_handle.lock().clone();
         match os_handle {
             Some(os_handle) => {
                 let sink = Sink::try_new(&os_handle)
                     .map_err(|e| PlayerError::NoDevice(e.to_string()))?;
                 sink.set_volume(*self.inner.volume.lock());
-                sink.append(decoded.source);
+                sink.append(stream.source);
                 sink.play();
                 *self.inner.sink.lock() = Some(sink);
             }
             None => {
                 // Headless: drop the source, fire TrackEnded so the
                 // queue can advance without waiting on a real device.
-                drop(decoded);
+                drop(stream);
                 if let Some(cb) = self.inner.on_event.get() {
                     cb(PlayerEvent::TrackEnded { track_id: track_id.clone() });
                 }

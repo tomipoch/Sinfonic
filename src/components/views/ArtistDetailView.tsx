@@ -16,27 +16,18 @@
 // `useLibraryAutoLoad` hook that powers the grid already populated
 // it.
 
+import { MoreHorizontalIcon, PlayIcon, ShuffleIcon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
-
-import {
-  MoreHorizontalIcon,
-  PlayIcon,
-  ShuffleIcon,
-} from "@hugeicons/core-free-icons";
-import { HugeiconsIcon } from "@hugeicons/react";
 
 import { AlbumCard } from "@/components/ui/AlbumCard";
 import { AlbumCover } from "@/components/ui/AlbumCover";
 import { FavoriteButton } from "@/components/ui/FavoriteButton";
 import { type TrackColumn, TrackTable } from "@/components/ui/TrackTable";
 import { extractError } from "@/lib/errors";
-import {
-  playAlbumWithContext,
-  playTrackWithContext,
-  setShuffle,
-} from "@/lib/tauri";
+import { playAlbumWithContext, playTrackWithContext, setShuffle } from "@/lib/tauri";
 import { useLibraryStore } from "@/stores/libraryStore";
 import type { Track } from "@/types/domain";
 
@@ -229,11 +220,7 @@ export function ArtistDetailView() {
               <HugeiconsIcon icon={ShuffleIcon} size={16} strokeWidth={1.75} />
               Shuffle
             </button>
-            <FavoriteButton
-              kind="artist"
-              itemId={artist.id}
-              initialFavorite={artist.favorite}
-            />
+            <FavoriteButton kind="artist" itemId={artist.id} initialFavorite={artist.favorite} />
             <button
               type="button"
               className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"

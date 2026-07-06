@@ -33,9 +33,10 @@ use sinfonic_domain::{
     SearchResults, ServerId, StreamDescriptor, Track, TrackId,
 };
 use sinfonic_source::{
-    AlbumDetailResponse, ArtistDetailResponse, Capabilities, FavoriteItemId, HomeSection, Identity,
-    ImageBytes, ImageMetadata, ImageRequest, Lyrics, MusicProvider, PlaybackReport,
-    ProviderCapabilities, ProviderError, ProviderIdentity, ProviderResult, RandomTrackRequest,
+    split_image_id, strip_prefix, AlbumDetailResponse, ArtistDetailResponse, Capabilities,
+    FavoriteItemId, HomeSection, Identity, ImageBytes, ImageMetadata, ImageRequest, Lyrics,
+    MusicProvider, PlaybackReport, ProviderCapabilities, ProviderError, ProviderIdentity,
+    ProviderResult, RandomTrackRequest,
 };
 use url::Url;
 
@@ -743,12 +744,4 @@ fn urlencoded(s: &str) -> String {
         }
     }
     out
-}
-
-fn strip_prefix<'a>(s: &'a str, prefix: &str) -> &'a str {
-    sinfonic_source::strip_prefix(s, prefix)
-}
-
-fn split_image_id(item_id: &str) -> (&str, &str) {
-    sinfonic_source::split_image_id(item_id)
 }

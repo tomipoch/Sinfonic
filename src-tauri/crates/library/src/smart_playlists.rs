@@ -266,7 +266,6 @@ impl Store {
     }
 
     /// Deletes a smart playlist by ID.
-    #[allow(dead_code)]
     pub fn delete_smart_playlist(
         &self,
         server_id: &sinfonic_domain::ServerId,

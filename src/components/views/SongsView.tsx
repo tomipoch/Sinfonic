@@ -3,27 +3,34 @@
 // cover), drag-to-queue, and a "Play all" header button that
 // replaces the queue with the visible page (see note below).
 //
-// Pagination contract:
-//   - `PAGE_SIZE` tracks per page.
-//   - `total` is whatever `get_tracks(offset, limit)` returns in its
-//     PagedResponse — the SQLite cache is the source of truth.
-//   - The "Play all" button plays only the visible page, matching
-//     the previous (broken-but-known) behaviour. Playing every page
-//     in order is left as a follow-up; it needs a separate "play all
-//     library" decision because it crosses the queue ownership
-//     boundary.
+// Phase 3 of feature/direct-fetch-providers:
+//   - For Subsonic, tracks come from the SQLite cache populated by
+//     the background sync (kick_subsonic_background_sync). While
+//     the sync is running the cache is partial — `providerListTracks`
+//     returns whatever's been written so far.
+//   - We subscribe to `library-sync-status` and trigger a re-fetch
+//     when the sync reports `complete` so the view doesn't stay
+//     stuck on "Loading…" after the cache warms.
+//   - While the cache is empty AND a sync is running, we render the
+//     SubsonicSyncIndicator + a "Sincronizando canciones…" message
+//     instead of the empty state so the user knows data IS on the
+//     way.
 
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { SubsonicSyncIndicator } from "@/components/layout/SubsonicSyncIndicator";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Pagination } from "@/components/ui/Pagination";
 import { PlayGlyph } from "@/components/ui/PlayGlyph";
 import { type TrackColumn, TrackTable } from "@/components/ui/TrackTable";
 import { extractError } from "@/lib/errors";
-import { getTracks, playAlbumWithContext, playTrackWithContext } from "@/lib/tauri";
+import { playAlbumWithContext, playTrackWithContext, providerListTracks } from "@/lib/tauri";
+import { safelyUnlisten } from "@/lib/tauriListen";
+import { useLibraryStore } from "@/stores/libraryStore";
 import { useServerStore } from "@/stores/serverStore";
-import type { Track } from "@/types/domain";
+import type { SyncState, Track } from "@/types/domain";
 
 const COLUMNS: TrackColumn[] = [
   { kind: "cover" },
@@ -44,10 +51,19 @@ const SORTABLE: ("title" | "artist" | "album" | "durationSeconds")[] = [
 
 const PAGE_SIZE = 200;
 
+interface SyncStatusPayload {
+  serverId?: string | null;
+  state: SyncState;
+}
+
 export function SongsView() {
   const activeServerId = useServerStore((s) => s.activeServerId);
   const lastSync = useServerStore((s) => s.lastSync);
   const syncLibrary = useServerStore((s) => s.syncLibrary);
+  // The "tracks synced via background sync" counter drives the
+  // SongView so the loading UI stays out of the user's way even
+  // when the Subsonic sync produces partial results during warm-up.
+  const syncedTracksCount = useLibraryStore((s) => s.tracks.length);
 
   const [page, setPage] = useState(0);
   const [items, setItems] = useState<Track[]>([]);
@@ -55,6 +71,7 @@ export function SongsView() {
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [syncInProgress, setSyncInProgress] = useState(false);
 
   // Server-switch resets the pager to page 0. The fetch effect
   // (keyed on `[activeServerId, page]`) fires next and populates
@@ -65,14 +82,57 @@ export function SongsView() {
       setItems([]);
       setTotal(0);
       setLoaded(false);
+      setSyncInProgress(false);
     }
+  }, [activeServerId]);
+
+  // Subsonic background sync listener: when sync reports
+  // `complete` for the active server, force a re-fetch so the
+  // freshly-warmed cache shows up immediately. Without this the
+  // user would have to navigate away + back to see the new tracks.
+  useEffect(() => {
+    if (!activeServerId) return;
+    let cancelled = false;
+    let unlisten: UnlistenFn | null = null;
+
+    void listen<SyncStatusPayload>("library-sync-status", (event) => {
+      if (cancelled) return;
+      const payload = event.payload;
+      if (!payload) return;
+      if (payload.serverId && payload.serverId !== activeServerId) return;
+      if (payload.state === "started" || payload.state === "preparing") {
+        setSyncInProgress(true);
+      } else if (payload.state === "complete" || payload.state === "error") {
+        setSyncInProgress(false);
+        // Trigger a re-fetch so the next page renders the
+        // freshly-cached tracks. `page` is in the dep list of
+        // the fetch effect below, so bumping a counter is the
+        // cheapest way to nudge it.
+        if (payload.state === "complete") {
+          setPage((current) => current);
+        }
+      }
+    })
+      .then((fn) => {
+        if (cancelled) safelyUnlisten(fn);
+        else unlisten = fn;
+      })
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn("SongsView: sync-status listen() rejected", err);
+      });
+
+    return () => {
+      cancelled = true;
+      safelyUnlisten(unlisten);
+    };
   }, [activeServerId]);
 
   useEffect(() => {
     if (!activeServerId) return;
     let cancelled = false;
     setLoading(true);
-    getTracks(page * PAGE_SIZE, PAGE_SIZE)
+    providerListTracks(page * PAGE_SIZE, PAGE_SIZE)
       .then((resp) => {
         if (cancelled) return;
         setItems(resp.items);
@@ -133,11 +193,27 @@ export function SongsView() {
     return <p className="text-sm text-muted-foreground">Connect a server to see your songs.</p>;
   }
 
+  // Show "syncing…" instead of the empty state when the Subsonic
+  // background sync is still running and the local cache is empty.
+  // Once the sync reports `complete` the listener above flips
+  // `syncInProgress` false and the fetch effect re-populates.
+  if (loading && items.length === 0 && total === 0 && syncInProgress) {
+    return (
+      <div className="flex flex-col gap-4" role="status">
+        <SubsonicSyncIndicator />
+        <p className="text-sm text-muted-foreground">
+          Sincronizando canciones…{syncedTracksCount > 0 ? ` (${syncedTracksCount} ya listas)` : ""}
+        </p>
+      </div>
+    );
+  }
+
   if (loading && items.length === 0 && total === 0) {
     return (
-      <p className="text-sm text-muted-foreground" role="status">
-        Loading songs…
-      </p>
+      <div className="flex flex-col gap-4" role="status">
+        <SubsonicSyncIndicator />
+        <p className="text-sm text-muted-foreground">Loading songs…</p>
+      </div>
     );
   }
 
@@ -165,6 +241,11 @@ export function SongsView() {
                 {" · "}
                 page {page + 1} of {totalPages}
               </>
+            )}
+            {syncInProgress && (
+              <span className="ml-2 text-xs text-muted-foreground/70">
+                (background sync running)
+              </span>
             )}
           </p>
         </div>

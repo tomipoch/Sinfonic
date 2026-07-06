@@ -190,15 +190,16 @@ pub fn run() {
                 // 2) Take clones of the bits the watcher needs, then
                 //    hand them off. This keeps the watcher's mutex
                 //    pressure off the IPC lock.
-                let (queue_clone, player_clone, lastfm_clone) = {
+                let (queue_clone, player_clone, lastfm_clone, provider_clone) = {
                     let state_ref = setup_handle.lock().await;
                     (
                         Arc::new(Mutex::new(state_ref.queue.clone())),
                         state_ref.player.clone(),
                         state_ref.lastfm.clone(),
+                        state_ref.provider.clone(),
                     )
                 };
-                scrobble_watcher::run(queue_clone, player_clone, lastfm_clone).await;
+                scrobble_watcher::run(queue_clone, player_clone, lastfm_clone, provider_clone).await;
             });
 
             app.manage(state_for_resume);
@@ -214,6 +215,23 @@ pub fn run() {
             commands::get_tracks,
             commands::get_album,
             commands::get_album_detail,
+            // Provider-direct reads (Phase 1 of feature/direct-fetch-providers).
+            // Bypass the SQLite cache and hit the upstream server so
+            // the UI doesn't wait for `provider_sync_library`.
+            commands::provider_list_albums,
+            commands::provider_list_artists,
+            commands::provider_list_tracks,
+            commands::provider_album_detail,
+            commands::provider_artist_detail,
+            commands::provider_playlist_detail,
+            // Phase 3 of feature/direct-fetch-providers: spawn the
+            // Subsonic album-tracks background sync. Idempotent —
+            // re-entry while one is running is a no-op.
+            commands::kick_subsonic_background_sync,
+            // Phase 3 parity for Jellyfin: identical contract
+            // (fire-and-forget, idempotent) over
+            // `sync_library_data` instead of the album fan-out.
+            commands::kick_jellyfin_background_sync,
             commands::play_album,
             commands::play_album_with_context,
             // Playback (Phase 1 + Phase 4 audio)

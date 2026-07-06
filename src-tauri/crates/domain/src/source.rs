@@ -4,8 +4,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::ids::TrackId;
-
 /// Page request for collection-style provider methods.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -167,6 +165,3 @@ pub struct ImageBytes {
     pub bytes: Vec<u8>,
     pub content_type: Option<String>,
 }
-
-#[allow(dead_code)]
-fn _ensure_track_id_used(_: TrackId) {}

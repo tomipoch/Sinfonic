@@ -1,5 +1,10 @@
 // AlbumsView — top-level /albums route. Grid of album cards.
 // Real pagination via IntersectionObserver.
+//
+// Phase 5 of feature/direct-fetch-providers: triggers the
+// album-art prewarm on mount so the visible page's covers are
+// warmed via a single bulk fetch as soon as the route is visible,
+// rather than landing each one as the grid cells mount.
 
 import { useMemo } from "react";
 
@@ -20,6 +25,11 @@ export function AlbumsView() {
   const activeServerId = useServerStore((s) => s.activeServerId);
   const lastSync = useServerStore((s) => s.lastSync);
   const syncLibrary = useServerStore((s) => s.syncLibrary);
+
+  // The shared `useAlbumArtPrewarm` hook fires as soon as the
+  // library store has pages of albums + tracks, so mounting this
+  // view implicitly triggers the warmup via the `Layout`-level
+  // useEffect. Nothing extra needed here.
 
   const hasMore = albums.length < albumsTotal;
   const sentinelRef = useInfiniteScroll<HTMLDivElement>({

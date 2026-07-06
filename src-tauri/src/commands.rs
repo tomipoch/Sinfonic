@@ -32,7 +32,9 @@ use rusqlite as sqlite;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager, State};
 
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 
 use crate::events::{
@@ -48,9 +50,10 @@ use sinfonic_domain::{
     SmartPlaylistSortDirection, SmartPlaylistSortField, Track, TrackId,
 };
 use sinfonic_library::ImageCacheKey;
+use sinfonic_library::LibraryError;
 use sinfonic_secrets::SecretStore;
 use sinfonic_source::MusicProvider;
-use sinfonic_source::{ImageBytes, ImageRequest, Lyrics};
+use sinfonic_source::{FavoriteItemId, ImageRequest, Lyrics};
 use sinfonic_source_jellyfin::auth::{login as jellyfin_login_inner, LoginRequest as JellyfinAuthRequest};
 use sinfonic_source_subsonic::auth::{login as subsonic_login_inner, LoginRequest as SubsonicAuthRequest};
 
@@ -58,11 +61,10 @@ type SharedState<'a> = State<'a, Arc<Mutex<AppState>>>;
 
 /// Placeholder `ServerId` used when no provider is active. Library
 /// reads return empty pages in that state instead of erroring — the
-/// UI surfaces a "connect a server" hint.
-const DEFAULT_SERVER_ID: &str = "server-local";
-
+/// UI surfaces a "connect a server" hint. Re-uses `LocalProvider`'s
+/// canonical id so the two stay in lockstep.
 fn default_server_id() -> ServerId {
-    ServerId::new(DEFAULT_SERVER_ID)
+    ServerId::new(sinfonic_source_local::LOCAL_SERVER_ID)
 }
 
 /// Return the `ServerId` of the active provider if one is connected,
@@ -198,6 +200,49 @@ mod playback_helpers {
 mod provider_helpers {
     use super::*;
 
+    /// Borrow a clone of the active `Arc<dyn MusicProvider>` from the
+    /// app state without holding the AppState mutex across the
+    /// network call. Returns `None` when no provider is connected —
+    /// the caller surfaces that as an empty page or `null` so the
+    /// UI renders the "connect a server" hint instead of erroring.
+    ///
+    /// Centralised here so the provider-direct read commands
+    /// (`provider_list_albums` etc.) follow the same lock pattern.
+    pub(super) async fn current_provider(
+        state: &Arc<Mutex<AppState>>,
+    ) -> Option<Arc<dyn MusicProvider>> {
+        let guard = state.lock().await;
+        let provider = guard.provider.lock().await.as_ref().cloned();
+        provider
+    }
+
+    /// Install `provider` as the active provider and clear the
+    /// typed `subsonic` slot. Centralises the field-write so the
+    /// login, set_active and restore call sites can't drift apart.
+    /// Caller already holds the AppState mutex from the surrounding
+    /// command; we only need the inner `provider` / `subsonic`
+    /// locks here.
+    pub(super) async fn install_provider(
+        guard: &AppState,
+        provider: Arc<dyn MusicProvider>,
+    ) {
+        *guard.provider.lock().await = Some(provider);
+        *guard.subsonic.lock().await = None;
+    }
+
+    /// Same as `install_provider` but also stores the typed
+    /// `SubsonicProvider` so `commands::kick_subsonic_background_sync`
+    /// can reach Subsonic-specific helpers that don't live on the
+    /// `MusicProvider` trait.
+    pub(super) async fn install_subsonic_provider(
+        guard: &AppState,
+        typed: Arc<sinfonic_source_subsonic::SubsonicProvider>,
+    ) {
+        let dyn_provider: Arc<dyn MusicProvider> = typed.clone();
+        *guard.provider.lock().await = Some(dyn_provider);
+        *guard.subsonic.lock().await = Some(typed);
+    }
+
     /// Stop the rodio sink, clear the queue (track ids from the
     /// previous provider would never resolve against the next one),
     /// and notify the frontend so the PlayerBar / QueuePanel refresh
@@ -217,11 +262,16 @@ mod provider_helpers {
             let guard = state.lock().await;
             guard.persist_guard.store(true, std::sync::atomic::Ordering::Release);
         }
-        {
-            let mut guard = state.lock().await;
+{
+        let mut guard = state.lock().await;
             guard.player.stop();
             guard.queue.clear();
             guard.queue.clear_server_id();
+            // Phase 3: drop the typed Subsonic slot alongside the
+            // generic provider so a future Subsonic login gets a
+            // fresh handle and the background sync starts from
+            // scratch.
+            *guard.subsonic.lock().await = None;
         }
         emit_queue_changed(app, state).await;
         emit_playback_state(app, state).await;
@@ -371,6 +421,683 @@ pub async fn get_album(
         .get_album(&server_id, &parsed)
         .map_err(|e| e.to_string())?;
     Ok(album)
+}
+
+// ─── Provider-direct reads (Phase 1 of feature/direct-fetch) ─────
+//
+// Each command resolves the active `Arc<dyn MusicProvider>` from the
+// app state and calls the matching trait method directly. The page
+// arrives from the upstream server, not from the SQLite cache — so
+// the UI is usable as soon as the first HTTP response lands and we
+// don't need the full `provider_sync_library` to finish.
+//
+// The existing `get_albums` / `get_artists` / `get_tracks` commands
+// stay in place as the offline / cached-reads path. The frontend
+// picks between them per-view (the new wrappers below).
+//
+// No provider is connected → return an empty page with total = 0
+// instead of erroring. The UI already surfaces a "connect a server"
+// hint in that state; raising a `Result::Err` would trigger a toast
+// on every cold start.
+
+/// Snapshot the routing decision the three Subsonic-vs-upstream
+/// `provider_list_*` commands share: whether the active provider is
+/// Subsonic (route to SQLite), the active `ServerId` for the
+/// library reads, and a cloned handle to the dyn provider for the
+/// upstream HTTP path. Holds the `AppState` lock only briefly so
+/// the HTTP round-trip never wedges other Tauri commands.
+async fn snapshot_list_route(
+    state: &SharedState<'_>,
+) -> (bool, ServerId, Option<Arc<dyn MusicProvider>>) {
+    let guard = state.lock().await;
+    let provider_guard = guard.provider.lock().await;
+    let is_subsonic = provider_guard
+        .as_ref()
+        .is_some_and(|p| p.identity().provider_id == "subsonic");
+    let server_id = provider_guard
+        .as_ref()
+        .map(|p| p.identity().server_id.clone())
+        .unwrap_or_else(default_server_id);
+    let provider = provider_guard.as_ref().cloned();
+    drop(provider_guard);
+    (is_subsonic, server_id, provider)
+}
+
+#[tauri::command]
+pub async fn provider_list_albums(
+    offset: usize,
+    limit: usize,
+    state: SharedState<'_>,
+) -> Result<PagedResponse<Album>, String> {
+    let started = Instant::now();
+    let (is_subsonic, server_id, provider) = snapshot_list_route(&state).await;
+    // Phase 5 of feature/direct-fetch-providers: Subsonic has no
+    // way to populate a top-level album list cheaply (`getAlbumList2`
+    // paginates at 500/page and the background sync hammers the
+    // server concurrently), so we serve the request from the
+    // SQLite cache the sync fills. While the cache is partial the
+    // user sees the rows already ingested; the sync-progress
+    // indicator in the sidebar keeps them honest about that.
+    //
+    // Jellyfin / local pass through to the provider: their list
+    // endpoints are fast enough not to need a cache, and the local
+    // provider already holds the full snapshot in memory.
+    if is_subsonic {
+        let res = state
+            .lock()
+            .await
+            .library
+            .list_albums(&server_id, offset, limit)
+            .map_err(|e| e.to_string());
+        tracing::info!(
+            target: "sinfonic::commands",
+            offset,
+            limit,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "provider_list_albums (subsonic → sqlite) → {} items",
+            res.as_ref().map(|r| r.items.len()).unwrap_or(0)
+        );
+        return res;
+    }
+    let Some(provider) = provider else {
+        return Ok(PagedResponse::new(Vec::new(), 0));
+    };
+    let req = sinfonic_domain::PagedRequest::new(offset, limit);
+    let res = provider.albums(req).await.map_err(|e| e.to_string());
+    tracing::info!(
+        target: "sinfonic::commands",
+        offset,
+        limit,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "provider_list_albums (http) → {} items",
+        res.as_ref().map(|r| r.items.len()).unwrap_or(0)
+    );
+    res
+}
+
+#[tauri::command]
+pub async fn provider_list_artists(
+    offset: usize,
+    limit: usize,
+    state: SharedState<'_>,
+) -> Result<PagedResponse<Artist>, String> {
+    let started = Instant::now();
+    let (is_subsonic, server_id, provider) = snapshot_list_route(&state).await;
+    // See provider_list_albums for the Subsonic-rationale.
+    if is_subsonic {
+        let res = state
+            .lock()
+            .await
+            .library
+            .list_artists(&server_id, offset, limit)
+            .map_err(|e| e.to_string());
+        tracing::info!(
+            target: "sinfonic::commands",
+            offset,
+            limit,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "provider_list_artists (subsonic → sqlite) → {} items",
+            res.as_ref().map(|r| r.items.len()).unwrap_or(0)
+        );
+        return res;
+    }
+    let Some(provider) = provider else {
+        return Ok(PagedResponse::new(Vec::new(), 0));
+    };
+    let req = sinfonic_domain::PagedRequest::new(offset, limit);
+    let res = provider.artists(req).await.map_err(|e| e.to_string());
+    tracing::info!(
+        target: "sinfonic::commands",
+        offset,
+        limit,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "provider_list_artists (http) → {} items",
+        res.as_ref().map(|r| r.items.len()).unwrap_or(0)
+    );
+    res
+}
+
+#[tauri::command]
+pub async fn provider_list_tracks(
+    offset: usize,
+    limit: usize,
+    state: SharedState<'_>,
+) -> Result<PagedResponse<Track>, String> {
+    let started = Instant::now();
+    let (is_subsonic, server_id, provider) = snapshot_list_route(&state).await;
+    // Phase 3 of feature/direct-fetch-providers: Subsonic has no
+    // "list every track" endpoint so we serve the request from the
+    // SQLite cache populated by `kick_subsonic_background_sync`.
+    // While the background sync is running, the cache is partial
+    // and the user sees only the tracks already ingested — the
+    // `sync-progress` event keeps the UI honest about that.
+    if is_subsonic {
+        let res = state
+            .lock()
+            .await
+            .library
+            .list_tracks(&server_id, offset, limit)
+            .map_err(|e| e.to_string());
+        tracing::info!(
+            target: "sinfonic::commands",
+            offset,
+            limit,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "provider_list_tracks (subsonic → sqlite) → {} items",
+            res.as_ref().map(|r| r.items.len()).unwrap_or(0)
+        );
+        return res;
+    }
+    let Some(provider) = provider else {
+        return Ok(PagedResponse::new(Vec::new(), 0));
+    };
+    let req = sinfonic_domain::PagedRequest::new(offset, limit);
+    let res = provider.tracks(req).await.map_err(|e| e.to_string());
+    tracing::info!(
+        target: "sinfonic::commands",
+        offset,
+        limit,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "provider_list_tracks (http) → {} items",
+        res.as_ref().map(|r| r.items.len()).unwrap_or(0)
+    );
+    res
+}
+
+/// Album with its tracks resolved straight from the active provider.
+/// Returns `Ok(None)` when no provider is connected or the album id
+/// doesn't resolve to a row — same shape as `get_album_detail` so
+/// the view layer can swap the wrapper with no further changes.
+#[tauri::command]
+pub async fn provider_album_detail(
+    album_id: String,
+    state: SharedState<'_>,
+) -> Result<Option<AlbumDetail>, String> {
+    let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
+        return Ok(None);
+    };
+    let parsed = AlbumId::try_new(album_id).map_err(|e| e.to_string())?;
+    match provider.album_detail(&parsed).await {
+        Ok(resp) => Ok(Some(resp.detail)),
+        Err(sinfonic_source::ProviderError::NotFound) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+// ─── Subsonic background sync (Phase 3) ───────────────────────────
+//
+// Subsonic's API has no "list every track" endpoint, so the
+// provider-direct `/songs` view needs every album's tracks cached
+// in SQLite first. `kick_subsonic_background_sync` spawns a tokio
+// task that fans out `getAlbum` for every album on the server and
+// upserts the resulting tracks into the SQLite `tracks` table —
+// emitting the existing `library-sync-status` event stream so the
+// UI can show "Sincronizando canciones (X / Y)…" while it runs.
+//
+// The task is intentionally fire-and-forget: this Tauri command
+// returns immediately after spawning so the loading flow can move
+// on. A subsequent `kick_subsonic_background_sync` while one is
+// already running is a no-op (the running task owns the
+// `in_progress` flag).
+
+/// In-process guard: `true` while a Subsonic background sync is
+/// running. Stored as `AtomicBool` so the `kick_*` command and the
+/// spawned task can race-safely check it without holding the
+/// AppState mutex.
+static SUBSONIC_BACKGROUND_SYNC_IN_PROGRESS: AtomicBool =
+    AtomicBool::new(false);
+
+/// In-process guard: `true` while a Jellyfin background sync is
+/// running. Parallel to the Subsonic one above. Lets Jellyfin,
+/// which has no two-phase fan-out, kick a sync from the same three
+/// trigger sites as Subsonic (login, setActive, restore) without
+/// piling up overlapping syncs.
+static JELLYFIN_BACKGROUND_SYNC_IN_PROGRESS: AtomicBool =
+    AtomicBool::new(false);
+
+/// Phase 3 entry point. Spawns the background sync and returns
+/// immediately. Errors are logged inside the task — the command
+/// returns `Ok(())` whenever the provider is not Subsonic or the
+/// task was already running so callers (frontend) don't have to
+/// handle transient states.
+#[tauri::command]
+pub async fn kick_subsonic_background_sync(
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let started = Instant::now();
+    let inner = kick_subsonic_background_sync_inner(app.clone(), state.inner().clone()).await;
+    tracing::info!(
+        target: "sinfonic::commands",
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "kick_subsonic_background_sync returned ({})",
+        if inner.is_ok() { "ok" } else { "err" }
+    );
+    inner
+}
+
+/// Same body as the Tauri command but takes the raw
+/// `Arc<Mutex<AppState>>` so internal callers (subsonic_login,
+/// provider_set_active, try_restore_provider) can fire the
+/// background sync without going through the IPC layer.
+async fn kick_subsonic_background_sync_inner(
+    app: tauri::AppHandle,
+    state: Arc<Mutex<AppState>>,
+) -> Result<(), String> {
+    // Reject re-entry: only one sync at a time.
+    if SUBSONIC_BACKGROUND_SYNC_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        tracing::debug!(
+            target: "sinfonic::commands",
+            "subsonic background sync already running, ignoring kick"
+        );
+        return Ok(());
+    }
+
+    let (typed_provider, library_handle, server_id) = {
+        let guard = state.lock().await;
+        let typed = guard.subsonic.lock().await.as_ref().cloned();
+        let library = guard.library.clone();
+        let server_id = guard
+            .provider
+            .lock()
+            .await
+            .as_ref()
+            .map(|p| p.identity().server_id.clone())
+            .unwrap_or_else(default_server_id);
+        (typed, library, server_id)
+    };
+
+    let Some(typed) = typed_provider else {
+        SUBSONIC_BACKGROUND_SYNC_IN_PROGRESS.store(false, Ordering::Release);
+        return Ok(());
+    };
+
+    // Emit the 'started' state so the sidebar indicator appears.
+    let _ = app.emit(
+        EventName::LibrarySyncStatus.as_str(),
+        crate::events::LibrarySyncStatusPayload {
+            server_id: Some(server_id.to_string()),
+            state: "started".into(),
+            progress: 0.0,
+        },
+    );
+
+    tokio::spawn(async move {
+        let result = run_subsonic_background_sync(typed.clone(), library_handle.clone(), server_id.clone(), app.clone()).await;
+        SUBSONIC_BACKGROUND_SYNC_IN_PROGRESS.store(false, Ordering::Release);
+        if let Err(e) = result {
+            tracing::warn!(
+                target: "sinfonic::commands",
+                error = %e,
+                "subsonic background sync failed"
+            );
+            let _ = app.emit(
+                EventName::LibrarySyncStatus.as_str(),
+                crate::events::LibrarySyncStatusPayload {
+                    server_id: Some(server_id.to_string()),
+                    state: "error".into(),
+                    progress: 0.0,
+                },
+            );
+        }
+    });
+
+    Ok(())
+}
+
+/// Worker body for `kick_subsonic_background_sync`. Pulls every
+/// album's tracks through the provider's fan-out helper and writes
+/// them into the SQLite cache so subsequent `provider_list_tracks`
+/// calls are instant reads.
+async fn run_subsonic_background_sync(
+    provider: Arc<sinfonic_source_subsonic::SubsonicProvider>,
+    library: sinfonic_library::Store,
+    server_id: ServerId,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    // Track which tracks we've written so the final 'complete'
+    // event can report the actual count. Lives in an Arc so the
+    // Fn callbacks in `sync_album_tracks` can bump it without
+    // holding a mutable borrow on the outer function frame.
+    let total_tracks_written = Arc::new(AtomicUsize::new(0));
+    let server_id_arc = Arc::new(server_id);
+    let sync_started = Instant::now();
+    let batch_counter = Arc::new(AtomicUsize::new(0));
+    let slow_batches = Arc::new(AtomicUsize::new(0));
+
+    let stats = provider
+        .sync_album_tracks(
+            {
+                let total = Arc::clone(&total_tracks_written);
+                let library = library.clone();
+                let server_id = Arc::clone(&server_id_arc);
+                let batch_counter = Arc::clone(&batch_counter);
+                let slow_batches = Arc::clone(&slow_batches);
+                move |album, tracks| {
+                    let batch_started = Instant::now();
+                    if tracks.is_empty() {
+                        return;
+                    }
+                    // The SQLite schema requires:
+                    //   tracks.album_id  → albums.album_id
+                    //   tracks.artist_id → artists.artist_id (nullable)
+                    //   albums.artist_id → artists.artist_id (nullable)
+                    // Insert artists → album → tracks within each batch.
+                    //
+                    // Synthesise Artist rows from the album + track
+                    // payloads. Only `id` and `name` matter for FK
+                    // satisfaction; album_count / track_count are
+                    // recomputed separately by the manual sync path
+                    // and are not on the critical path here.
+                    let mut artist_seen: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    let mut artists_to_upsert: Vec<sinfonic_domain::Artist> = Vec::new();
+                    if let Some(aid) = album.artist_id.as_ref() {
+                        if artist_seen.insert(aid.as_str().to_string()) {
+                            artists_to_upsert.push(sinfonic_domain::Artist {
+                                id: aid.clone(),
+                                name: album.artist.clone(),
+                                album_count: 0,
+                                track_count: 0,
+                                favorite: false,
+                                image_ref: None,
+                            });
+                        }
+                    }
+                    for track in &tracks {
+                        if let Some(aid) = track.artist_id.as_ref() {
+                            if artist_seen.insert(aid.as_str().to_string()) {
+                                artists_to_upsert.push(sinfonic_domain::Artist {
+                                    id: aid.clone(),
+                                    name: track.artist.clone(),
+                                    album_count: 0,
+                                    track_count: 0,
+                                    favorite: false,
+                                    image_ref: None,
+                                });
+                            }
+                        }
+                    }
+                    if !artists_to_upsert.is_empty() {
+                        if let Err(e) =
+                            library.upsert_artists(&server_id, &artists_to_upsert)
+                        {
+                            eprintln!(
+                                "sinfonic::commands subsonic background sync: upsert_artists failed: {e}"
+                            );
+                            return;
+                        }
+                    }
+                    if let Err(e) = library.upsert_album(&server_id, &album) {
+                        eprintln!(
+                            "sinfonic::commands subsonic background sync: upsert_album failed: {e}"
+                        );
+                        return;
+                    }
+                    // Some Subsonic servers omit the `coverArt` field on
+                    // individual songs (only the album row carries it).
+                    // Promote the album's image_ref onto any track that
+                    // doesn't have one of its own so the round-trip
+                    // through SQLite gives every track a cover to
+                    // render. Phase 7 of feature/direct-fetch-providers.
+                    let album_image_ref = album.image_ref.clone();
+                    let tracks: Vec<sinfonic_domain::Track> = if album_image_ref.is_some() {
+                        tracks
+                            .into_iter()
+                            .map(|mut t| {
+                                if t.image_ref.is_none() {
+                                    t.image_ref = album_image_ref.clone();
+                                }
+                                t
+                            })
+                            .collect()
+                    } else {
+                        tracks
+                    };
+                    if let Err(e) = library.upsert_tracks(&server_id, &tracks) {
+                        eprintln!(
+                            "sinfonic::commands subsonic background sync: upsert_tracks failed: {e}"
+                        );
+                        return;
+                    }
+                    total.fetch_add(tracks.len(), Ordering::Relaxed);
+                    let n = batch_counter.fetch_add(1, Ordering::Relaxed) + 1;
+                    let elapsed = batch_started.elapsed().as_millis() as u64;
+                    // Log first batch + last batch + any batch taking
+                    // > 200ms (slow compared to typical SQLite
+                    // transaction cost under 50ms).
+                    if n == 1 || elapsed > 200 {
+                        tracing::info!(
+                            target: "sinfonic::commands",
+                            batch = n,
+                            tracks = tracks.len(),
+                            album_id = %album.id.as_str(),
+                            elapsed_ms = elapsed,
+                            "subsonic bg sync batch persisted"
+                        );
+                    }
+                    if elapsed > 200 {
+                        slow_batches.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            },
+            |hint_id, err| {
+                tracing::warn!(
+                    target: "sinfonic::commands",
+                    album = %hint_id,
+                    error = %err,
+                    "subsonic bg sync album failed"
+                );
+            },
+        )
+        .await
+        .map_err(|e| format!("sync_album_tracks failed: {e}"))?;
+
+    let total = total_tracks_written.load(Ordering::Relaxed);
+    tracing::info!(
+        target: "sinfonic::commands",
+        albums_total = stats.albums_total,
+        albums_failed = stats.albums_failed,
+        tracks_total = total,
+        slow_batches_persisting = slow_batches.load(Ordering::Relaxed),
+        elapsed_ms = sync_started.elapsed().as_millis() as u64,
+        "subsonic background sync complete"
+    );
+
+    let _ = app.emit(
+        EventName::LibrarySyncStatus.as_str(),
+        crate::events::LibrarySyncStatusPayload {
+            server_id: Some(server_id_arc.to_string()),
+            state: "complete".into(),
+            progress: 1.0,
+        },
+    );
+    Ok(())
+}
+
+/// Jellyfin background-sync entry point, parallel to
+/// `kick_subsonic_background_sync`. Jellyfin has no two-phase
+/// album-fan-out (its `/Items?IncludeItemTypes=Audio` returns every
+/// track in a single paginated endpoint), so the worker just calls
+/// the existing `sync_library_data` and emits the same
+/// `library-sync-status:started/complete` events the manual
+/// `provider_sync_library` button does. Triggers: `jellyfin_login`,
+/// `provider_set_active` (Jellyfin branch), `try_restore_provider`.
+#[tauri::command]
+pub async fn kick_jellyfin_background_sync(
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let started = Instant::now();
+    let inner = kick_jellyfin_background_sync_inner(app.clone(), state.inner().clone()).await;
+    tracing::info!(
+        target: "sinfonic::commands",
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "kick_jellyfin_background_sync returned ({})",
+        if inner.is_ok() { "ok" } else { "err" }
+    );
+    inner
+}
+
+/// Same body as the Tauri command but takes the raw
+/// `Arc<Mutex<AppState>>` so internal callers (jellyfin_login,
+/// provider_set_active, try_restore_provider) can fire the
+/// background sync without going through the IPC layer. Signature
+/// matches `kick_subsonic_background_sync_inner`.
+async fn kick_jellyfin_background_sync_inner(
+    app: tauri::AppHandle,
+    state: Arc<Mutex<AppState>>,
+) -> Result<(), String> {
+    if JELLYFIN_BACKGROUND_SYNC_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        tracing::debug!(
+            target: "sinfonic::commands",
+            "jellyfin background sync already running, ignoring kick"
+        );
+        return Ok(());
+    }
+
+    let (dyn_provider, library_handle, server_id) = {
+        let guard = state.lock().await;
+        let dyn_provider = guard.provider.lock().await.as_ref().cloned();
+        let library = guard.library.clone();
+        let server_id = dyn_provider
+            .as_ref()
+            .map(|p| p.identity().server_id.clone())
+            .unwrap_or_else(default_server_id);
+        (dyn_provider, library, server_id)
+    };
+
+    let Some(provider) = dyn_provider else {
+        JELLYFIN_BACKGROUND_SYNC_IN_PROGRESS.store(false, Ordering::Release);
+        return Ok(());
+    };
+
+    // Jellyfin sync is meaningful only when the active provider is
+    // actually Jellyfin. If the user mixed providers between the
+    // kick and the lock acquisition, drop the sync quietly — the
+    // caller will fire the right provider-specific kicker.
+    if provider.identity().provider_id != "jellyfin" {
+        tracing::debug!(
+            target: "sinfonic::commands",
+            provider_id = provider.identity().provider_id.as_str(),
+            "jellyfin background sync skipped: provider is not jellyfin"
+        );
+        JELLYFIN_BACKGROUND_SYNC_IN_PROGRESS.store(false, Ordering::Release);
+        return Ok(());
+    }
+
+    let _ = app.emit(
+        EventName::LibrarySyncStatus.as_str(),
+        crate::events::LibrarySyncStatusPayload {
+            server_id: Some(server_id.to_string()),
+            state: "started".into(),
+            progress: 0.0,
+        },
+    );
+
+    tokio::spawn(async move {
+        let result = run_jellyfin_background_sync(
+            provider,
+            library_handle,
+            server_id.clone(),
+            app.clone(),
+        )
+        .await;
+        JELLYFIN_BACKGROUND_SYNC_IN_PROGRESS.store(false, Ordering::Release);
+        if let Err(e) = result {
+            tracing::warn!(
+                target: "sinfonic::commands",
+                error = %e,
+                "jellyfin background sync failed"
+            );
+            let _ = app.emit(
+                EventName::LibrarySyncStatus.as_str(),
+                crate::events::LibrarySyncStatusPayload {
+                    server_id: Some(server_id.to_string()),
+                    state: "error".into(),
+                    progress: 0.0,
+                },
+            );
+        }
+    });
+
+    Ok(())
+}
+
+/// Worker body for `kick_jellyfin_background_sync`. Fetches
+/// artists / albums / tracks / playlists from the active Jellyfin
+/// provider and writes them into the SQLite cache through the
+/// existing `sync_library_data` helper so the manually-triggered
+/// `provider_sync_library` button shares the same path.
+async fn run_jellyfin_background_sync(
+    provider: Arc<dyn sinfonic_source::MusicProvider>,
+    library: sinfonic_library::Store,
+    server_id: ServerId,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let sync_started = Instant::now();
+    sync_library_data(provider.as_ref(), &library, &server_id).await?;
+
+    tracing::info!(
+        target: "sinfonic::commands",
+        elapsed_ms = sync_started.elapsed().as_millis() as u64,
+        "jellyfin background sync complete"
+    );
+
+    let _ = app.emit(
+        EventName::LibrarySyncStatus.as_str(),
+        crate::events::LibrarySyncStatusPayload {
+            server_id: Some(server_id.to_string()),
+            state: "complete".into(),
+            progress: 1.0,
+        },
+    );
+    Ok(())
+}
+
+/// Artist with their albums resolved from the active provider.
+/// Returns `Ok(None)` when no provider is connected or the artist id
+/// is unknown.
+#[tauri::command]
+pub async fn provider_artist_detail(
+    artist_id: String,
+    state: SharedState<'_>,
+) -> Result<Option<sinfonic_domain::ArtistDetail>, String> {
+    let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
+        return Ok(None);
+    };
+    let parsed = ArtistId::try_new(artist_id).map_err(|e| e.to_string())?;
+    match provider.artist_detail(&parsed).await {
+        Ok(resp) => Ok(Some(resp.detail)),
+        Err(sinfonic_source::ProviderError::NotFound) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Playlist with its tracks resolved from the active provider.
+/// Returns `Ok(None)` when no provider is connected, the provider
+/// doesn't support playlist reads, or the playlist id is unknown.
+#[tauri::command]
+pub async fn provider_playlist_detail(
+    playlist_id: String,
+    state: SharedState<'_>,
+) -> Result<Option<PlaylistDetail>, String> {
+    let Some(provider) = provider_helpers::current_provider(state.inner()).await else {
+        return Ok(None);
+    };
+    let parsed: PlaylistId = playlist_id.into();
+    match provider.playlist_detail(&parsed).await {
+        Ok(detail) => Ok(Some(detail)),
+        Err(sinfonic_source::ProviderError::NotFound) => Ok(None),
+        Err(sinfonic_source::ProviderError::Unsupported(_)) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Replace the queue with `tracks` and start playing the first one
@@ -1391,7 +2118,12 @@ pub struct FavoritesPayload {
     pub artists: Vec<Artist>,
 }
 
-/// Sets the favorite flag on a track.
+/// Sets the favorite flag on a track. Writes to the local SQLite
+/// cache first (so the UI flips immediately) and then forwards to
+/// the upstream provider; the local file provider returns
+/// `Unsupported` which we silently skip, and other provider errors
+/// are logged at warn — the cache write is the source of truth
+/// from the UI's perspective either way.
 #[tauri::command]
 pub async fn set_track_favorite(
     track_id: String,
@@ -1400,14 +2132,19 @@ pub async fn set_track_favorite(
 ) -> Result<(), String> {
     let server_id = active_server_id(&state).await;
     let parsed: TrackId = track_id.into();
-    let guard = state.lock().await;
-    guard
-        .library
-        .set_track_favorite(&server_id, &parsed, favorite)
-        .map_err(|e| e.to_string())
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .set_track_favorite(&server_id, &parsed, favorite)
+            .map_err(|e| e.to_string())?;
+    }
+    propagate_favorite_to_provider(&state, FavoriteItemId::Track(parsed), favorite).await;
+    Ok(())
 }
 
-/// Sets the favorite flag on an album.
+/// Sets the favorite flag on an album. See `set_track_favorite`
+/// for the propagation semantics.
 #[tauri::command]
 pub async fn set_album_favorite(
     album_id: String,
@@ -1416,14 +2153,19 @@ pub async fn set_album_favorite(
 ) -> Result<(), String> {
     let server_id = active_server_id(&state).await;
     let parsed: AlbumId = album_id.into();
-    let guard = state.lock().await;
-    guard
-        .library
-        .set_album_favorite(&server_id, &parsed, favorite)
-        .map_err(|e| e.to_string())
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .set_album_favorite(&server_id, &parsed, favorite)
+            .map_err(|e| e.to_string())?;
+    }
+    propagate_favorite_to_provider(&state, FavoriteItemId::Album(parsed), favorite).await;
+    Ok(())
 }
 
-/// Sets the favorite flag on an artist.
+/// Sets the favorite flag on an artist. See `set_track_favorite`
+/// for the propagation semantics.
 #[tauri::command]
 pub async fn set_artist_favorite(
     artist_id: String,
@@ -1432,11 +2174,45 @@ pub async fn set_artist_favorite(
 ) -> Result<(), String> {
     let server_id = active_server_id(&state).await;
     let parsed: ArtistId = artist_id.into();
-    let guard = state.lock().await;
-    guard
-        .library
-        .set_artist_favorite(&server_id, &parsed, favorite)
-        .map_err(|e| e.to_string())
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .set_artist_favorite(&server_id, &parsed, favorite)
+            .map_err(|e| e.to_string())?;
+    }
+    propagate_favorite_to_provider(&state, FavoriteItemId::Artist(parsed), favorite).await;
+    Ok(())
+}
+
+/// Forward a favourite toggle to the upstream provider. The local
+/// file provider reports `Unsupported` and we silently ignore that;
+/// transient network errors are logged at warn so the user-facing
+/// Tauri command still resolves `Ok(())` (the SQLite cache is the
+/// authoritative store from the UI's perspective).
+async fn propagate_favorite_to_provider(
+    state: &SharedState<'_>,
+    item: FavoriteItemId,
+    favorite: bool,
+) {
+    let provider = {
+        let guard = state.lock().await;
+        let p = guard.provider.lock().await.clone();
+        drop(guard);
+        p
+    };
+    let Some(provider) = provider else {
+        return;
+    };
+    if let Err(e) = provider.set_favorite(item, favorite).await {
+        match e {
+            sinfonic_source::ProviderError::Unsupported(_) => {}
+            other => tracing::warn!(
+                target: "sinfonic::commands",
+                "upstream set_favorite failed (local cache already updated): {other}"
+            ),
+        }
+    }
 }
 
 /// Returns all favorited tracks, albums, and artists for the active server.
@@ -1526,10 +2302,13 @@ pub async fn jellyfin_discover() -> Result<Vec<DiscoveredServer>, String> {
 
 /// Log in to a Jellyfin server, persist the token in the OS keyring,
 /// upsert the server row in the SQLite cache, and install the
-/// provider on the app state.
+/// provider on the app state. Mirrors `subsonic_login`: kicks a
+/// background sync right after the provider is installed so
+/// `provider_list_*` reads land on a populated SQLite cache.
 #[tauri::command]
 pub async fn jellyfin_login(
     request: JellyfinLoginRequest,
+    app: tauri::AppHandle,
     state: SharedState<'_>,
 ) -> Result<ConnectedServer, String> {
     let (device_id, secrets) = {
@@ -1583,9 +2362,11 @@ pub async fn jellyfin_login(
             .set_preference("last_active_server_id", Some(success.server_id.as_str()))
             .map_err(|e| format!("save preference: {e}"))?;
         let provider: Arc<dyn MusicProvider> = Arc::new(provider);
-        *guard.provider.lock().await = Some(provider);
+        provider_helpers::install_provider(&guard, provider).await;
     }
     queue_anchor::anchor_to_server_after_unlock(&state, &success.server_id).await;
+
+    kick_jellyfin_background_sync_inner(app.clone(), state.inner().clone()).await?;
 
     Ok(ConnectedServer {
         server_id: success.server_id.to_string(),
@@ -1632,7 +2413,7 @@ pub async fn subsonic_login(
 
     let provider = sinfonic_source_subsonic::SubsonicProvider::new(success.session.clone())
         .map_err(|e| format!("build provider: {e}"))?
-        .with_app_handle(app);
+        .with_app_handle(app.clone());
 
     {
         let guard = state.lock().await;
@@ -1650,9 +2431,16 @@ pub async fn subsonic_login(
             .library
             .set_preference("last_active_server_id", Some(success.server_id.as_str()))
             .map_err(|e| format!("save preference: {e}"))?;
-        let provider: Arc<dyn MusicProvider> = Arc::new(provider);
-        *guard.provider.lock().await = Some(provider);
+        // Phase 3: keep the typed SubsonicProvider alongside the
+        // dyn-trait slot so `kick_subsonic_background_sync` can
+        // reach the Subsonic-specific `sync_album_tracks` helper.
+        provider_helpers::install_subsonic_provider(&guard, Arc::new(provider)).await;
     }
+    // Fire-and-forget: kicks the Subsonic album-tracks background
+    // sync so /songs becomes instant after the cache warms up.
+    // Idempotent — if one is already running (e.g. the user is
+    // toggling logins) the kick is a no-op.
+    kick_subsonic_background_sync_inner(app, state.inner().clone()).await?;
     queue_anchor::anchor_to_server_after_unlock(&state, &success.server_id).await;
 
     Ok(ConnectedServer {
@@ -1824,7 +2612,7 @@ pub async fn local_login(
         }
 
         let provider: Arc<dyn MusicProvider> = Arc::new(provider);
-        *guard.provider.lock().await = Some(provider);
+        provider_helpers::install_provider(&guard, provider).await;
     }
     queue_anchor::anchor_to_server_after_unlock(&state, &server_id).await;
 
@@ -1897,7 +2685,7 @@ pub async fn provider_logout(
     state: SharedState<'_>,
 ) -> Result<(), String> {
     let (server_id_opt, secrets) = {
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         let server_id = guard
             .provider
             .lock()
@@ -1996,14 +2784,19 @@ mod provider_factory {
         ))
     }
 
-    /// Same shape as `build_jellyfin` but for Subsonic.
+    /// Same shape as `build_jellyfin` but for Subsonic. Returns
+    /// `(typed, dyn)` so callers that need to call Subsonic-specific
+    /// helpers (e.g. `commands::kick_subsonic_background_sync`) can
+    /// keep the typed `Arc<SubsonicProvider>` instead of losing it
+    /// behind the trait object.
     pub(super) async fn build_subsonic(
         state: SharedStateLike<'_>,
         server_id: &ServerId,
         base_url: String,
         username: String,
         app: &tauri::AppHandle,
-    ) -> Result<Arc<dyn MusicProvider>, String> {
+    ) -> Result<(Arc<sinfonic_source_subsonic::SubsonicProvider>, Arc<dyn MusicProvider>), String>
+    {
         let password = {
             let guard = state.lock().await;
             guard
@@ -2024,11 +2817,13 @@ mod provider_factory {
             username,
             password,
         };
-        Ok(Arc::new(
+        let typed = Arc::new(
             sinfonic_source_subsonic::SubsonicProvider::new(session)
                 .map_err(|e| format!("build subsonic provider: {e}"))?
                 .with_app_handle(app.clone()),
-        ))
+        );
+        let dyn_provider: Arc<dyn MusicProvider> = typed.clone();
+        Ok((typed, dyn_provider))
     }
 
     /// Same shape for the local-files provider. No network secret;
@@ -2066,11 +2861,34 @@ pub async fn provider_set_active(
         "jellyfin" => provider_factory::build_jellyfin(&state, &parsed, base_url.clone()).await?,
         "subsonic" => {
             let sub_user = username.clone().unwrap_or_else(|| name.clone());
-            provider_factory::build_subsonic(&state, &parsed, base_url.clone(), sub_user, &app).await?
+            // Phase 3: build_subsonic now returns (typed, dyn) so the
+            // typed SubsonicProvider ends up in the dedicated slot
+            // before we install the dyn wrapper.
+            let (typed, dyn_provider) = provider_factory::build_subsonic(
+                &state,
+                &parsed,
+                base_url.clone(),
+                sub_user,
+                &app,
+            )
+            .await?;
+            {
+                let guard = state.lock().await;
+                *guard.subsonic.lock().await = Some(typed);
+            }
+            dyn_provider
         }
         "local" => provider_factory::build_local(&base_url)?,
         other => return Err(format!("unknown provider kind: {other}")),
     };
+
+    // Phase 3: when switching to a Subsonic server, fire the
+    // background sync so /songs becomes instant after the cache
+    // warms. The provider was just installed above so the inner
+    // `subsonic` slot is populated; the inner helper resolves it.
+    if kind.as_str() == "subsonic" {
+        kick_subsonic_background_sync_inner(app.clone(), state.inner().clone()).await?;
+    }
 
     // Stop any audio currently being decoded under the previous
     // provider — its stream URL will stop resolving after the swap.
@@ -2082,6 +2900,10 @@ pub async fn provider_set_active(
         let guard = state.lock().await;
         guard.player.stop();
         *guard.provider.lock().await = Some(provider.clone());
+        // Non-subsonic switches must drop the typed slot too.
+        if kind.as_str() != "subsonic" {
+            *guard.subsonic.lock().await = None;
+        }
         tracing::debug!(target: "sinfonic::commands", "provider swapped; persisting last_active_server_id");
         // Persist the pointer so the next launch can restore us.
         guard
@@ -2099,6 +2921,15 @@ pub async fn provider_set_active(
     // target server's persisted history (if any); if none exists the
     // queue stays empty until the user plays something.
     queue_anchor::anchor_to_server_after_unlock(&state, &parsed).await;
+
+    // Phase 3 parity: when switching to a Jellyfin server, fire the
+    // background sync so `provider_list_*` reads land on a populated
+    // SQLite cache. Done after the provider swap (unlike Subsonic
+    // which installs the typed slot before the kick) because the
+    // Jellyfin path only stores the dyn provider.
+    if kind.as_str() == "jellyfin" {
+        kick_jellyfin_background_sync_inner(app.clone(), state.inner().clone()).await?;
+    }
 
     tracing::debug!(target: "sinfonic::commands", "provider_set_active succeeded");
     Ok(ConnectedServer {
@@ -2372,7 +3203,7 @@ pub async fn provider_delete(
     // If it was active, clear the in-memory provider and preferences.
     if was_active {
         tracing::debug!(target: "sinfonic::commands", "deleted server was active; clearing provider");
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         *guard.provider.lock().await = None;
         let _ = guard.library.set_preference("last_active_server_id", None);
     }
@@ -2503,6 +3334,7 @@ pub async fn provider_image_bytes(
     tag: Option<String>,
     state: SharedState<'_>,
 ) -> Result<AlbumArtResponse, String> {
+    let started = Instant::now();
     if album_id.is_empty() {
         return Err("provider_image_bytes: album_id is empty".into());
     }
@@ -2533,55 +3365,92 @@ pub async fn provider_image_bytes(
         tag.clone().unwrap_or_default(),
     );
 
-    let (cache_for_lookup, cache_for_write) = {
+    let cache = {
         let guard = state.lock().await;
-        let cache = guard.album_art.clone();
-        // Hand the same Arc clone to both the lookup and the eventual
-        // write — no need to clone twice.
-        (cache.clone(), cache)
+        guard.album_art.clone()
     };
 
-    if let Some(cache) = cache_for_lookup.as_ref() {
-        if let Ok(Some(hit)) = cache.get(&cache_key) {
-            return Ok(AlbumArtResponse {
-                bytes: hit.bytes,
-                content_type: hit.content_type,
-                cached: true,
-            });
-        }
-    }
+    // Phase 8 of feature/direct-fetch-providers: route through
+    // `get_or_fetch` so the cache's content-hash dedup kicks in.
+    // A Subsonic album and each of its tracks use *different*
+    // `coverArt` strings (e.g. `album-XXX` vs `al-XXX_<hash>` vs
+    // `mf-XXX_<hash>`) but resolve to identical bytes — the dedup
+    // collapses them to a single on-disk entry, so the bulk
+    // prewarm fires one network request per *unique image* rather
+    // than per *key*.
+    let Some(cache) = cache.as_ref() else {
+        return Err("provider_image_bytes: no album art cache available".into());
+    };
 
-    // Cache miss — fetch from the provider.
-    let fetched: ImageBytes = {
+    let fetch_started = Instant::now();
+    let fetch_closure = || async {
         let guard = state.lock().await;
         let provider_guard = guard.provider.lock().await;
         let provider = provider_guard
             .as_ref()
-            .ok_or_else(|| "provider_image_bytes: no active provider".to_string())?;
-        provider
-            .image_bytes(request)
+            .ok_or_else(|| {
+                LibraryError::Io("provider_image_bytes: no active provider".into())
+            })?;
+        let bytes = provider
+            .image_bytes(request.clone())
             .await
-            .map_err(|e| format!("image_bytes: {e}"))?
+            .map_err(|e| LibraryError::Io(format!("image_bytes: {e}")))?;
+        let ct = bytes
+            .content_type
+            .unwrap_or_else(|| guess_image_content_type(&bytes.bytes).to_string());
+        Ok((bytes.bytes, ct))
     };
 
-    // Pick a sensible default if the provider did not surface a
-    // content type — JPEG is the dominant format in the wild.
-    let content_type = fetched
-        .content_type
-        .unwrap_or_else(|| guess_image_content_type(&fetched.bytes).to_string());
+    let cached = cache
+        .get_or_fetch(&cache_key, fetch_closure)
+        .await
+        .map_err(|e| format!("get_or_fetch: {e}"))?;
+    let fetch_elapsed = fetch_started.elapsed().as_millis() as u64;
+    let content_type = cached.content_type.clone();
+    let fetched_bytes_len = cached.bytes.len();
 
-    // Best-effort write-through. Failures here are non-fatal — we
-    // already have the bytes to return to the UI.
-    if let Some(cache) = cache_for_write.as_ref() {
-        let _ = cache.put(&cache_key, &fetched.bytes, &content_type);
+    // Throttle the log: a Subsonic prewarm fires hundreds of these
+    // in a few seconds; only the slow ones (>500 ms) and the first
+    // ten of any run land at info. The full bulk-end summary in
+    // `provider_image_bytes_bulk` reports the aggregate timing.
+    let elapsed = started.elapsed().as_millis() as u64;
+    let miss_count = IMAGE_BYTES_MISS_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    if fetch_elapsed > 500 || miss_count <= 10 {
+        tracing::info!(
+            target: "sinfonic::commands",
+            provider = %provider_id,
+            item_id = %album_id,
+            fetched_bytes = fetched_bytes_len,
+            content_type = %content_type,
+            fetch_ms = fetch_elapsed,
+            total_ms = elapsed,
+            miss_count,
+            "provider_image_bytes CACHE MISS (fetched + cached + dedup)"
+        );
+    } else {
+        tracing::debug!(
+            target: "sinfonic::commands",
+            provider = %provider_id,
+            item_id = %album_id,
+            fetch_ms = fetch_elapsed,
+            total_ms = elapsed,
+            miss_count,
+            "provider_image_bytes CACHE MISS (logged at debug to keep the console quiet)"
+        );
     }
 
     Ok(AlbumArtResponse {
-        bytes: fetched.bytes,
+        bytes: cached.bytes,
         content_type,
         cached: false,
     })
 }
+
+/// Atomic counter used to throttle the per-call `provider_image_bytes`
+/// CACHE MISS log. Reset to 0 every time the bulk prewarm
+/// (`provider_image_bytes_bulk`) reports its summary so each
+/// prewarm run gets a fresh ten-info-budget.
+static IMAGE_BYTES_MISS_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Bulk version of `provider_image_bytes` for the JS-side album art
 /// prewarm. Each request is resolved against the on-disk cache first
@@ -2619,8 +3488,19 @@ pub async fn provider_image_bytes_bulk(
     requests: Vec<AlbumArtRequest>,
     state: SharedState<'_>,
 ) -> Result<AlbumArtBulkResponse, String> {
-    use futures::future::join_all;
+    use futures::stream::{self, StreamExt};
 
+    /// Cap on simultaneous in-flight Subsonic `getCoverArt` requests.
+    /// Phase 8 of feature/direct-fetch-providers: bumped from 6 to 8
+    /// to better match Navidrome's default transcoding pool. With
+    /// the content-hash dedup in `AlbumArtCache::get_or_fetch` the
+    /// per-page unique-cover count is much lower than the request
+    /// count, so a slightly higher concurrency finishes the bulk in
+    /// fewer wall-clock seconds without overwhelming the server.
+    const BULK_IMAGE_CONCURRENCY: usize = 8;
+
+    let started = Instant::now();
+    let total = requests.len();
     let (provider_id, cache) = {
         let guard = state.lock().await;
         let provider_id = guard
@@ -2638,6 +3518,7 @@ pub async fn provider_image_bytes_bulk(
     let mut images: Vec<AlbumArtBulkItem> = Vec::with_capacity(requests.len());
     let mut misses: Vec<AlbumArtRequest> = Vec::new();
     let mut not_found: Vec<String> = Vec::new();
+    let mut hit_count = 0usize;
 
     for req in requests {
         if req.album_id.is_empty() {
@@ -2650,67 +3531,121 @@ pub async fn provider_image_bytes_bulk(
         );
         let hit = cache.as_ref().and_then(|c| c.get(&key).ok().flatten());
         match hit {
-            Some(cached) => images.push(AlbumArtBulkItem {
-                album_id: req.album_id.clone(),
-                tag: req.tag.clone(),
-                bytes: cached.bytes,
-                content_type: cached.content_type,
-                cached: true,
-            }),
+            Some(cached) => {
+                hit_count += 1;
+                images.push(AlbumArtBulkItem {
+                    album_id: req.album_id.clone(),
+                    tag: req.tag.clone(),
+                    bytes: cached.bytes,
+                    content_type: cached.content_type,
+                    cached: true,
+                })
+            }
             None => misses.push(req),
         }
     }
+    let hit_elapsed = started.elapsed().as_millis() as u64;
+    tracing::info!(
+        target: "sinfonic::commands",
+        provider = %provider_id,
+        total,
+        hits = hit_count,
+        misses = total.saturating_sub(hit_count),
+        elapsed_ms = hit_elapsed,
+        "provider_image_bytes_bulk cache scan"
+    );
 
     // Fetch misses in parallel from the provider. Each fetch goes
     // through the same `provider.image_bytes` path as the single
     // command, so write-through to the cache still happens.
-    let fetch_futures = misses.iter().map(|req| {
-        let req = req.clone();
-        let state = state.inner().clone();
-        async move {
-            let request = ImageRequest {
-                item_id: req.album_id.clone(),
-                kind: ImageKind::Primary,
-                tag: req.tag.clone(),
-                size: 600,
-            };
-            let guard = state.lock().await;
-            let provider_guard = guard.provider.lock().await;
-            let provider = provider_guard.as_ref()?;
-            let res = provider.image_bytes(request).await.ok()?;
-            let content_type = res
-                .content_type
-                .unwrap_or_else(|| guess_image_content_type(&res.bytes).to_string());
-            if let Some(ref cache) = guard.album_art {
-                let key = ImageCacheKey::new(
-                    provider.identity().provider_id.clone(),
-                    req.album_id.clone(),
-                    req.tag.clone().unwrap_or_default(),
-                );
-                let _ = cache.put(&key, &res.bytes, &content_type);
-            }
-            Some(AlbumArtBulkItem {
-                album_id: req.album_id.clone(),
-                tag: req.tag.clone(),
-                bytes: res.bytes,
-                content_type,
-                cached: false,
-            })
-        }
-    });
-    let fetched = join_all(fetch_futures).await;
+    //
+    // We collect the futures into a `Vec<Pin<Box<dyn Future>>>` first
+    // so the iterator's items share a single concrete type. Without
+    // that, the `async move {}` per item has a distinct anonymous
+    // type and `buffer_unordered` can't infer a single `Stream`
+    // item — the compiler error reads "implementation of FnOnce
+    // is not general enough".
+    let fetch_futures: Vec<_> = misses
+        .iter()
+        .map(|req| {
+            let req = req.clone();
+            let state = state.inner().clone();
+            Box::pin(async move { fetch_one_bulk_image(state, req).await })
+        })
+        .collect();
+    let fetched = stream::iter(fetch_futures)
+        .buffer_unordered(BULK_IMAGE_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+    let mut fetched_ok = 0usize;
     for (req, maybe_image) in misses.into_iter().zip(fetched) {
         match maybe_image {
-            Some(image) => images.push(image),
+            Some(image) => {
+                fetched_ok += 1;
+                images.push(image)
+            }
             None => not_found.push(req.album_id),
         }
     }
+    let total_elapsed = started.elapsed().as_millis() as u64;
+    // Reset the per-call throttle so the NEXT prewarm run gets a
+    // fresh ten-info-budget for its misses.
+    IMAGE_BYTES_MISS_COUNT.store(0, Ordering::Release);
+    tracing::info!(
+        target: "sinfonic::commands",
+        provider = %provider_id,
+        total,
+        cache_hits = hit_count,
+        fetched = fetched_ok,
+        failed = total.saturating_sub(hit_count + fetched_ok),
+        elapsed_ms = total_elapsed,
+        "provider_image_bytes_bulk done"
+    );
 
     Ok(AlbumArtBulkResponse { images, not_found })
 }
 
 /// Sniff a small set of magic bytes to fall back to a content type
 /// when the provider's `Content-Type` header was missing. JPEG /
+/// Worker for the bulk-image fetch pipeline. Lives in its own
+/// function so each per-item future has a single shared concrete
+/// type, which is what `stream::iter(...).buffer_unordered(N)`
+/// needs to infer the `Stream` item type. Inlined into
+/// `provider_image_bytes_bulk`.
+async fn fetch_one_bulk_image(
+    state: Arc<Mutex<AppState>>,
+    req: AlbumArtRequest,
+) -> Option<AlbumArtBulkItem> {
+    let request = ImageRequest {
+        item_id: req.album_id.clone(),
+        kind: ImageKind::Primary,
+        tag: req.tag.clone(),
+        size: 600,
+    };
+    let guard = state.lock().await;
+    let provider_guard = guard.provider.lock().await;
+    let provider = provider_guard.as_ref()?;
+    let res = provider.image_bytes(request).await.ok()?;
+    let content_type = res
+        .content_type
+        .unwrap_or_else(|| guess_image_content_type(&res.bytes).to_string());
+    if let Some(ref cache) = guard.album_art {
+        let key = ImageCacheKey::new(
+            provider.identity().provider_id.clone(),
+            req.album_id.clone(),
+            req.tag.clone().unwrap_or_default(),
+        );
+        let _ = cache.put(&key, &res.bytes, &content_type);
+    }
+    Some(AlbumArtBulkItem {
+        album_id: req.album_id.clone(),
+        tag: req.tag.clone(),
+        bytes: res.bytes,
+        content_type,
+        cached: false,
+    })
+}
+
 /// PNG / WebP / GIF cover the overwhelming majority of music
 /// artwork; anything else becomes `application/octet-stream` so the
 /// browser still tries to render.
@@ -2799,7 +3734,19 @@ pub async fn lookup_lyrics(
     // Layer 1 — active provider.
     if let Some(provider) = provider {
         match provider.lyrics(track_id, allow_remote).await {
-            Ok(Some(lyrics)) => return Ok(Some(lyrics)),
+            Ok(Some(mut lyrics)) => {
+                // Defensive normalization: today every provider impl
+                // (Subsonic, Jellyfin's supported-but-always-None
+                // path, Local's LRC-sidecar reader) tags the source
+                // itself, but a future implementation that forgets to
+                // would otherwise surface "no source chip" in the UI.
+                // Stamp the active provider's `provider_id` so the
+                // provenance is always visible.
+                if lyrics.source.is_none() {
+                    lyrics.source = Some(provider.identity().provider_id.clone());
+                }
+                return Ok(Some(lyrics));
+            }
             Ok(None) => {}
             // Providers that don't ship lyrics treat the question
             // as out-of-scope, not an error — fall through to
@@ -3090,7 +4037,13 @@ pub async fn try_resume_lastfm(state: &AppState) {
                 tracing::debug!(target: "sinfonic::commands", "restoring Subsonic provider");
                 let sub_user = username.unwrap_or(name);
                 match provider_factory::build_subsonic(state, &parsed, base_url, sub_user, app).await {
-                    Ok(p) => Some(p),
+                    Ok((typed, dyn_provider)) => {
+                        // Phase 3: populate the typed slot on restore too.
+                        let state_ref = state.lock().await;
+                        *state_ref.subsonic.lock().await = Some(typed);
+                        drop(state_ref);
+                        Some(dyn_provider)
+                    }
                     Err(e) => {
                         tracing::warn!(target: "sinfonic::commands", error = %e, "subsonic restore failed");
                         return Err(e);
@@ -3130,6 +4083,22 @@ pub async fn try_resume_lastfm(state: &AppState) {
         // persisted snapshot (history only — the upcoming portion is
         // truncated on restore per product decision).
         queue_anchor::anchor_to_server(&mut state_ref, &parsed).await;
+        // Phase 3: on a Subsonic restore, fire the album-tracks
+        // background sync so /songs becomes instant after the
+        // cache warms. Drop the AppState lock first so the spawned
+        // task can reacquire it freely.
+        let restored_kind = kind.clone();
+        drop(state_ref);
+        if restored_kind == "subsonic" {
+            kick_subsonic_background_sync_inner(app.clone(), state.clone()).await?;
+        }
+        // Phase 3 parity for Jellyfin: kick the same sync flow from
+        // `try_restore_provider` so restarting the app against a
+        // Jellyfin server doesn't leave the Songs / Albums views
+        // waiting on the first live HTTP request.
+        if restored_kind == "jellyfin" {
+            kick_jellyfin_background_sync_inner(app.clone(), state.clone()).await?;
+        }
         tracing::info!(target: "sinfonic::commands", "try_restore_provider succeeded");
         Ok(())
     }

@@ -40,9 +40,10 @@ use sinfonic_domain::{
     SearchResults, StreamDescriptor, Track, TrackId,
 };
 use sinfonic_source::{
-    AlbumDetailResponse, ArtistDetailResponse, FavoriteItemId, HomeSection, HomeSectionKind,
-    ImageBytes, ImageMetadata, ImageRequest, Lyrics, MusicProvider, PlaybackReport,
-    ProviderCapabilities, ProviderError, ProviderIdentity, ProviderResult, RandomTrackRequest,
+    split_image_id, strip_prefix, slugify, AlbumDetailResponse, ArtistDetailResponse, FavoriteItemId,
+    HomeSection, HomeSectionKind, ImageBytes, ImageMetadata, ImageRequest, Lyrics, MusicProvider,
+    PlaybackReport, ProviderCapabilities, ProviderError, ProviderIdentity, ProviderResult,
+    RandomTrackRequest,
 };
 use tauri::Emitter;
 
@@ -77,13 +78,13 @@ const ALBUM_LIST_PAGE_SIZE: usize = 200;
 const ALBUM_FETCH_CONCURRENCY: usize = 8;
 
 /// Payload of the `sync-progress` event. Kept in this crate so the
-/// Internal album hint — `(server_id, song_count)` — collected from
-/// `getAlbumList2` so `tracks()` knows which albums to fetch and the
-/// total track count for the response.
+/// Album hint — `(id, song_count)` — collected from `getAlbumList2`
+/// so `tracks()` and `sync_album_tracks` know which albums to fetch
+/// and the total track count for the response.
 #[derive(Clone, Debug)]
-struct AlbumHint {
-    id: String,
-    song_count: u16,
+pub struct AlbumHint {
+    pub id: String,
+    pub song_count: u16,
 }
 
 /// Public entry point for the Subsonic provider.
@@ -759,7 +760,6 @@ impl MusicProvider for SubsonicProvider {
 
     async fn stream(&self, track_id: &TrackId) -> ProviderResult<StreamDescriptor> {
         let auth = self.session.sign();
-        let id = track_id.as_str().trim_start_matches("track-");
         let url = mapping::track_stream_url(
             &self.session.base_url,
             track_id.as_str(),
@@ -767,7 +767,6 @@ impl MusicProvider for SubsonicProvider {
             &auth.salt,
             &auth.token,
         );
-        let _ = id;
         Ok(StreamDescriptor::new(url))
     }
 
@@ -869,10 +868,6 @@ impl MusicProvider for SubsonicProvider {
             .iter()
             .map(|t| strip_prefix(t.as_str(), "track-"))
             .collect();
-        let id_refs: Vec<(&str, &str)> = ids.iter().map(|i| ("songId", *i)).collect();
-        // The path expects one `songId` per track. We build the
-        // parameter list manually because the generic helper takes
-        // a single pair.
         let mut params: Vec<(&'static str, String)> = vec![("name", name.to_string())];
         for id in &ids {
             params.push(("songId", (*id).to_string()));
@@ -881,7 +876,6 @@ impl MusicProvider for SubsonicProvider {
             .client
             .post_json("rest/createPlaylist", &auth, SUBSONIC_API_VERSION, params)
             .await?;
-        let _ = id_refs;
         Ok(PlaylistId::from_external(&resp.playlist.id))
     }
 
@@ -1153,16 +1147,127 @@ impl SubsonicProvider {
         }
         Ok(hints)
     }
+
+    /// Phase 3 of feature/direct-fetch-providers: fetch every album's
+    /// tracks on the server in parallel and yield each completed
+    /// batch through a callback. Used by the Tauri command
+    /// `kick_subsonic_background_sync` to populate the SQLite
+    /// `tracks` table so `/songs` and `ArtistDetailView` become
+    /// instant reads.
+    ///
+    /// `on_batch` is invoked once per album with the parsed `Vec<Track>`
+    /// (already mapped through `mapping::track_from_child`). The
+    /// outer `ProviderResult` only fails on transport errors; partial
+    /// batch failures are reported via `on_error` so a single broken
+    /// album doesn't kill the whole sync.
+    ///
+    /// Concurrency is the same `ALBUM_FETCH_CONCURRENCY` used by
+    /// `tracks()`'s windowed fan-out (8 in flight), which is enough to
+    /// saturate a home connection without overwhelming small servers.
+    pub async fn sync_album_tracks<F, E>(
+        &self,
+        on_batch: F,
+        on_error: E,
+    ) -> ProviderResult<SyncAlbumStats>
+    where
+        F: Fn(Album, Vec<Track>) + Send + Sync + 'static,
+        E: Fn(&str, ProviderError) + Send + Sync + 'static,
+    {
+        let hints = self.collect_all_album_hints().await?;
+        let total = hints.len();
+        let counter = Arc::new(AtomicUsize::new(0));
+        let on_batch = Arc::new(on_batch);
+        let on_error = Arc::new(on_error);
+        let app_handle = self.app_handle.clone();
+
+        let stream = futures::stream::iter(hints.iter().cloned())
+            .map(|hint| {
+                let client = self.client.clone();
+                let session = self.session.clone();
+                let counter = Arc::clone(&counter);
+                let app_handle = app_handle.clone();
+                async move {
+                    let auth = session.sign();
+                    let result: Result<(Album, Vec<Track>), ProviderError> = async {
+                        let resp: AlbumDetailPayload = client
+                            .get_json(
+                                "rest/getAlbum",
+                                &auth,
+                                SUBSONIC_API_VERSION,
+                                [("id", hint.id.clone())],
+                            )
+                            .await?;
+                        // `album_from_dto` always returns Some when
+                        // the dto has a non-empty id (we just fetched
+                        // it by id, so it must). Fall back to a
+                        // minimal stub if it somehow doesn't — the
+                        // track write will then fail FK and we'll
+                        // surface the error via the on_error path.
+                        let album = mapping::album_from_dto(&resp.album).ok_or_else(|| {
+                            ProviderError::Other(format!(
+                                "getAlbum returned no id for {}",
+                                hint.id
+                            ))
+                        })?;
+                        let tracks: Vec<Track> = resp
+                            .album
+                            .song
+                            .iter()
+                            .filter_map(mapping::track_from_child)
+                            .collect();
+                        Ok((album, tracks))
+                    }
+                    .await;
+                    let done = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                    if let Some(app) = app_handle.as_ref() {
+                        let _ = app.emit(
+                            SYNC_PROGRESS_EVENT,
+                            sinfonic_domain::SyncProgressPayload {
+                                phase: TRACKS_PHASE.to_string(),
+                                done,
+                                total,
+                            },
+                        );
+                    }
+                    (hint, result)
+                }
+            })
+            .buffered(ALBUM_FETCH_CONCURRENCY);
+
+        use futures::StreamExt;
+        let mut collected = stream.collect::<Vec<_>>().await;
+        let mut tracks_total = 0usize;
+        let mut albums_failed = 0usize;
+        for (hint, result) in collected.drain(..) {
+            match result {
+                Ok((album, tracks)) => {
+                    tracks_total += tracks.len();
+                    on_batch(album, tracks);
+                }
+                Err(err) => {
+                    albums_failed += 1;
+                    on_error(&hint.id, err);
+                }
+            }
+        }
+
+        if albums_failed > 0 {
+            eprintln!(
+                "sinfonic::source_subsonic sync_album_tracks completed with partial failures: {albums_failed}/{total} albums, {tracks_total} tracks"
+            );
+        }
+        Ok(SyncAlbumStats {
+            albums_total: total,
+            albums_failed,
+            tracks_total,
+        })
+    }
 }
 
-fn strip_prefix<'a>(s: &'a str, prefix: &str) -> &'a str {
-    sinfonic_source::strip_prefix(s, prefix)
-}
-
-fn split_image_id(item_id: &str) -> (&str, &str) {
-    sinfonic_source::split_image_id(item_id)
-}
-
-fn slugify(name: &str) -> String {
-    sinfonic_source::slugify(name)
+/// Aggregate counters for a single `sync_album_tracks` pass.
+#[derive(Clone, Copy, Debug)]
+pub struct SyncAlbumStats {
+    pub albums_total: usize,
+    pub albums_failed: usize,
+    pub tracks_total: usize,
 }

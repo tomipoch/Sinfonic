@@ -61,12 +61,6 @@ impl SubsonicClient {
         Ok(Self { http, base_url })
     }
 
-    /// Borrow the base URL the client was built for (used by tests).
-    #[allow(dead_code)]
-    pub(super) fn base_url(client: &SubsonicClient) -> &Url {
-        &client.base_url
-    }
-
     /// Run a request to `{path}` and decode the JSON body into `T`.
     /// The request is signed with the auth params and the Subsonic
     /// `?f=json` envelope is unwrapped automatically.

@@ -36,12 +36,42 @@ fn row_to_image_ref(row: &Row, kind_col: &str, tag_col: &str, id_col: &str) -> r
         _ => return Ok(None),
     };
     let tag: Option<String> = row.get(tag_col)?;
-    let item_id: String = row.get(id_col)?;
+    let raw_id: String = row.get(id_col)?;
+    // Fresh fetches from each provider use a kind-prefixed
+    // `item_id` (`"coverArt:tr-123"` for Subsonic, `"Primary:abc123"`
+    // for Jellyfin, `"embedded:abc"` for the local-files provider).
+    // The SQLite cache stores the prefixed alias in the id_col
+    // (`"track-123"` / `"album-12"` / etc.), so re-add the kind prefix
+    // on read so the on-disk cache key matches what fresh fetches
+    // produce and the JS-side blob URL cache stays consistent across
+    // prewarm + round-trip reads.
+    let item_id = match kind {
+        "CoverArt" | "Embedded" | "Primary" | "Backdrop" => {
+            format!("{}:{}", kind_to_prefix(kind), raw_id)
+        }
+        _ => raw_id,
+    };
     Ok(Some(ImageRef {
         item_id,
         kind: parse_image_kind(Some(kind.to_string())),
         tag,
     }))
+}
+
+/// Lowercase the wire `image_kind` value (`"CoverArt"` →
+/// `"coverArt"`) so it matches the prefixes `mapping::image_ref_*`
+/// helpers use in each provider. `"Primary"` / `"Backdrop"` /
+/// `"Embedded"` pass through as PascalCase to match the Jellyfin
+/// and local-files formats.
+fn kind_to_prefix(kind: &str) -> String {
+    match kind {
+        "CoverArt" => "coverArt".to_string(),
+        "Embedded" => "embedded".to_string(),
+        // Primary / Backdrop are already lowercase-friendly on
+        // the Jellyfin side; pass through unchanged so the prefix
+        // matches what `image_ref_from_tags` produces.
+        other => other.to_string(),
+    }
 }
 
 pub fn row_to_album(row: &Row) -> rusqlite::Result<Album> {

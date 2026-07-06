@@ -11,9 +11,21 @@
 // for `state === "complete"` and re-fetch the cached lists so any
 // view that was already mounted (Songs page, sidebar playlists)
 // updates without needing a route change or server switch.
+//
+// Phase 6 (debug pass): every loadAll call and every cache fetch
+// is wrapped in a perf.now() measurement that logs to the console
+// with the elapsed ms so the user can pinpoint the slow links
+// without instruments.
 
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useEffect, useRef } from "react";
+import {
+  getGenres,
+  providerImageBytesBulk,
+  providerListAlbums,
+  providerListArtists,
+  providerListTracks,
+} from "@/lib/tauri";
 import { safelyUnlisten } from "@/lib/tauriListen";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { usePlaylistsStore } from "@/stores/playlistsStore";
@@ -40,8 +52,11 @@ export function useLibraryAutoLoad(): void {
 
   useEffect(() => {
     if (activeServerId) {
+      const t0 = performance.now();
       log.log("activeServerId changed → loadAll()", activeServerId);
-      void loadAll().catch((err) => log.error("loadAll failed", err));
+      void loadAll()
+        .then(() => log.log(`loadAll done in ${(performance.now() - t0).toFixed(0)}ms`))
+        .catch((err) => log.error("loadAll failed", err));
     } else {
       log.log("activeServerId cleared → reset()");
       reset();
@@ -72,12 +87,11 @@ export function useLibraryAutoLoad(): void {
       // Only refetch on the started → complete edge. Any other
       // intermediate states are ignored.
       if (payload.state === "complete" && prev !== "complete") {
+        const t0 = performance.now();
         log.log("sync complete → refetch library + playlists");
-        void loadAll().catch((err) => log.error("post-sync loadAll failed", err));
-        void usePlaylistsStore
-          .getState()
-          .loadPlaylists()
-          .catch((err) => log.error("post-sync loadPlaylists failed", err));
+        Promise.all([loadAll(), usePlaylistsStore.getState().loadPlaylists()])
+          .then(() => log.log(`post-sync refetch done in ${(performance.now() - t0).toFixed(0)}ms`))
+          .catch((err) => log.error("post-sync refetch failed", err));
       }
     })
       .then((fn) => {
@@ -95,3 +109,45 @@ export function useLibraryAutoLoad(): void {
     };
   }, [activeServerId, loadAll]);
 }
+
+// Diagnostic helper — exported so view-level pages can measure
+// their own provider-fetch timings without each view rewriting the
+// wrapper. Logs the elapsed ms to the JS console with a label so
+// the slow path is obvious.
+export async function timeProviderFetch<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  const t0 = performance.now();
+  try {
+    const result = await fn();
+    const ms = (performance.now() - t0).toFixed(0);
+    log.log(`${label} ok in ${ms}ms`);
+    return result;
+  } catch (err) {
+    const ms = (performance.now() - t0).toFixed(0);
+    log.log(`${label} FAILED in ${ms}ms: ${String(err)}`);
+    throw err;
+  }
+}
+
+// Convenience wrappers around the raw `provider_*` Tauri commands
+// that emit the per-call timing log. Views can call these instead
+// of the raw wrappers when they want the debug instrumentation —
+// same wire shape, just timed.
+export const timedProviderListAlbums = (offset: number, limit: number) =>
+  timeProviderFetch(`providerListAlbums(${offset},${limit})`, () =>
+    providerListAlbums(offset, limit),
+  );
+export const timedProviderListArtists = (offset: number, limit: number) =>
+  timeProviderFetch(`providerListArtists(${offset},${limit})`, () =>
+    providerListArtists(offset, limit),
+  );
+export const timedProviderListTracks = (offset: number, limit: number) =>
+  timeProviderFetch(`providerListTracks(${offset},${limit})`, () =>
+    providerListTracks(offset, limit),
+  );
+export const timedProviderImageBytesBulk = (
+  targets: ReadonlyArray<{ readonly albumId: string; readonly tag?: string | null }>,
+) =>
+  timeProviderFetch(`providerImageBytesBulk(${targets.length})`, () =>
+    providerImageBytesBulk(targets.map((t) => ({ albumId: t.albumId, tag: t.tag ?? null }))),
+  );
+export const timedGetGenres = () => timeProviderFetch("getGenres", () => getGenres());
