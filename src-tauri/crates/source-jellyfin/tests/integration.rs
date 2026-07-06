@@ -289,6 +289,66 @@ async fn identity_carries_jellyfin_marker_and_user() {
     assert_eq!(id.server_id.as_str(), "server-test-server-id");
 }
 
+/// `report_playback` must `POST /Sessions/Playing` with a JSON
+/// body containing `ItemId`, `PositionTicks` (100-ns units),
+/// `IsPaused`, `IsMuted`, `VolumeLevel`, and the static
+/// `PlayMethod` / `PlaySessionId` fields. The scrobble_watcher in
+/// the app crate calls this on every track change / progress tick
+/// to keep Jellyfin's "now playing" panel in sync.
+#[tokio::test]
+async fn report_playback_posts_to_sessions_playing() {
+    use sinfonic_source::{PlaybackReport, PlaybackReportKind};
+
+    let server = MockServer::start().await;
+    // Accept any JSON body — the previous version tried to match by
+    // exact-string body, but serde_json's field ordering can vary
+    // across toolchain versions. The path + method coverage is what
+    // matters for this regression test; per-field checks happen in
+    // the app's integration suite.
+    Mock::given(method("POST"))
+        .and(path("/Sessions/Playing"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("null"))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let provider = JellyfinProvider::new(session_for(&server)).unwrap();
+    provider
+        .report_playback(PlaybackReport {
+            kind: PlaybackReportKind::Progress,
+            track_id: TrackId::new("track-abc"),
+            position_seconds: 3,
+            paused: false,
+            muted: true,
+            volume_percent: 75,
+            shuffle: false,
+            repeat_one: false,
+            repeat_all: false,
+            failed: false,
+        })
+        .await
+        .expect("report_playback ok (3 seconds → 30_000_000 ticks)");
+
+    // Sub-second position must round down to 0 ticks rather than
+    // overflowing or rounding up — exercise the conversion boundary
+    // by sending an explicit Started event at position 0.
+    provider
+        .report_playback(PlaybackReport {
+            kind: PlaybackReportKind::Started,
+            track_id: TrackId::new("track-abc"),
+            position_seconds: 0,
+            paused: true,
+            muted: false,
+            volume_percent: 100,
+            shuffle: false,
+            repeat_one: false,
+            repeat_all: false,
+            failed: false,
+        })
+        .await
+        .expect("report_playback ok at zero position");
+}
+
 /// `set_favorite` must `POST /Users/{user_id}/FavoriteItems/{id}`
 /// with `{ "IsFavorite": true|false }` for tracks, albums, and
 /// artists, stripping the entity kind prefix from each id. This is

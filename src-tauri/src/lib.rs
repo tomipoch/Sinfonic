@@ -190,15 +190,16 @@ pub fn run() {
                 // 2) Take clones of the bits the watcher needs, then
                 //    hand them off. This keeps the watcher's mutex
                 //    pressure off the IPC lock.
-                let (queue_clone, player_clone, lastfm_clone) = {
+                let (queue_clone, player_clone, lastfm_clone, provider_clone) = {
                     let state_ref = setup_handle.lock().await;
                     (
                         Arc::new(Mutex::new(state_ref.queue.clone())),
                         state_ref.player.clone(),
                         state_ref.lastfm.clone(),
+                        state_ref.provider.clone(),
                     )
                 };
-                scrobble_watcher::run(queue_clone, player_clone, lastfm_clone).await;
+                scrobble_watcher::run(queue_clone, player_clone, lastfm_clone, provider_clone).await;
             });
 
             app.manage(state_for_resume);
