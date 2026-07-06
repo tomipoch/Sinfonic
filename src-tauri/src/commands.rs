@@ -3734,7 +3734,19 @@ pub async fn lookup_lyrics(
     // Layer 1 — active provider.
     if let Some(provider) = provider {
         match provider.lyrics(track_id, allow_remote).await {
-            Ok(Some(lyrics)) => return Ok(Some(lyrics)),
+            Ok(Some(mut lyrics)) => {
+                // Defensive normalization: today every provider impl
+                // (Subsonic, Jellyfin's supported-but-always-None
+                // path, Local's LRC-sidecar reader) tags the source
+                // itself, but a future implementation that forgets to
+                // would otherwise surface "no source chip" in the UI.
+                // Stamp the active provider's `provider_id` so the
+                // provenance is always visible.
+                if lyrics.source.is_none() {
+                    lyrics.source = Some(provider.identity().provider_id.clone());
+                }
+                return Ok(Some(lyrics));
+            }
             Ok(None) => {}
             // Providers that don't ship lyrics treat the question
             // as out-of-scope, not an error — fall through to

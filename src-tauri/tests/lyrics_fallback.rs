@@ -364,6 +364,55 @@ async fn provider_returns_none_then_lrclib_runs() {
     assert!(lyrics.synced.unwrap().starts_with("[00:12.00]"));
 }
 
+/// A provider may return real lyrics without tagging the source.
+/// The orchestrator must stamp the active provider's `provider_id`
+/// onto the response so the UI can render the provenance chip
+/// even when the provider forgot to. This guards the
+/// audit-flagged regression where the lyric panel would show
+/// "unknown" for any provider that returned `source: None`.
+#[tokio::test]
+async fn provider_lyrics_without_source_gets_tagged_with_provider_id() {
+    let server = MockServer::start().await;
+    // The provider returns Some(...); LRCLIB must NOT be hit.
+    Mock::given(method("GET"))
+        .and(path("/api/get"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let library = Store::open_memory().expect("memory store");
+    let server_id = ServerId::new("server-stub");
+    seed_track(&library, &server_id);
+
+    let provider = StubProvider::new(
+        server_id.clone(),
+        |_, _| {
+            // Note: source deliberately omitted — the orchestrator
+            // is responsible for stamping it.
+            Ok(Some(Lyrics {
+                plain: Some("On a dark desert highway".into()),
+                synced: None,
+                source: None,
+            }))
+        },
+    );
+
+    let lyrics = lookup_lyrics(
+        Some(Arc::new(provider)),
+        client_for(&server).await,
+        &library,
+        server_id,
+        &TrackId::new(TRACK_ID),
+        true,
+    )
+    .await
+    .expect("ok")
+    .expect("some lyrics");
+    // The StubProvider declares provider_id = "stub" in StubProvider::new.
+    assert_eq!(lyrics.source.as_deref(), Some("stub"));
+}
+
 #[tokio::test]
 async fn provider_returns_unsupported_then_lrclib_runs() {
     let server = MockServer::start().await;
