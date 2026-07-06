@@ -106,3 +106,27 @@
 **Estado actual:**
 - `feature/fase-9-cierre` HEAD: listo para merge a `develop`
 - clippy clean · pnpm build clean
+### Fase 10 — UI redesign
+- **feature/ui-redesign** (merged `553b8fd`, 2026-06-27): TitleBar + WindowControls consolidation, redesign of Sidebar / TopBar / QueuePanel / AlbumCover to drop the Tauri template chrome and match the macOS / Windows 11 reference shape, `useDropTarget` for drag-to-queue from Album cards, hover-revealed volume + EQ + favorite controls on the PlayerBar.
+
+### Fase 11 — rust-hardening + crossfade + queue snapshots
+- **feature/rust-hardening** (merged `453d5e1`): tightened error paths, dropped `unwrap()`s in favour of `?`-propagation in `commands::play_*`, audit-and-fix pass on `RwLock` vs `Mutex` choices in `AppState`.
+- **fix/playback-queue-subsonic** (merged `03d9e62`): added `crossfade_enabled` / `crossfade_seconds` prefs persisted via `library_meta`, `QueueEngine::save_snapshot` + `load_snapshot` on the `queue_snapshots` table scoped by `server_id` (schema v6), `AudioPlayer::preload_next` for crossfade ramps, `play_track_with_context` / `play_album_with_context` flows, provider-aware queue restore.
+
+### Fase 12 — direct-fetch-providers (feature/direct-fetch-providers)
+- **Subsonic background sync**: provider-direct reads for albums/artists/tracks via fan-out from `getAlbumList2` to `getAlbum`, capped concurrency in 8-pending, persisted to SQLite. Sidebar `SubsonicSyncIndicator` + `useSubsonicTrackSync` hook. Owned by the new typed slot in `AppState`.
+- **Album-art hash-dedup** (`6b776bf`): `AlbumArtCache` now derives a SHA-256 content index and aliases keys pointing at byte-identical images via hardlink or copy. `provider_image_bytes_bulk` drops to a single HTTP fetch for the whole library's cover set.
+- **Cover routing fixes**: `TrackTable` looks up the parent album's `imageRef` before falling back to the track's own, so per-track covers now resolve even when Subsonic returns `null` for individual songs.
+- **Provider-direct reads**: `provider_list_albums/artists/tracks` + `provider_album_detail/artist_detail`, exposed in `lib/tauri.ts` as `providerList*` / `providerAlbumDetail` / `providerArtistDetail`. Snapshot list-route helper (`snapshot_list_route`) picks the Subsonic cache branch over the upstream HTTP branch per-call.
+- **Favorites upstream** (`b8f25b3`): `commands::set_*_favorite` now calls `provider.set_favorite` in addition to writing the SQLite cache. New tests cover the Subsonic + Jellyfin wire shapes.
+- **Lyrics.source normalization** (`84e1111`): `commands::lookup_lyrics` stamps `provider_id` onto the returned `Lyrics` if the provider forgot, so the UI provenance chip never reads "unknown".
+- **Jellyfin sync parity** (`69616d0`): `kick_jellyfin_background_sync` mirrors the Subsonic guard + entry-point trio, firing from `jellyfin_login` / `provider_set_active` / `try_restore_provider`.
+- **Scrobble watcher forwarding** (`7cb602b`): now also calls `provider.report_playback` (`Started` on track change, throttled `Progress` every 30 s), so Subsonic's `/rest/scrobble` and Jellyfin's `/Sessions/Playing` see Sinfonic playback even when Last.fm isn't connected.
+
+**Total tests today: 274 Rust (`cargo test --workspace`) + 117 Vitest (`pnpm test`)** · clippy clean · pnpm build clean
+
+---
+
+**Estado actual:**
+- `feature/cleanup-phase2` en curso: provider trait shrink (`-1,231` LOC: 17 dead `MusicProvider` methods + 7 capability flags + 2 Jellyfin `delete` helpers), domain dead types (`AppSettings`, `Route`, `QueueReplacement`, `SearchKind`, `LyricsError::NotFound`), secrets dead variants (`LibreFmSession`, `ListenBrainzToken`, `SecretError::NotFound`), lint sweep, real README + this history refresh.
+- clippy clean · pnpm build clean
