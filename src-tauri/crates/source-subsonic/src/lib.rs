@@ -40,9 +40,10 @@ use sinfonic_domain::{
     SearchResults, StreamDescriptor, Track, TrackId,
 };
 use sinfonic_source::{
-    AlbumDetailResponse, ArtistDetailResponse, FavoriteItemId, HomeSection, HomeSectionKind,
-    ImageBytes, ImageMetadata, ImageRequest, Lyrics, MusicProvider, PlaybackReport,
-    ProviderCapabilities, ProviderError, ProviderIdentity, ProviderResult, RandomTrackRequest,
+    split_image_id, strip_prefix, slugify, AlbumDetailResponse, ArtistDetailResponse, FavoriteItemId,
+    HomeSection, HomeSectionKind, ImageBytes, ImageMetadata, ImageRequest, Lyrics, MusicProvider,
+    PlaybackReport, ProviderCapabilities, ProviderError, ProviderIdentity, ProviderResult,
+    RandomTrackRequest,
 };
 use tauri::Emitter;
 
@@ -759,7 +760,6 @@ impl MusicProvider for SubsonicProvider {
 
     async fn stream(&self, track_id: &TrackId) -> ProviderResult<StreamDescriptor> {
         let auth = self.session.sign();
-        let id = track_id.as_str().trim_start_matches("track-");
         let url = mapping::track_stream_url(
             &self.session.base_url,
             track_id.as_str(),
@@ -767,7 +767,6 @@ impl MusicProvider for SubsonicProvider {
             &auth.salt,
             &auth.token,
         );
-        let _ = id;
         Ok(StreamDescriptor::new(url))
     }
 
@@ -869,10 +868,6 @@ impl MusicProvider for SubsonicProvider {
             .iter()
             .map(|t| strip_prefix(t.as_str(), "track-"))
             .collect();
-        let id_refs: Vec<(&str, &str)> = ids.iter().map(|i| ("songId", *i)).collect();
-        // The path expects one `songId` per track. We build the
-        // parameter list manually because the generic helper takes
-        // a single pair.
         let mut params: Vec<(&'static str, String)> = vec![("name", name.to_string())];
         for id in &ids {
             params.push(("songId", (*id).to_string()));
@@ -881,7 +876,6 @@ impl MusicProvider for SubsonicProvider {
             .client
             .post_json("rest/createPlaylist", &auth, SUBSONIC_API_VERSION, params)
             .await?;
-        let _ = id_refs;
         Ok(PlaylistId::from_external(&resp.playlist.id))
     }
 
@@ -1276,16 +1270,4 @@ pub struct SyncAlbumStats {
     pub albums_total: usize,
     pub albums_failed: usize,
     pub tracks_total: usize,
-}
-
-fn strip_prefix<'a>(s: &'a str, prefix: &str) -> &'a str {
-    sinfonic_source::strip_prefix(s, prefix)
-}
-
-fn split_image_id(item_id: &str) -> (&str, &str) {
-    sinfonic_source::split_image_id(item_id)
-}
-
-fn slugify(name: &str) -> String {
-    sinfonic_source::slugify(name)
 }

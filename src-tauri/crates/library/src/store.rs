@@ -1377,9 +1377,6 @@ fn image_kind_to_str(kind: sinfonic_domain::ImageKindHint) -> String {
     }
 }
 
-#[allow(dead_code)]
-fn _ensure_compiles(_: ArtistId) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

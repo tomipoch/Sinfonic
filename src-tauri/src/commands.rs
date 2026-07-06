@@ -61,11 +61,10 @@ type SharedState<'a> = State<'a, Arc<Mutex<AppState>>>;
 
 /// Placeholder `ServerId` used when no provider is active. Library
 /// reads return empty pages in that state instead of erroring — the
-/// UI surfaces a "connect a server" hint.
-const DEFAULT_SERVER_ID: &str = "server-local";
-
+/// UI surfaces a "connect a server" hint. Re-uses `LocalProvider`'s
+/// canonical id so the two stay in lockstep.
 fn default_server_id() -> ServerId {
-    ServerId::new(DEFAULT_SERVER_ID)
+    ServerId::new(sinfonic_source_local::LOCAL_SERVER_ID)
 }
 
 /// Return the `ServerId` of the active provider if one is connected,
@@ -2481,7 +2480,7 @@ pub async fn provider_logout(
     state: SharedState<'_>,
 ) -> Result<(), String> {
     let (server_id_opt, secrets) = {
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         let server_id = guard
             .provider
             .lock()
@@ -2990,7 +2989,7 @@ pub async fn provider_delete(
     // If it was active, clear the in-memory provider and preferences.
     if was_active {
         tracing::debug!(target: "sinfonic::commands", "deleted server was active; clearing provider");
-        let mut guard = state.lock().await;
+        let guard = state.lock().await;
         *guard.provider.lock().await = None;
         let _ = guard.library.set_preference("last_active_server_id", None);
     }

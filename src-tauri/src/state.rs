@@ -121,26 +121,6 @@ impl AppState {
         Self::default()
     }
 
-    /// Build an `AppState` with the library cache pointed at a real
-    /// on-disk file. Called from `lib.rs` on app startup.
-    pub fn with_library_path(path: impl AsRef<std::path::Path>) -> Result<Self, String> {
-        let library = Store::open(path).map_err(|e| e.to_string())?;
-        Ok(Self {
-            queue: QueueEngine::default(),
-            player: Arc::new(AudioPlayer::new()),
-            library,
-            provider: Arc::new(Mutex::new(None)),
-            subsonic: Arc::new(Mutex::new(None)),
-            secrets: Arc::new(KeyringStore::new("sinfonic")),
-            device_id: default_device_id(),
-            album_art: None,
-            lastfm: Arc::new(Mutex::new(None)),
-            lyrics_client: Arc::new(build_lrclib_client()),
-            bootstrap_complete: Arc::new(AtomicBool::new(false)),
-            persist_guard: Arc::new(AtomicBool::new(false)),
-        })
-    }
-
     /// Build an `AppState` with both the library cache and the album
     /// art cache pointed at real on-disk locations. Called from
     /// `lib.rs` when the app data directory is available.
