@@ -6,11 +6,11 @@
 //! mutation.
 
 use serde_json::json;
-use sinfonic_domain::{PagedRequest, ServerId, TrackId};
+use sinfonic_domain::{AlbumId, ArtistId, PagedRequest, ServerId, TrackId};
 use sinfonic_source::MusicProvider;
 use sinfonic_source_jellyfin::auth::{login, LoginRequest};
 use sinfonic_source_jellyfin::{JellyfinProvider, JellyfinSession};
-use wiremock::matchers::{any, method, path};
+use wiremock::matchers::{any, body_string, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn session_for(server: &MockServer) -> JellyfinSession {
@@ -287,6 +287,57 @@ async fn identity_carries_jellyfin_marker_and_user() {
     assert_eq!(id.provider_id, "jellyfin");
     assert_eq!(id.user_id, "user-1");
     assert_eq!(id.server_id.as_str(), "server-test-server-id");
+}
+
+/// `set_favorite` must `POST /Users/{user_id}/FavoriteItems/{id}`
+/// with `{ "IsFavorite": true|false }` for tracks, albums, and
+/// artists, stripping the entity kind prefix from each id. This is
+/// the wiring that `commands::set_*_favorite` relies on to propagate
+/// favourite toggles back to the server.
+#[tokio::test]
+async fn favorite_mutations_post_to_users_favorite_items() {
+    use sinfonic_source::FavoriteItemId;
+
+    let server = MockServer::start().await;
+
+    // Track — sets IsFavorite=true with stripped id "abc" (track- prefix stripped).
+    Mock::given(method("POST"))
+        .and(path("/Users/user-1/FavoriteItems/abc"))
+        .and(body_string(r#"{"IsFavorite":true}"#))
+        .respond_with(ResponseTemplate::new(200).set_body_string("null"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    // Album — sets IsFavorite=true with stripped id "1" (album- prefix stripped).
+    Mock::given(method("POST"))
+        .and(path("/Users/user-1/FavoriteItems/1"))
+        .and(body_string(r#"{"IsFavorite":true}"#))
+        .respond_with(ResponseTemplate::new(200).set_body_string("null"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    // Artist — unfavorite (false) with stripped id "ar-1" (artist- prefix stripped).
+    Mock::given(method("POST"))
+        .and(path("/Users/user-1/FavoriteItems/ar-1"))
+        .and(body_string(r#"{"IsFavorite":false}"#))
+        .respond_with(ResponseTemplate::new(200).set_body_string("null"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider = JellyfinProvider::new(session_for(&server)).unwrap();
+    provider
+        .set_favorite(FavoriteItemId::Track(TrackId::new("track-abc")), true)
+        .await
+        .expect("track star ok");
+    provider
+        .set_favorite(FavoriteItemId::Album(AlbumId::new("album-1")), true)
+        .await
+        .expect("album star ok");
+    provider
+        .set_favorite(FavoriteItemId::Artist(ArtistId::new("artist-ar-1")), false)
+        .await
+        .expect("artist unstar ok");
 }
 
 #[tokio::test]

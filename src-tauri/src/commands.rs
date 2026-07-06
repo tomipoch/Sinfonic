@@ -53,7 +53,7 @@ use sinfonic_library::ImageCacheKey;
 use sinfonic_library::LibraryError;
 use sinfonic_secrets::SecretStore;
 use sinfonic_source::MusicProvider;
-use sinfonic_source::{ImageRequest, Lyrics};
+use sinfonic_source::{FavoriteItemId, ImageRequest, Lyrics};
 use sinfonic_source_jellyfin::auth::{login as jellyfin_login_inner, LoginRequest as JellyfinAuthRequest};
 use sinfonic_source_subsonic::auth::{login as subsonic_login_inner, LoginRequest as SubsonicAuthRequest};
 
@@ -1967,7 +1967,12 @@ pub struct FavoritesPayload {
     pub artists: Vec<Artist>,
 }
 
-/// Sets the favorite flag on a track.
+/// Sets the favorite flag on a track. Writes to the local SQLite
+/// cache first (so the UI flips immediately) and then forwards to
+/// the upstream provider; the local file provider returns
+/// `Unsupported` which we silently skip, and other provider errors
+/// are logged at warn — the cache write is the source of truth
+/// from the UI's perspective either way.
 #[tauri::command]
 pub async fn set_track_favorite(
     track_id: String,
@@ -1976,14 +1981,19 @@ pub async fn set_track_favorite(
 ) -> Result<(), String> {
     let server_id = active_server_id(&state).await;
     let parsed: TrackId = track_id.into();
-    let guard = state.lock().await;
-    guard
-        .library
-        .set_track_favorite(&server_id, &parsed, favorite)
-        .map_err(|e| e.to_string())
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .set_track_favorite(&server_id, &parsed, favorite)
+            .map_err(|e| e.to_string())?;
+    }
+    propagate_favorite_to_provider(&state, FavoriteItemId::Track(parsed), favorite).await;
+    Ok(())
 }
 
-/// Sets the favorite flag on an album.
+/// Sets the favorite flag on an album. See `set_track_favorite`
+/// for the propagation semantics.
 #[tauri::command]
 pub async fn set_album_favorite(
     album_id: String,
@@ -1992,14 +2002,19 @@ pub async fn set_album_favorite(
 ) -> Result<(), String> {
     let server_id = active_server_id(&state).await;
     let parsed: AlbumId = album_id.into();
-    let guard = state.lock().await;
-    guard
-        .library
-        .set_album_favorite(&server_id, &parsed, favorite)
-        .map_err(|e| e.to_string())
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .set_album_favorite(&server_id, &parsed, favorite)
+            .map_err(|e| e.to_string())?;
+    }
+    propagate_favorite_to_provider(&state, FavoriteItemId::Album(parsed), favorite).await;
+    Ok(())
 }
 
-/// Sets the favorite flag on an artist.
+/// Sets the favorite flag on an artist. See `set_track_favorite`
+/// for the propagation semantics.
 #[tauri::command]
 pub async fn set_artist_favorite(
     artist_id: String,
@@ -2008,11 +2023,45 @@ pub async fn set_artist_favorite(
 ) -> Result<(), String> {
     let server_id = active_server_id(&state).await;
     let parsed: ArtistId = artist_id.into();
-    let guard = state.lock().await;
-    guard
-        .library
-        .set_artist_favorite(&server_id, &parsed, favorite)
-        .map_err(|e| e.to_string())
+    {
+        let guard = state.lock().await;
+        guard
+            .library
+            .set_artist_favorite(&server_id, &parsed, favorite)
+            .map_err(|e| e.to_string())?;
+    }
+    propagate_favorite_to_provider(&state, FavoriteItemId::Artist(parsed), favorite).await;
+    Ok(())
+}
+
+/// Forward a favourite toggle to the upstream provider. The local
+/// file provider reports `Unsupported` and we silently ignore that;
+/// transient network errors are logged at warn so the user-facing
+/// Tauri command still resolves `Ok(())` (the SQLite cache is the
+/// authoritative store from the UI's perspective).
+async fn propagate_favorite_to_provider(
+    state: &SharedState<'_>,
+    item: FavoriteItemId,
+    favorite: bool,
+) {
+    let provider = {
+        let guard = state.lock().await;
+        let p = guard.provider.lock().await.clone();
+        drop(guard);
+        p
+    };
+    let Some(provider) = provider else {
+        return;
+    };
+    if let Err(e) = provider.set_favorite(item, favorite).await {
+        match e {
+            sinfonic_source::ProviderError::Unsupported(_) => {}
+            other => tracing::warn!(
+                target: "sinfonic::commands",
+                "upstream set_favorite failed (local cache already updated): {other}"
+            ),
+        }
+    }
 }
 
 /// Returns all favorited tracks, albums, and artists for the active server.
