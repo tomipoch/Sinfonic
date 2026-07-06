@@ -647,6 +647,14 @@ pub async fn provider_album_detail(
 static SUBSONIC_BACKGROUND_SYNC_IN_PROGRESS: AtomicBool =
     AtomicBool::new(false);
 
+/// In-process guard: `true` while a Jellyfin background sync is
+/// running. Parallel to the Subsonic one above. Lets Jellyfin,
+/// which has no two-phase fan-out, kick a sync from the same three
+/// trigger sites as Subsonic (login, setActive, restore) without
+/// piling up overlapping syncs.
+static JELLYFIN_BACKGROUND_SYNC_IN_PROGRESS: AtomicBool =
+    AtomicBool::new(false);
+
 /// Phase 3 entry point. Spawns the background sync and returns
 /// immediately. Errors are logged inside the task — the command
 /// returns `Ok(())` whenever the provider is not Subsonic or the
@@ -903,6 +911,149 @@ async fn run_subsonic_background_sync(
         EventName::LibrarySyncStatus.as_str(),
         crate::events::LibrarySyncStatusPayload {
             server_id: Some(server_id_arc.to_string()),
+            state: "complete".into(),
+            progress: 1.0,
+        },
+    );
+    Ok(())
+}
+
+/// Jellyfin background-sync entry point, parallel to
+/// `kick_subsonic_background_sync`. Jellyfin has no two-phase
+/// album-fan-out (its `/Items?IncludeItemTypes=Audio` returns every
+/// track in a single paginated endpoint), so the worker just calls
+/// the existing `sync_library_data` and emits the same
+/// `library-sync-status:started/complete` events the manual
+/// `provider_sync_library` button does. Triggers: `jellyfin_login`,
+/// `provider_set_active` (Jellyfin branch), `try_restore_provider`.
+#[tauri::command]
+pub async fn kick_jellyfin_background_sync(
+    app: tauri::AppHandle,
+    state: SharedState<'_>,
+) -> Result<(), String> {
+    let started = Instant::now();
+    let inner = kick_jellyfin_background_sync_inner(app.clone(), state.inner().clone()).await;
+    tracing::info!(
+        target: "sinfonic::commands",
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "kick_jellyfin_background_sync returned ({})",
+        if inner.is_ok() { "ok" } else { "err" }
+    );
+    inner
+}
+
+/// Same body as the Tauri command but takes the raw
+/// `Arc<Mutex<AppState>>` so internal callers (jellyfin_login,
+/// provider_set_active, try_restore_provider) can fire the
+/// background sync without going through the IPC layer. Signature
+/// matches `kick_subsonic_background_sync_inner`.
+async fn kick_jellyfin_background_sync_inner(
+    app: tauri::AppHandle,
+    state: Arc<Mutex<AppState>>,
+) -> Result<(), String> {
+    if JELLYFIN_BACKGROUND_SYNC_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        tracing::debug!(
+            target: "sinfonic::commands",
+            "jellyfin background sync already running, ignoring kick"
+        );
+        return Ok(());
+    }
+
+    let (dyn_provider, library_handle, server_id) = {
+        let guard = state.lock().await;
+        let dyn_provider = guard.provider.lock().await.as_ref().cloned();
+        let library = guard.library.clone();
+        let server_id = dyn_provider
+            .as_ref()
+            .map(|p| p.identity().server_id.clone())
+            .unwrap_or_else(default_server_id);
+        (dyn_provider, library, server_id)
+    };
+
+    let Some(provider) = dyn_provider else {
+        JELLYFIN_BACKGROUND_SYNC_IN_PROGRESS.store(false, Ordering::Release);
+        return Ok(());
+    };
+
+    // Jellyfin sync is meaningful only when the active provider is
+    // actually Jellyfin. If the user mixed providers between the
+    // kick and the lock acquisition, drop the sync quietly — the
+    // caller will fire the right provider-specific kicker.
+    if provider.identity().provider_id != "jellyfin" {
+        tracing::debug!(
+            target: "sinfonic::commands",
+            provider_id = provider.identity().provider_id.as_str(),
+            "jellyfin background sync skipped: provider is not jellyfin"
+        );
+        JELLYFIN_BACKGROUND_SYNC_IN_PROGRESS.store(false, Ordering::Release);
+        return Ok(());
+    }
+
+    let _ = app.emit(
+        EventName::LibrarySyncStatus.as_str(),
+        crate::events::LibrarySyncStatusPayload {
+            server_id: Some(server_id.to_string()),
+            state: "started".into(),
+            progress: 0.0,
+        },
+    );
+
+    tokio::spawn(async move {
+        let result = run_jellyfin_background_sync(
+            provider,
+            library_handle,
+            server_id.clone(),
+            app.clone(),
+        )
+        .await;
+        JELLYFIN_BACKGROUND_SYNC_IN_PROGRESS.store(false, Ordering::Release);
+        if let Err(e) = result {
+            tracing::warn!(
+                target: "sinfonic::commands",
+                error = %e,
+                "jellyfin background sync failed"
+            );
+            let _ = app.emit(
+                EventName::LibrarySyncStatus.as_str(),
+                crate::events::LibrarySyncStatusPayload {
+                    server_id: Some(server_id.to_string()),
+                    state: "error".into(),
+                    progress: 0.0,
+                },
+            );
+        }
+    });
+
+    Ok(())
+}
+
+/// Worker body for `kick_jellyfin_background_sync`. Fetches
+/// artists / albums / tracks / playlists from the active Jellyfin
+/// provider and writes them into the SQLite cache through the
+/// existing `sync_library_data` helper so the manually-triggered
+/// `provider_sync_library` button shares the same path.
+async fn run_jellyfin_background_sync(
+    provider: Arc<dyn sinfonic_source::MusicProvider>,
+    library: sinfonic_library::Store,
+    server_id: ServerId,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let sync_started = Instant::now();
+    sync_library_data(provider.as_ref(), &library, &server_id).await?;
+
+    tracing::info!(
+        target: "sinfonic::commands",
+        elapsed_ms = sync_started.elapsed().as_millis() as u64,
+        "jellyfin background sync complete"
+    );
+
+    let _ = app.emit(
+        EventName::LibrarySyncStatus.as_str(),
+        crate::events::LibrarySyncStatusPayload {
+            server_id: Some(server_id.to_string()),
             state: "complete".into(),
             progress: 1.0,
         },
@@ -2151,10 +2302,13 @@ pub async fn jellyfin_discover() -> Result<Vec<DiscoveredServer>, String> {
 
 /// Log in to a Jellyfin server, persist the token in the OS keyring,
 /// upsert the server row in the SQLite cache, and install the
-/// provider on the app state.
+/// provider on the app state. Mirrors `subsonic_login`: kicks a
+/// background sync right after the provider is installed so
+/// `provider_list_*` reads land on a populated SQLite cache.
 #[tauri::command]
 pub async fn jellyfin_login(
     request: JellyfinLoginRequest,
+    app: tauri::AppHandle,
     state: SharedState<'_>,
 ) -> Result<ConnectedServer, String> {
     let (device_id, secrets) = {
@@ -2211,6 +2365,8 @@ pub async fn jellyfin_login(
         provider_helpers::install_provider(&guard, provider).await;
     }
     queue_anchor::anchor_to_server_after_unlock(&state, &success.server_id).await;
+
+    kick_jellyfin_background_sync_inner(app.clone(), state.inner().clone()).await?;
 
     Ok(ConnectedServer {
         server_id: success.server_id.to_string(),
@@ -2765,6 +2921,15 @@ pub async fn provider_set_active(
     // target server's persisted history (if any); if none exists the
     // queue stays empty until the user plays something.
     queue_anchor::anchor_to_server_after_unlock(&state, &parsed).await;
+
+    // Phase 3 parity: when switching to a Jellyfin server, fire the
+    // background sync so `provider_list_*` reads land on a populated
+    // SQLite cache. Done after the provider swap (unlike Subsonic
+    // which installs the typed slot before the kick) because the
+    // Jellyfin path only stores the dyn provider.
+    if kind.as_str() == "jellyfin" {
+        kick_jellyfin_background_sync_inner(app.clone(), state.inner().clone()).await?;
+    }
 
     tracing::debug!(target: "sinfonic::commands", "provider_set_active succeeded");
     Ok(ConnectedServer {
@@ -3914,6 +4079,13 @@ pub async fn try_resume_lastfm(state: &AppState) {
         drop(state_ref);
         if restored_kind == "subsonic" {
             kick_subsonic_background_sync_inner(app.clone(), state.clone()).await?;
+        }
+        // Phase 3 parity for Jellyfin: kick the same sync flow from
+        // `try_restore_provider` so restarting the app against a
+        // Jellyfin server doesn't leave the Songs / Albums views
+        // waiting on the first live HTTP request.
+        if restored_kind == "jellyfin" {
+            kick_jellyfin_background_sync_inner(app.clone(), state.clone()).await?;
         }
         tracing::info!(target: "sinfonic::commands", "try_restore_provider succeeded");
         Ok(())

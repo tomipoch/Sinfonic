@@ -227,6 +227,10 @@ pub fn run() {
             // Subsonic album-tracks background sync. Idempotent —
             // re-entry while one is running is a no-op.
             commands::kick_subsonic_background_sync,
+            // Phase 3 parity for Jellyfin: identical contract
+            // (fire-and-forget, idempotent) over
+            // `sync_library_data` instead of the album fan-out.
+            commands::kick_jellyfin_background_sync,
             commands::play_album,
             commands::play_album_with_context,
             // Playback (Phase 1 + Phase 4 audio)

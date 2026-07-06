@@ -402,6 +402,21 @@ export const providerSyncLibrary = () => invoke<void>("provider_sync_library");
 export const kickSubsonicBackgroundSync = () =>
   invoke<void>("kick_subsonic_background_sync");
 
+/**
+ * Phase 3 parity for Jellyfin: fire-and-forget kick of the Jellyfin
+ * background sync. The backend paginates
+ * `/Items?IncludeItemTypes=Audio|MusicAlbum|MusicArtist|Playlist`
+ * and writes the rows into the SQLite cache, mirroring what the
+ * manual `provider_sync_library` button does but without awaiting
+ * it from the caller. Idempotent — re-entry while one is already
+ * running is a no-op. Auto-fired from `jellyfinLogin` /
+ * `providerSetActive` / `tryRestoreProvider`; the wrapper exists
+ * for symmetry with the Subsonic one and for future manual-sync
+ * UI.
+ */
+export const kickJellyfinBackgroundSync = () =>
+  invoke<void>("kick_jellyfin_background_sync");
+
 // ─── Local files ─────────────────────────────────────────────
 
 /** Result of a local folder scan. Counts are the totals the backend found. */
