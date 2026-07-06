@@ -82,12 +82,6 @@ impl JellyfinClient {
         Ok(Self { http, base_url })
     }
 
-    /// Borrow the base URL the client was built for (exposed for tests).
-#[allow(dead_code)]
-pub(super) fn base_url(client: &JellyfinClient) -> &Url {
-    &client.base_url
-}
-
     /// Run `GET {path}` and decode the JSON body into `T`.
     pub async fn get_json<T: DeserializeOwned>(
         &self,

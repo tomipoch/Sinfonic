@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use sinfonic_domain::{
-    Album, AlbumDetail, Artist, ArtistDetail, Genre, Playlist, PlaylistId, PagedResponse,
+    Album, AlbumDetail, Artist, ArtistDetail, Genre, Playlist, PagedResponse,
     SearchResults as DomainSearchResults, Track, TrackId,
 };
 
@@ -121,7 +121,3 @@ pub type TracksPage = PagedResponse<Track>;
 pub type GenresPage = PagedResponse<Genre>;
 pub type PlaylistsPage = PagedResponse<Playlist>;
 pub type SearchResultsView = DomainSearchResults;
-
-// Silence unused-import warnings for the re-exports.
-#[allow(dead_code)]
-fn _ensure_used(_: PlaylistId) {}

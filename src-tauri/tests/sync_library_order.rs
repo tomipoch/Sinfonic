@@ -894,5 +894,3 @@ async fn sync_library_data_persists_playlists() {
 
 // Silence unused-import warnings for items used only inside
 // `#[async_trait]` blocks (the macro re-orders them).
-#[allow(dead_code)]
-fn _silence(_: Arc<()>, _: ProviderError) {}

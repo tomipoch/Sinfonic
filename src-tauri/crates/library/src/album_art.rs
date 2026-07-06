@@ -65,10 +65,6 @@ pub struct AlbumArtCache {
 
 #[derive(Default)]
 struct AlbumArtCacheInner {
-    /// Reserved for a future fast-path skip on `ensure_root`. Kept
-    /// here so the mutex shape is stable across refactors.
-    #[allow(dead_code)]
-    initialised: bool,
     /// Secondary index: SHA-256 of the raw image bytes (hex, 64
     /// chars) → cache_key hex of any entry that holds these bytes.
     /// When a new entry's bytes hash matches an existing one, the
@@ -91,7 +87,6 @@ impl AlbumArtCache {
         let cache = Self {
             root,
             inner: Mutex::new(AlbumArtCacheInner {
-                initialised: false,
                 content_index: HashMap::new(),
             }),
         };

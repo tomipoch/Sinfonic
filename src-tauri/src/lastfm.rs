@@ -42,7 +42,6 @@ pub fn md5_hex(input: &str) -> String {
 /// Persist the api key + secret pair under `LastFmApiSecret` as a
 /// JSON blob. Returns `Ok(true)` when an existing entry was
 /// replaced.
-#[allow(dead_code)]
 pub async fn store_credentials<S: SecretStore + ?Sized>(
     secrets: &S,
     creds: &StoredCredentials,
@@ -79,7 +78,6 @@ pub async fn load_session<S: SecretStore + ?Sized>(
         .map_err(|e| e.to_string())
 }
 
-#[allow(dead_code)]
 pub async fn store_session<S: SecretStore + ?Sized>(
     secrets: &S,
     session_key: &str,
@@ -105,7 +103,6 @@ pub async fn clear_secrets<S: SecretStore + ?Sized>(secrets: &S) -> Result<(), S
 /// Build the in-memory client + persist the session. Used by both
 /// the `lastfm_connect` Tauri command and the startup-time resume
 /// path.
-#[allow(dead_code)]
 pub async fn build_client_with_session(
     creds: &StoredCredentials,
     session_key: String,
@@ -140,17 +137,11 @@ pub async fn authenticate_and_store(
         .await
         .map_err(|e| format!("lastfm auth: {e}"))?;
 
-    secrets
-        .save_secret(
-            SecretKey::LastFmApiSecret,
-            serde_json::to_string(creds).map_err(|e| e.to_string())?,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    secrets
-        .save_secret(SecretKey::LastFmSession, session.clone())
-        .await
-        .map_err(|e| e.to_string())?;
+    // Funnel the two persistence writes through the named helpers so
+    // both the live `authenticate_and_store` path and the
+    // `try_resume` / test paths share one implementation.
+    store_credentials(secrets, creds).await?;
+    store_session(secrets, &session).await?;
 
     *lastfm_slot.lock().await = Some(client);
     Ok(session)
