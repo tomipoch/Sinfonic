@@ -8,8 +8,6 @@
 //! Phase 0: trait + KeyringStore impl. Tests cover the basic round-trip
 //! (save / load / delete). Caching wrapper lands in Phase 1.
 
-#![allow(dead_code)]
-
 use async_trait::async_trait;
 use sinfonic_domain::ServerId;
 use thiserror::Error;
@@ -18,21 +16,21 @@ use thiserror::Error;
 pub enum SecretError {
     #[error("keyring backend failed: {0}")]
     Backend(String),
-    #[error("secret not found")]
-    NotFound,
 }
 
 pub type SecretResult<T> = Result<T, SecretError>;
 
 /// What kind of secret we're storing. Re-export of the variant set used
-/// across crates so we have a single source of truth.
+/// across crates so we have a single source of truth. The previous
+/// `LibreFmSession` / `ListenBrainzToken` / `SecretError::NotFound`
+/// variants were silently masked by the crate-level
+/// `#![allow(dead_code)]`; the cleanup-phase2 audit removed them
+/// since no caller constructs them.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum SecretKey {
     ProviderToken(ServerId),
     LastFmApiSecret,
     LastFmSession,
-    LibreFmSession,
-    ListenBrainzToken,
 }
 
 impl SecretKey {
@@ -40,8 +38,6 @@ impl SecretKey {
         match self {
             Self::ProviderToken(_) => "provider",
             Self::LastFmApiSecret | Self::LastFmSession => "lastfm",
-            Self::LibreFmSession => "librefm",
-            Self::ListenBrainzToken => "listenbrainz",
         }
     }
 
@@ -50,8 +46,6 @@ impl SecretKey {
             Self::ProviderToken(_) => "provider-token",
             Self::LastFmApiSecret => "lastfm-api-secret",
             Self::LastFmSession => "lastfm-session",
-            Self::LibreFmSession => "librefm-session",
-            Self::ListenBrainzToken => "listenbrainz-token",
         }
     }
 }
